@@ -1,0 +1,14 @@
+{
+  "required_edge_types": [
+    "supports",
+    "updates",
+    "duplicates",
+    "contradicts",
+    "adds_color",
+    "part_of",
+    "watch_applies_to"
+  ],
+  "forbidden_edge_types": [
+    "related"
+  ]
+}

@@ -1,0 +1,7 @@
+{
+  "watch_id": "watch:roof_repair",
+  "user_id": "flynn",
+  "label": "Roof repair budget",
+  "match_any": ["roof", "repair"],
+  "why": "Flynn asked to keep an eye on the roof-repair decision."
+}

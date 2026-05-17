@@ -1,0 +1,4 @@
+WARNING: proceeding, even though we could not update PATH: Operation not permitted (os error 1)
+Reading additional input from stdin...
+2026-05-17T09:42:39.217650Z ERROR codex_core::session: Failed to create session: Operation not permitted (os error 1)
+Error: thread/start: thread/start failed: error creating thread: Fatal error: Codex cannot access session files at /Users/mike/.codex/sessions (permission denied). If sessions were created using sudo, fix ownership: sudo chown -R $(whoami) /Users/mike/.codex (underlying error: Operation not permitted (os error 1))

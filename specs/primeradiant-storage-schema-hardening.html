@@ -1,0 +1,890 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>primeradiant - Storage Schema Hardening</title>
+  <style>
+    :root {
+      color-scheme: dark light;
+      --fg: var(--clawline-fg, #f4ead7);
+      --muted: color-mix(in srgb, var(--fg) 68%, transparent);
+      --line: color-mix(in srgb, var(--fg) 18%, transparent);
+      --card: color-mix(in srgb, var(--fg) 7%, transparent);
+      --card2: color-mix(in srgb, var(--fg) 11%, transparent);
+      --accent: #d39b48;
+      --accent2: #9bc7ff;
+      --good: #9fd39b;
+      --warn: #e0bf74;
+      --bad: #e89b92;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+
+    html,
+    body {
+      margin: 0;
+      background: transparent;
+      color: var(--fg);
+      font: 16px/1.55 -apple-system, BlinkMacSystemFont, "SF Pro Text", Inter, sans-serif;
+    }
+
+    body { padding: 28px 18px 52px; }
+    main { max-width: 1180px; margin: 0 auto; }
+    .eyebrow {
+      color: var(--accent);
+      text-transform: uppercase;
+      letter-spacing: .13em;
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    h1 {
+      margin: 8px 0 12px;
+      font-size: clamp(34px, 6vw, 64px);
+      line-height: .96;
+      letter-spacing: -.035em;
+    }
+
+    h2 { margin: 0 0 12px; font-size: 24px; }
+    h3 { margin: 0 0 8px; font-size: 18px; }
+    p { margin: 0 0 10px; }
+    .lede { color: var(--muted); font-size: clamp(18px, 2.5vw, 23px); max-width: 920px; }
+    section {
+      border: 1px solid var(--line);
+      background: var(--card);
+      border-radius: 24px;
+      padding: 18px;
+      margin: 16px 0;
+    }
+
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+    .widegrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 12px; }
+    .card { border: 1px solid var(--line); background: var(--card2); border-radius: 18px; padding: 14px; }
+    .label {
+      color: var(--accent);
+      text-transform: uppercase;
+      letter-spacing: .09em;
+      font-size: 11px;
+      font-weight: 800;
+    }
+
+    .callout {
+      border-left: 4px solid var(--accent);
+      padding: 12px 14px;
+      background: color-mix(in srgb, var(--accent) 10%, transparent);
+      border-radius: 14px;
+      margin: 12px 0;
+    }
+
+    .risk { border-left-color: var(--warn); background: color-mix(in srgb, var(--warn) 10%, transparent); }
+    .blocker { border-left-color: var(--bad); background: color-mix(in srgb, var(--bad) 10%, transparent); }
+    code,
+    pre { font-family: var(--mono); color: var(--accent2); }
+    pre {
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 12px;
+      background: color-mix(in srgb, #000 18%, transparent);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    table { width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 14px; }
+    th,
+    td { border-top: 1px solid var(--line); padding: 9px 8px; text-align: left; vertical-align: top; }
+    th { color: var(--accent); font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }
+    ul,
+    ol { margin: 0; padding-left: 22px; }
+    li { margin: 7px 0; }
+    .ok { color: var(--good); font-weight: 700; }
+    .warn { color: var(--warn); font-weight: 700; }
+    .bad { color: var(--bad); font-weight: 700; }
+  </style>
+</head>
+<body>
+<main>
+  <div class="eyebrow">Production storage slice</div>
+  <h1>Storage/schema hardening for proof-harness story semantics</h1>
+  <p class="lede">Smallest Elixir/Phoenix/Ecto/Postgres slice that persists the reconciled semantics now proven in the Primeradiant proof harness: normalized prose inputs, committed graph nodes/edges/facts/conflicts, per-op evidence and confidence, ACL-aware arbitration, proposal decision records, verified authoring evidence, watches, and input/claim/output seen-state.</p>
+
+  <section>
+    <h2>1. Source Truth</h2>
+    <div class="callout">
+      <p><strong>Status:</strong> ready for Flynn verification as a storage implementation spec. The proof harness was re-run from <code>/Users/mike/shared-workspace/primeradiant/proof-harness</code> with <code>/opt/homebrew/bin/mix clean &amp;&amp; /opt/homebrew/bin/mix test</code>: <span class="ok">11 tests, 0 failures</span>.</p>
+    </div>
+    <table>
+      <thead><tr><th>Source</th><th>Storage consequence</th></tr></thead>
+      <tbody>
+        <tr><td><code>index.html</code></td><td>Primeradiant maintains live story state, not item summaries. Agents propose graph changes with evidence and confidence.</td></tr>
+        <tr><td><code>primeradiant-system-architecture.html</code></td><td>Postgres is the v1 system of record. Graph, proposals, audit, user state, raw evidence, and authored output stay transactional.</td></tr>
+        <tr><td><code>primeradiant-elixir-implementation-blueprint.html</code></td><td>Phoenix contexts own domain rules: <code>Ingestion</code>, <code>Soup</code>, <code>Proposals</code>, <code>Arbitration</code>, <code>UserContext</code>, <code>Authoring</code>.</td></tr>
+        <tr><td><code>primeradiant-elixir-contracts.html</code></td><td>Committed truth must pass Ecto changesets, typed proposal ops, evidence refs, and arbitration. Generic <code>related</code> edges are invalid.</td></tr>
+        <tr><td><code>primeradiant-mvp-slice.html</code></td><td>Hybrid public/private corpus, user watch priority, stale/no-op state, and evidence-backed narration are product-critical.</td></tr>
+        <tr><td><code>primeradiant-fixture-corpus-plan.html</code></td><td>Golden corpus must flow through the same ingestion, proposal, arbitration, projection, authoring, and seen-state paths as real data.</td></tr>
+        <tr><td><code>proof-harness</code></td><td>Current proven semantics define the acceptance floor for persistence. Expected artifacts are inspectable assertions only; they do not seed or drive trusted behavior.</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>2. Goal and Cut Line</h2>
+    <div class="grid">
+      <div class="card">
+        <span class="label">Goal</span>
+        <h3>Persist the proof</h3>
+        <p>Create production Ecto schemas, migrations, constraints, and context APIs that preserve the proof-harness story semantics without adding unrelated product surface.</p>
+      </div>
+      <div class="card">
+        <span class="label">Smallest slice</span>
+        <h3>Storage plus contract tests</h3>
+        <p>Implement persistence, fixture import, proposal commit boundaries, evidence/provenance constraints, and acceptance tests mapped to the current proof corpus.</p>
+      </div>
+      <div class="card">
+        <span class="label">Boundary</span>
+        <h3>No broad product build</h3>
+        <p>No connectors, no ranking/headliners, no swarm scaling, and no broad UI. Existing proof decisions may be imported through a fixture path.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>3. Semantics That Must Survive Persistence</h2>
+    <table>
+      <thead><tr><th>Proof semantic</th><th>Persistent invariant</th><th>Primary tables</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>Normalized prose inputs</td>
+          <td>Fixture inputs are prose, not trusted classifier labels. Import may persist normalized facts/background/questions/colors, but classification and graph writes must still come from proposal and arbitration paths.</td>
+          <td><code>inputs</code>, <code>proposals</code>, <code>proposal_ops</code></td>
+        </tr>
+        <tr>
+          <td>Committed graph nodes</td>
+          <td>Inputs, stories, claims, entities, user watches, and authored outputs are visible as committed graph nodes. Edges must reference committed nodes, not free-form string endpoints.</td>
+          <td><code>soup_nodes</code>, <code>edges</code>, <code>graph_commits</code></td>
+        </tr>
+        <tr>
+          <td>Attach versus split</td>
+          <td>A story has stable identity via <code>story_key</code>; near-duplicate overlap attaches to the existing story, adjacent distinct events create a separate story plus optional <code>part_of</code> edge. No destructive merge.</td>
+          <td><code>stories</code>, <code>soup_nodes</code>, <code>edges</code>, <code>proposal_ops</code></td>
+        </tr>
+        <tr>
+          <td>Corrections and conflicts</td>
+          <td>Corrections create conflict records, contradiction edges, and fact provenance with proposal, op, agent run, evidence refs, and confidence. Prior facts are not silently overwritten without provenance.</td>
+          <td><code>conflicts</code>, <code>story_fact_versions</code>, <code>edges</code>, <code>evidence_refs</code></td>
+        </tr>
+        <tr>
+          <td>Meaningful framing without structural update</td>
+          <td>Inputs may attach with <code>adds_color</code> and story background/color attrs without advancing material facts as a fake update.</td>
+          <td><code>inputs</code>, <code>edges</code>, <code>story_events</code></td>
+        </tr>
+        <tr>
+          <td>Low-global-rank personal surfacing</td>
+          <td>User watches attach through committed <code>watch_applies_to</code> edges and can make an authored output relevant without any ranking/headliner subsystem.</td>
+          <td><code>watches</code>, <code>edges</code>, <code>authored_outputs</code></td>
+        </tr>
+        <tr>
+          <td>Proposal-backed graph writes</td>
+          <td>No graph node, edge, fact version, conflict, story event, or story state transition exists without an accepted proposal op, per-op evidence refs, per-op confidence, and a graph commit.</td>
+          <td><code>proposals</code>, <code>proposal_ops</code>, <code>graph_commits</code></td>
+        </tr>
+        <tr>
+          <td>ACL-aware arbitration</td>
+          <td>Arbitration rejects unevidenced proposals, already-decided proposals, generic/unsupported edges, and proposal evidence that is not visible to the proposal actor.</td>
+          <td><code>inputs</code>, <code>proposals</code>, <code>proposal_ops</code>, <code>proposal_decisions</code></td>
+        </tr>
+        <tr>
+          <td>Flynn-relative authored output</td>
+          <td>Authored outputs record sentence/bullet evidence and must be verified before recording or seen-state mutation. Subsequent deltas compare against seen story version plus seen input, claim, and output refs.</td>
+          <td><code>authored_outputs</code>, <code>authored_output_units</code>, <code>seen_states</code>, <code>seen_state_refs</code></td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>4. Canonical Tables</h2>
+    <p>Use <code>binary_id</code> primary keys for production tables. Keep fixture IDs as explicit columns for import idempotency and test traceability, not as production identity.</p>
+
+    <h3>4.1 Inputs</h3>
+    <pre>inputs
+  id :binary_id primary key
+  tenant_id :binary_id required
+  fixture_id :text nullable
+  source_type :text required
+  external_id :text required
+  observed_at :utc_datetime_usec required
+  title :text
+  body_text :text
+  object_uri :text nullable
+  content_sha256 :text required
+  acl :map required default {}
+  normalized :map required default {}
+  facts :map required default {}
+  background :map required default {}
+  questions :map required default {}
+  colors :array text required default []
+  topic_tokens :array text required default []
+  inserted_at / updated_at</pre>
+    <ul>
+      <li><code>inputs</code> are immutable after import except for operational metadata. If normalization changes, create a new normalization version in <code>normalized</code> or re-import through a controlled migration.</li>
+      <li><code>content_sha256</code> is the exact dedupe fingerprint for repeated/no-op detection.</li>
+      <li><code>acl</code> is part of arbitration and authoring visibility. Private inputs require an explicit participant list before their evidence can be used by an actor.</li>
+      <li><code>fixture_id</code> is unique only inside fixture imports and must not be required for real sources.</li>
+    </ul>
+
+    <h3>4.2 Soup Nodes</h3>
+    <pre>soup_nodes
+  id :binary_id primary key
+  tenant_id :binary_id required
+  node_key :text required
+  node_type :text required
+  title :text required
+  state :text required default 'active'
+  input_id references inputs nullable
+  story_id references stories nullable
+  watch_id references watches nullable
+  authored_output_id references authored_outputs nullable
+  proposal_id references proposals required
+  proposal_op_id references proposal_ops required
+  graph_commit_id references graph_commits required
+  confidence :decimal required
+  attrs :map required default {}
+  inserted_at / updated_at</pre>
+    <ul>
+      <li>Allowed node types for this slice: <code>input</code>, <code>story</code>, <code>claim</code>, <code>entity</code>, <code>user_watch</code>, <code>authored_output</code>.</li>
+      <li>Every committed edge endpoint must resolve to a <code>soup_nodes</code> row. Production storage may keep typed tables for <code>inputs</code>, <code>stories</code>, <code>watches</code>, and <code>authored_outputs</code>, but the graph-visible node identity lives here.</li>
+      <li>Fixture import creates input/story/claim/entity/watch/output nodes through proposal-backed or verified authoring paths, not from expected node artifacts.</li>
+    </ul>
+
+    <h3>4.3 Stories</h3>
+    <pre>stories
+  id :binary_id primary key
+  tenant_id :binary_id required
+  story_key :text required
+  title :text required
+  state :text required default 'active'
+  version :integer required default 0
+  first_observed_at :utc_datetime_usec required
+  updated_at_story :utc_datetime_usec required
+  last_material_at :utc_datetime_usec nullable
+  structural_facts :map required default {}
+  background_facts :map required default {}
+  colors :array text required default []
+  questions :map required default {}
+  topic_tokens :array text required default []
+  attrs :map required default {}
+  inserted_at / updated_at</pre>
+    <ul>
+      <li><code>story_key</code> is stable identity. It can be generated by the story classifier, but storage enforces uniqueness and does not infer the key from fixture labels.</li>
+      <li><code>version</code> increments only for committed story-affecting proposal ops: attach input, merge facts, conflict, state mark, or event record.</li>
+      <li><code>state</code> v1 values: <code>active</code>, <code>background</code>, <code>stale</code>, <code>resolved</code>. No delete-state in this slice.</li>
+    </ul>
+
+    <h3>4.4 Story Fact Versions</h3>
+    <pre>story_fact_versions
+  id :binary_id primary key
+  tenant_id :binary_id required
+  story_id references stories required
+  claim_node_id references soup_nodes nullable
+  fact_key :text required
+  fact_value :text required
+  status :text required default 'current'
+  proposal_id references proposals required
+  proposal_op_id references proposal_ops required
+  graph_commit_id references graph_commits required
+  input_id references inputs required
+  confidence :decimal required
+  replaced_fact_version_id references story_fact_versions nullable
+  observed_at :utc_datetime_usec required
+  inserted_at</pre>
+    <ul>
+      <li>This table is the hardening counterpart to the harness <code>structural_facts</code> and <code>fact_provenance</code> maps.</li>
+      <li>Production reads may denormalize current facts into <code>stories.structural_facts</code>, but fact provenance lives here.</li>
+    </ul>
+
+    <h3>4.5 Story Events</h3>
+    <pre>story_events
+  id :binary_id primary key
+  tenant_id :binary_id required
+  story_id references stories required
+  input_id references inputs required
+  classification :text required
+  story_version :integer required
+  changed_facts :map required default {}
+  observed_at :utc_datetime_usec required
+  proposal_id references proposals required
+  proposal_op_id references proposal_ops required
+  graph_commit_id references graph_commits required
+  confidence :decimal required
+  inserted_at</pre>
+    <p>This table persists the harness <code>history</code> entries used to compute user-relative deltas. Duplicate/no-op and framing-only events are recorded, but later authoring only treats material visible events as post-seen deltas.</p>
+
+    <h3>4.6 Agent Runs</h3>
+    <pre>agent_runs
+  id :binary_id primary key
+  tenant_id :binary_id required
+  agent_run_key :text required
+  agent_type :text required
+  prompt_version :text nullable
+  model :text nullable
+  scope :map required default {}
+  status :text required default 'succeeded'
+  trace_id :text nullable
+  started_at / ended_at :utc_datetime_usec nullable
+  inserted_at / updated_at</pre>
+    <p>This is the smallest provenance table needed because proposals require an <code>agent_run_id</code>. The fixture importer may create one synthetic <code>fixture-story-seeker</code> run.</p>
+
+    <h3>4.7 Proposals and Proposal Ops</h3>
+    <pre>proposals
+  id :binary_id primary key
+  tenant_id :binary_id required
+  proposal_key :text required
+  agent_run_id references agent_runs required
+  actor_id :text required
+  story_id references stories nullable
+  fixture_id :text nullable
+  classification :text required
+  confidence :decimal required
+  rationale :text required
+  status :text required default 'pending'
+  inserted_at / updated_at
+
+proposal_ops
+  id :binary_id primary key
+  tenant_id :binary_id required
+  proposal_id references proposals required
+  position :integer required
+  op_type :text required
+  payload :map required default {}
+  evidence_refs :array map required default []
+  confidence :decimal required
+  status :text required default 'pending'
+  committed_at :utc_datetime_usec nullable
+  inserted_at / updated_at</pre>
+    <ul>
+      <li>Allowed proposal statuses: <code>pending</code>, <code>accepted</code>, <code>accepted_weak</code>, <code>rejected</code>, <code>needs_more_evidence</code>.</li>
+      <li>Allowed op types for this slice: <code>create_input</code>, <code>create_story</code>, <code>attach_input</code>, <code>merge_facts</code>, <code>merge_background</code>, <code>append_colors</code>, <code>add_questions</code>, <code>record_conflicts</code>, <code>attach_watch</code>, <code>attach_story_part_of</code>, <code>mark_state</code>, <code>mark_last_seen_input</code>, <code>record_event</code>.</li>
+      <li>Every op carries its own evidence refs and confidence. Proposal-level evidence is not enough for committed graph provenance.</li>
+      <li>Arbitration rejects any proposal whose status is not <code>pending</code>, whose actor cannot access the referenced evidence, or whose op lacks evidence/confidence.</li>
+      <li>Forbidden op types: <code>delete_story</code>, <code>merge_story_destructive</code>, <code>rewrite_seen_state</code>, <code>commit_without_evidence</code>, <code>generic_related_edge</code>.</li>
+    </ul>
+
+    <h3>4.8 Proposal Decisions and Graph Commits</h3>
+    <pre>proposal_decisions
+  id :binary_id primary key
+  tenant_id :binary_id required
+  proposal_id references proposals required
+  from_status :text required
+  to_status :text required
+  actor_type :text required
+  actor_id :text required
+  evidence_refs :array map required default []
+  confidence :decimal required
+  rationale :text nullable
+  inserted_at
+
+graph_commits
+  id :binary_id primary key
+  tenant_id :binary_id required
+  proposal_id references proposals required
+  proposal_op_id references proposal_ops required
+  commit_type :text required
+  committed_by_type :text required
+  committed_by_id :text required
+  evidence_refs :array map required default []
+  confidence :decimal required
+  inserted_at</pre>
+    <p><code>graph_commits</code> is the durable boundary between proposal state and committed soup state. Any committed row created from a proposal must reference a <code>graph_commit_id</code> or its <code>proposal_op_id</code>.</p>
+
+    <h3>4.9 Edges</h3>
+    <pre>edges
+  id :binary_id primary key
+  tenant_id :binary_id required
+  from_node_id references soup_nodes required
+  to_node_id references soup_nodes required
+  edge_type :text required
+  status :text required default 'committed'
+  confidence :decimal required
+  proposal_id references proposals required
+  proposal_op_id references proposal_ops required
+  graph_commit_id references graph_commits required
+  attrs :map required default {}
+  inserted_at / updated_at</pre>
+    <ul>
+      <li>Allowed edge types for this slice: <code>supports</code>, <code>updates</code>, <code>duplicates</code>, <code>contradicts</code>, <code>adds_color</code>, <code>part_of</code>, <code>watch_applies_to</code>.</li>
+      <li><code>related</code> is invalid at changeset and database check-constraint levels.</li>
+      <li>Endpoint node types must match the edge contract. For example, <code>watch_applies_to</code> starts at a <code>user_watch</code> node; <code>duplicates</code>, <code>updates</code>, <code>supports</code>, <code>contradicts</code>, and <code>adds_color</code> connect input/claim nodes to story/claim nodes; <code>part_of</code> connects story nodes.</li>
+    </ul>
+
+    <h3>4.10 Evidence Refs</h3>
+    <pre>evidence_refs
+  id :binary_id primary key
+  tenant_id :binary_id required
+  subject_type :text required
+  subject_id :binary_id required
+  input_id references inputs required
+  soup_node_id references soup_nodes nullable
+  proposal_id references proposals nullable
+  proposal_op_id references proposal_ops nullable
+  edge_id references edges nullable
+  conflict_id references conflicts nullable
+  authored_output_id references authored_outputs nullable
+  authored_output_unit_id references authored_output_units nullable
+  span_start :integer nullable
+  span_end :integer nullable
+  evidence_label :text nullable
+  evidence_hash :text nullable
+  inserted_at</pre>
+    <ul>
+      <li>Every proposal and every proposal op has at least one evidence ref before arbitration.</li>
+      <li>Every committed node, edge, fact, conflict, story event, and authored material unit has evidence refs linked either to the row or to the proposal op that created it.</li>
+      <li>For v1, evidence refs point to normalized prose <code>inputs</code> and graph-visible <code>soup_nodes</code>; later source spans and artifacts can expand the same table.</li>
+    </ul>
+
+    <h3>4.11 Conflicts</h3>
+    <pre>conflicts
+  id :binary_id primary key
+  tenant_id :binary_id required
+  story_id references stories required
+  fact_key :text required
+  prior_value :text required
+  incoming_value :text required
+  status :text required default 'open'
+  input_id references inputs required
+  proposal_id references proposals required
+  proposal_op_id references proposal_ops required
+  graph_commit_id references graph_commits required
+  agent_run_id references agent_runs required
+  confidence :decimal required
+  inserted_at / updated_at</pre>
+    <ul>
+      <li>Conflict status values: <code>open</code>, <code>accepted_correction</code>, <code>resolved</code>, <code>rejected</code>.</li>
+      <li>A correction may update current story facts only through accepted proposal ops; conflict records remain as provenance.</li>
+    </ul>
+
+    <h3>4.12 Watches</h3>
+    <pre>watches
+  id :binary_id primary key
+  tenant_id :binary_id required
+  user_id :text required
+  watch_key :text required
+  intent :text required
+  priority :integer required default 0
+  match_any :array text required default []
+  filters :map required default {}
+  status :text required default 'active'
+  attrs :map required default {}
+  inserted_at / updated_at</pre>
+    <p>Watches do not directly mutate stories. They become graph-visible through accepted <code>attach_watch</code> proposal ops that create <code>watch_applies_to</code> edges.</p>
+
+    <h3>4.13 Seen State</h3>
+    <pre>seen_states
+  id :binary_id primary key
+  tenant_id :binary_id required
+  user_id :text required
+  story_id references stories required
+  seen_story_version :integer required
+  last_authored_output_id references authored_outputs required
+  seen_at :utc_datetime_usec required
+  inserted_at / updated_at
+
+seen_state_refs
+  id :binary_id primary key
+  tenant_id :binary_id required
+  seen_state_id references seen_states required
+  ref_kind :text required
+  ref_id :text required
+  authored_output_id references authored_outputs required
+  inserted_at</pre>
+    <ul>
+      <li>Seen-state updates are only allowed from <code>Authoring.record_output/...</code> after a verified authored output exists.</li>
+      <li>Ref kinds for this slice: <code>input</code>, <code>claim</code>, <code>story</code>, <code>edge</code>, <code>conflict</code>, <code>authored_output</code>. The reconciled proof explicitly requires seen input, claim, and output tracking.</li>
+    </ul>
+
+    <h3>4.14 Authored Outputs</h3>
+    <pre>authored_outputs
+  id :binary_id primary key
+  tenant_id :binary_id required
+  user_id :text required
+  story_id references stories nullable
+  output_type :text required
+  content :text required
+  evidence_packet :map required default {}
+  verified :boolean required default false
+  story_version :integer nullable
+  status :text required default 'recorded'
+  inserted_at / updated_at
+
+authored_output_units
+  id :binary_id primary key
+  tenant_id :binary_id required
+  authored_output_id references authored_outputs required
+  position :integer required
+  unit_type :text required
+  content :text required
+  story_id references stories nullable
+  evidence_refs :array map required default []
+  claim_refs :array map required default []
+  inserted_at</pre>
+    <p>Use <code>authored_output_units</code> for bullets or material sentences so grounding can be tested at the sentence/bullet level instead of trusting a blob-level citation. <code>verified</code> must be true before recording an authored output as graph-visible or marking any seen-state.</p>
+  </section>
+
+  <section>
+    <h2>5. Required Constraints and Indexes</h2>
+    <div class="widegrid">
+      <div class="card">
+        <span class="label">Identity and dedupe</span>
+        <h3>Inputs and stories</h3>
+        <pre>unique inputs(tenant_id, source_type, external_id)
+unique inputs(tenant_id, content_sha256)
+unique inputs(tenant_id, fixture_id) where fixture_id is not null
+unique stories(tenant_id, story_key)
+unique soup_nodes(tenant_id, node_key)
+index soup_nodes(tenant_id, node_type, state)
+index stories using gin(topic_tokens)
+check stories.version &gt;= 0</pre>
+      </div>
+      <div class="card">
+        <span class="label">Proposal boundary</span>
+        <h3>Proposals and ops</h3>
+        <pre>unique proposals(tenant_id, proposal_key)
+unique proposal_ops(proposal_id, position)
+unique graph_commits(proposal_op_id)
+index proposals(tenant_id, status, inserted_at)
+index proposal_ops(tenant_id, op_type, status)
+check proposals.confidence &gt;= 0 and confidence &lt;= 1
+check proposal_ops.confidence &gt;= 0 and confidence &lt;= 1
+check jsonb_array_length(proposal_ops.evidence_refs) &gt; 0</pre>
+      </div>
+      <div class="card">
+        <span class="label">Named graph</span>
+        <h3>Edges</h3>
+        <pre>check edge_type in (
+  'supports', 'updates', 'duplicates',
+  'contradicts', 'adds_color', 'part_of',
+  'watch_applies_to'
+)
+check edge_type &lt;&gt; 'related'
+unique edges(proposal_op_id)
+index edges(tenant_id, from_node_id, edge_type)
+index edges(tenant_id, to_node_id, edge_type)
+index edges(tenant_id, proposal_id)</pre>
+      </div>
+      <div class="card">
+        <span class="label">Evidence</span>
+        <h3>Evidence refs</h3>
+        <pre>index evidence_refs(tenant_id, subject_type, subject_id)
+index evidence_refs(tenant_id, input_id)
+index evidence_refs(tenant_id, soup_node_id)
+index evidence_refs(tenant_id, proposal_id)
+index evidence_refs(tenant_id, proposal_op_id)
+unique evidence_refs(
+  tenant_id, subject_type, subject_id, input_id,
+  coalesce(span_start, -1), coalesce(span_end, -1)
+)</pre>
+      </div>
+      <div class="card">
+        <span class="label">Conflict and facts</span>
+        <h3>Correction provenance</h3>
+        <pre>index conflicts(tenant_id, story_id, fact_key, status)
+index story_fact_versions(tenant_id, story_id, fact_key, status)
+unique story_fact_versions(story_id, fact_key)
+  where status = 'current'
+index conflicts(tenant_id, proposal_id)
+index conflicts(tenant_id, input_id)
+index story_events(tenant_id, story_id, story_version)
+check conflicts.confidence &gt;= 0 and confidence &lt;= 1</pre>
+      </div>
+      <div class="card">
+        <span class="label">User state</span>
+        <h3>Watches and seen-state</h3>
+        <pre>unique watches(tenant_id, user_id, watch_key)
+index watches using gin(match_any)
+unique seen_states(tenant_id, user_id, story_id)
+unique seen_state_refs(seen_state_id, ref_kind, ref_id)
+unique authored_output_units(authored_output_id, position)
+enforce authored_outputs.verified = true before seen-state insert
+check ref_kind in ('input', 'claim', 'story', 'edge', 'conflict', 'authored_output')</pre>
+      </div>
+    </div>
+    <div class="callout">
+      <p><strong>Changeset rule:</strong> Ecto must enforce the same rules as database constraints before insert. The database constraints are the final guard, not the first validation experience.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2>6. Proposal Versus Committed State</h2>
+    <ol>
+      <li><code>Proposals.submit/3</code> inserts a <code>proposals</code> row, one or more <code>proposal_ops</code>, and evidence refs. It does not write <code>soup_nodes</code>, <code>stories</code>, <code>edges</code>, <code>conflicts</code>, <code>story_fact_versions</code>, <code>story_events</code>, or <code>seen_states</code>.</li>
+      <li><code>Arbitration.decide/3</code> writes <code>proposal_decisions</code> with evidence/confidence and changes proposal/op status. It still does not mutate graph truth.</li>
+      <li><code>Arbitration.commit/2</code> is the only production context allowed to create <code>graph_commits</code> and apply accepted ops to committed state. It must reject unevidenced, already-decided, unsupported-edge, and ACL-inaccessible proposals before commit.</li>
+      <li><code>soup_nodes</code>, <code>edges</code>, <code>conflicts</code>, <code>story_fact_versions</code>, <code>story_events</code>, and story state updates must reference <code>proposal_id</code>, <code>proposal_op_id</code>, and <code>graph_commit_id</code>.</li>
+      <li><code>Authoring.record_output/5</code> records authored output and evidence refs only after verification succeeds, creates the graph-visible authored output node, then calls <code>UserContext.mark_seen_from_output/2</code>. No other path may advance seen-state.</li>
+    </ol>
+    <pre>Raw input -&gt; Input
+Input + current story state -&gt; Proposal + ProposalOps(per-op evidence/confidence)
+ACL-aware proposal decision -&gt; accepted/rejected/needs_more_evidence
+Accepted ProposalOps -&gt; GraphCommit -&gt; SoupNodes / Stories / Edges / Conflicts / FactVersions / StoryEvents
+Verified evidence packet -&gt; AuthoredOutput + AuthoredOutputUnits + EvidenceRefs -&gt; SeenState(input/claim/output refs)</pre>
+  </section>
+
+  <section>
+    <h2>7. Migration Sequence</h2>
+    <ol>
+      <li>Create Postgres enums or text check helpers for node types, proposal status, op types, edge types, story state, conflict status, seen ref kinds, and authored output status. Text plus check constraints is acceptable for this slice.</li>
+      <li>Create base typed tables: <code>inputs</code>, <code>stories</code>, <code>watches</code>, <code>agent_runs</code>, <code>authored_outputs</code>, and <code>authored_output_units</code>.</li>
+      <li>Create proposal tables: <code>proposals</code>, <code>proposal_ops</code>, and <code>proposal_decisions</code>, including actor, per-op evidence refs, and per-op confidence.</li>
+      <li>Create <code>graph_commits</code>.</li>
+      <li>Create committed graph tables: <code>soup_nodes</code>, <code>edges</code>, <code>story_fact_versions</code>, <code>story_events</code>, and <code>conflicts</code>. Add required foreign keys to proposal/op/commit.</li>
+      <li>Create user state tables: <code>seen_states</code> and <code>seen_state_refs</code>, including input/claim/output ref tracking.</li>
+      <li>Create <code>evidence_refs</code> after all subject tables exist. Add foreign keys where direct references are known and keep <code>subject_type/subject_id</code> for polymorphic tests.</li>
+      <li>Add indexes and unique constraints. Use concurrent indexes only if there is existing production data; for first schema creation, ordinary indexes are fine.</li>
+      <li>Add fixture import task and seed only the synthetic tenant/user required by tests. Import expected artifacts as assertions only, never as preseeded trusted graph state.</li>
+      <li>Add acceptance tests before any real connector, ranking, or UI work.</li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>8. Phoenix Context and API Boundaries</h2>
+    <div class="widegrid">
+      <div class="card">
+        <span class="label">Primeradiant.Ingestion</span>
+        <pre>import_fixture_corpus(path, actor) :: {:ok, import_report} | {:error, changeset}
+upsert_input(attrs, actor) :: {:ok, input} | {:error, changeset}
+normalize_input(input) :: {:ok, normalized_attrs}</pre>
+      </div>
+      <div class="card">
+        <span class="label">Primeradiant.Soup</span>
+        <pre>get_story_by_key(story_key, actor) :: {:ok, story} | {:error, :not_found}
+get_node(node_key, actor) :: {:ok, node} | {:error, :not_found}
+story_state(story_id, actor) :: {:ok, state}
+story_delta(story_id, since_ref, actor) :: {:ok, delta}
+provenance(subject, actor) :: {:ok, refs}</pre>
+      </div>
+      <div class="card">
+        <span class="label">Primeradiant.Proposals</span>
+        <pre>submit(agent_run, actor, ops, evidence_refs, attrs) :: {:ok, proposal} | {:error, changeset}
+validate_ops(proposal) :: :ok | {:error, violations}
+reviewable(filters, actor) :: {:ok, proposals}</pre>
+      </div>
+      <div class="card">
+        <span class="label">Primeradiant.Arbitration</span>
+        <pre>decide(proposal_id, decision, actor) :: {:ok, decision_record}
+commit(proposal_id, actor) :: {:ok, graph_commits} | {:error, reason}
+commit_weak(proposal_id, actor) :: {:ok, graph_commits}
+validate_evidence_acl(proposal, actor) :: :ok | {:error, :not_visible}</pre>
+      </div>
+      <div class="card">
+        <span class="label">Primeradiant.UserContext</span>
+        <pre>create_watch(user_id, attrs, actor) :: {:ok, watch} | {:error, changeset}
+mark_seen_from_output(output_id, actor) :: {:ok, seen_states}
+seen_state(user_id, story_id, actor) :: {:ok, seen_state}
+seen_refs(user_id, story_id, actor) :: {:ok, %{inputs: [], claims: [], outputs: []}}</pre>
+      </div>
+      <div class="card">
+        <span class="label">Primeradiant.Authoring</span>
+        <pre>evidence_packet(task, user_context, actor) :: {:ok, packet}
+verify_output(packet, units, actor) :: :ok | {:error, reason}
+record_output(user_id, story_id, content, units, evidence_refs, actor)
+  :: {:ok, output} | {:error, changeset}</pre>
+      </div>
+    </div>
+    <div class="callout">
+      <p><strong>Context rule:</strong> controllers, LiveViews, MCP tools, Oban workers, and fixture import tasks call contexts. They do not insert graph rows directly.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2>9. Fixture Import Path</h2>
+    <p>The current proof harness remains the source of semantic fixtures. Production storage imports the fixture corpus through the same boundaries real data will use, while allowing a deterministic synthetic agent run for test repeatability.</p>
+    <ol>
+      <li>Read <code>priv/fixtures/primeradiant_golden/manifest.json</code> and fixtures from <code>/Users/mike/shared-workspace/primeradiant/proof-harness</code>.</li>
+      <li>Create one synthetic tenant and user <code>flynn</code> for acceptance tests.</li>
+      <li>Upsert fixture watches into <code>watches</code> by <code>(tenant_id, user_id, watch_key)</code>.</li>
+      <li>Upsert fixture inputs into <code>inputs</code> by <code>(tenant_id, source_type, external_id)</code> and <code>content_sha256</code>.</li>
+      <li>Verify fixture input bodies are normalized prose, not trusted labels such as <code>FACT</code>, <code>COLOR</code>, <code>BACKGROUND</code>, or <code>QUESTION</code> directive lines.</li>
+      <li>Run the production normalizer or import the harness-normalized facts into the same <code>inputs</code> columns. Do not import pre-trusted committed story state, classifier labels, graph nodes, graph edges, conflicts, or seen-state.</li>
+      <li>Create a fixture <code>agent_runs</code> row with <code>agent_type = fixture_story_seeker</code>.</li>
+      <li>For each normalized input, call <code>Proposals.submit/...</code> with the same op classes the harness emits, including <code>create_input</code> and per-op evidence refs/confidence.</li>
+      <li>Call <code>Arbitration.decide/...</code> and <code>Arbitration.commit/...</code> for accepted fixture proposals. The test path must also exercise rejection for missing evidence, already-decided proposals, unsupported <code>related</code> edges, and private evidence hidden from the actor.</li>
+      <li>Record the first Flynn briefing through <code>Authoring.record_output/...</code> only after verification and verify <code>seen_states</code> updates input refs, claim refs, and output refs from that output.</li>
+      <li>Render the second Flynn delta from persisted state and verify no fake material update appears after seen-state.</li>
+    </ol>
+    <div class="callout">
+      <p><strong>Import rule:</strong> fixture import may accept fixture file order as an input stream, but it may not import expected story nodes, expected edges, expected proposals, expected story state, or expected briefings as trusted behavior. Expected artifacts remain inspectable assertions only.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2>10. Acceptance Tests Mapped to Current Corpus</h2>
+    <table>
+      <thead><tr><th>Production test</th><th>Proof harness source</th><th>Expected persisted assertion</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>Golden corpus artifacts are importable</td>
+          <td><code>golden corpus includes inspectable expected artifacts</code></td>
+          <td>Fixture importer reads manifest, inputs, watches, expected files, and produces an import report without inserting expected graph truth.</td>
+        </tr>
+        <tr>
+          <td>Proof-gate classification coverage</td>
+          <td><code>proof harness covers every required proof-gate category</code></td>
+          <td>Persisted proposals contain classifications for new story, attach, substantive update, duplicate/no-op, conflict correction, framing-only, stale/background, and near-collision split.</td>
+        </tr>
+        <tr>
+          <td>Normalization persistence</td>
+          <td><code>input normalization extracts structural, background, question, and color signals</code></td>
+          <td><code>inputs.facts</code>, <code>background</code>, <code>questions</code>, <code>colors</code>, <code>topic_tokens</code>, and <code>content_sha256</code> match harness semantics.</td>
+        </tr>
+        <tr>
+          <td>Prose-only fixture inputs</td>
+          <td><code>fixture inputs are prose inputs, not trusted classifier labels</code></td>
+          <td>Importer rejects or flags fixture inputs that encode expected behavior as directive labels. Expected artifacts are assertions only.</td>
+        </tr>
+        <tr>
+          <td>Proposal-backed graph mutations</td>
+          <td><code>all graph mutations come through proposals and commits with evidence and confidence</code></td>
+          <td>Every committed graph node, edge, fact, conflict, and story event references proposal, proposal op, graph commit, evidence refs, confidence, and accepted decision. No <code>related</code> edges exist.</td>
+        </tr>
+        <tr>
+          <td>Arbitration rejection gates</td>
+          <td><code>arbitration rejects unevidenced, already-decided, and generic-related proposals before commit</code></td>
+          <td>Storage changesets and arbitration reject missing evidence, non-pending proposal status, unsupported edge type, and evidence inaccessible to the actor before any graph commit.</td>
+        </tr>
+        <tr>
+          <td>Near-collision identity</td>
+          <td><code>near-collision pack preserves story identity without destructive merges</code></td>
+          <td><code>public_story_006_near_duplicate_overlap</code> attaches to the ferry story; <code>public_story_007_adjacent_distinct_terminal_walkout</code> persists as a separate story with optional <code>part_of</code> relation.</td>
+        </tr>
+        <tr>
+          <td>Grounded watch-aware authoring</td>
+          <td><code>authoring output is grounded, user-relative, and watch-aware</code></td>
+          <td>First authored output has verified units with evidence refs and claim refs, includes Flynn watch relevance, and the second briefing includes only material post-seen changes.</td>
+        </tr>
+        <tr>
+          <td>Authoring ACL and seen-state gate</td>
+          <td><code>authoring respects private ACL evidence boundaries before marking seen-state</code></td>
+          <td>Private evidence is hidden from unauthorized users; unverified output cannot mark seen-state; Flynn seen-state records input refs, claim refs, and output refs.</td>
+        </tr>
+        <tr>
+          <td>Stale/background state</td>
+          <td><code>stale detection marks dormant story regions without deleting them</code></td>
+          <td>Dormant story transitions to background/stale state through proposal-backed state event. Story row remains present.</td>
+        </tr>
+        <tr>
+          <td>Latest output user-relative grounding</td>
+          <td><code>proof result keeps user-relative grounding on the latest authored output</code></td>
+          <td>Persisted story <code>last_material_at</code>, authored output evidence refs, and proposal evidence refs match the corpus expectations.</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>11. Explicit Non-Goals</h2>
+    <ul>
+      <li>No real connectors. RSS, email, messages, web search, source adapters, and object storage ingestion are outside this slice.</li>
+      <li>No ranking/headliners. Watch priority may influence fixture authoring, but no global gravity/PageRank implementation is required.</li>
+      <li>No swarm scaling. One synthetic fixture agent run and context-level proposal submission are enough.</li>
+      <li>No broad UI. Proposal review, story dashboards, graph visualization, and LiveView screens wait for later slices.</li>
+      <li>No broad Claim/Entity extraction product. This slice persists the minimal claim/entity graph nodes required by the reconciled proof, but does not implement a general extraction system.</li>
+      <li>No destructive story merge, delete, or rewrite seen-state operation.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>12. Risks and Open Questions</h2>
+    <div class="widegrid">
+      <div class="card">
+        <span class="label warn">Residual risk</span>
+        <h3>Story-key generation</h3>
+        <p>The reconciled proof establishes the storage semantics for a supplied <code>story_key</code>. Production still needs a non-fixture story identity algorithm before real ingestion, but that is outside this storage/schema slice.</p>
+      </div>
+      <div class="card">
+        <span class="label warn">Residual risk</span>
+        <h3>Narrow conflict detection</h3>
+        <p>The current proof detects conflicts through narrow structural fact keys. Persisting <code>story_fact_versions</code> and <code>conflicts</code> preserves provenance, but broader contradiction discovery remains a later agent/projection problem.</p>
+      </div>
+      <div class="card">
+        <span class="label warn">Residual risk</span>
+        <h3>Polymorphic evidence refs</h3>
+        <p><code>evidence_refs.subject_type/subject_id</code> keeps the slice small, but Postgres cannot enforce all polymorphic foreign keys. Direct nullable FKs cover known v1 subjects; changesets must enforce the subject contract.</p>
+      </div>
+      <div class="card">
+        <span class="label warn">Residual risk</span>
+        <h3>JSONB versus normalized facts</h3>
+        <p>Current facts/background/questions are simple maps. <code>story_fact_versions</code> normalizes structural facts for provenance, while <code>stories.structural_facts</code> remains a read projection. Keep this split explicit in tests.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>13. Internal Adversarial Review</h2>
+    <table>
+      <thead><tr><th>Question</th><th>Result</th><th>Disposition</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>Does the spec add unsourced product scope?</td>
+          <td>No connectors, no ranking/headliners, no swarm scaling, and no broad UI are included. Tables are limited to persistence needed by source docs and proof semantics.</td>
+          <td><span class="ok">Pass</span></td>
+        </tr>
+        <tr>
+          <td>Can an agent bypass proposals and directly write graph truth?</td>
+          <td>The spec makes <code>Arbitration.commit/2</code> the only graph write boundary and requires proposal/op/commit refs, per-op evidence, and per-op confidence on committed rows.</td>
+          <td><span class="ok">Pass</span></td>
+        </tr>
+        <tr>
+          <td>Can generic relationships sneak into committed state?</td>
+          <td><code>edges.edge_type</code> has an allowlist and explicit <code>related</code> rejection at changeset and DB constraint levels.</td>
+          <td><span class="ok">Pass</span></td>
+        </tr>
+        <tr>
+          <td>Are authored outputs accountable at material sentence or bullet level?</td>
+          <td><code>authored_output_units</code>, evidence refs, claim refs, and <code>verified</code> prevent blob-only citation or unverified output from satisfying grounding and seen-state tests.</td>
+          <td><span class="ok">Pass</span></td>
+        </tr>
+        <tr>
+          <td>Does persistence preserve correction/conflict provenance?</td>
+          <td><code>conflicts</code> and <code>story_fact_versions</code> keep proposal, op, agent run, input, evidence refs, and confidence.</td>
+          <td><span class="ok">Pass</span></td>
+        </tr>
+        <tr>
+          <td>Does the spec reflect the reconciled 11-test baseline?</td>
+          <td>Yes. It includes prose-only fixture inputs, committed graph nodes, per-op evidence/confidence, ACL-aware arbitration rejection, proposal decision provenance, verified authoring, and input/claim/output seen-state.</td>
+          <td><span class="ok">Pass</span></td>
+        </tr>
+        <tr>
+          <td>Can expected artifacts seed trusted behavior?</td>
+          <td>No. Fixture expected artifacts are explicitly assertion inputs only; import may not use them as committed nodes, edges, proposals, story state, or briefings.</td>
+          <td><span class="ok">Pass</span></td>
+        </tr>
+        <tr>
+          <td>Does storage solve story identity?</td>
+          <td>No. Storage enforces stable identity once supplied. The generation algorithm remains outside this storage slice.</td>
+          <td><span class="warn">Residual risk</span></td>
+        </tr>
+        <tr>
+          <td>Does storage solve broad contradiction detection?</td>
+          <td>No. Storage preserves narrow fact-key conflicts from current semantics and leaves broader detection to later agents.</td>
+          <td><span class="warn">Residual risk</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>14. Implementation Handoff</h2>
+    <div class="callout">
+      <p><strong>Exact next implementation slice:</strong> create the Phoenix/Ecto storage migrations and schemas for <code>inputs</code>, <code>soup_nodes</code>, <code>stories</code>, <code>story_fact_versions</code>, <code>story_events</code>, <code>watches</code>, <code>agent_runs</code>, <code>proposals</code>, <code>proposal_ops</code>, <code>proposal_decisions</code>, <code>graph_commits</code>, <code>edges</code>, <code>conflicts</code>, <code>evidence_refs</code>, <code>authored_outputs</code>, <code>authored_output_units</code>, <code>seen_states</code>, and <code>seen_state_refs</code>; then implement fixture import and acceptance tests mapped to the eleven current proof-harness tests.</p>
+    </div>
+    <ul>
+      <li>Start with migrations and changesets, not LiveView or connectors.</li>
+      <li>Implement context functions only where needed to drive fixture import and tests.</li>
+      <li>Use the proof harness corpus as the acceptance source; expected files are assertions, not preseeded graph truth.</li>
+      <li>Treat story-key generation and broader conflict detection as later production semantics work; this slice hardens persistence for the reconciled proof semantics.</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

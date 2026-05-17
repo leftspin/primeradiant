@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>primeradiant — Elixir Implementation Blueprint</title>
+  <style>
+    :root { color-scheme: dark light; --fg: var(--clawline-fg, #f4ead7); --muted: color-mix(in srgb, var(--fg) 68%, transparent); --line: color-mix(in srgb, var(--fg) 18%, transparent); --card: color-mix(in srgb, var(--fg) 7%, transparent); --card2: color-mix(in srgb, var(--fg) 11%, transparent); --accent: #d39b48; --accent2: #9bc7ff; --good: #9fd39b; --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+    html, body { margin: 0; background: transparent; color: var(--fg); font: 16px/1.55 -apple-system, BlinkMacSystemFont, "SF Pro Text", Inter, sans-serif; }
+    body { padding: 28px 18px 52px; }
+    main { max-width: 1060px; margin: 0 auto; }
+    .eyebrow { color: var(--accent); text-transform: uppercase; letter-spacing: .13em; font-size: 12px; font-weight: 800; }
+    h1 { margin: 8px 0 12px; font-size: clamp(34px, 6vw, 64px); line-height: .96; letter-spacing: -.045em; }
+    h2 { margin: 0 0 12px; font-size: 24px; }
+    h3 { margin: 0 0 8px; font-size: 18px; }
+    p { margin: 0 0 10px; }
+    .lede { color: var(--muted); font-size: clamp(18px, 2.5vw, 23px); max-width: 850px; }
+    section { border: 1px solid var(--line); background: var(--card); border-radius: 24px; padding: 18px; margin: 16px 0; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 12px; }
+    .widegrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(310px, 1fr)); gap: 12px; }
+    .card { border: 1px solid var(--line); background: var(--card2); border-radius: 18px; padding: 14px; }
+    .label { color: var(--accent); text-transform: uppercase; letter-spacing: .09em; font-size: 11px; font-weight: 800; }
+    .callout { border-left: 4px solid var(--accent); padding: 12px 14px; background: color-mix(in srgb, var(--accent) 10%, transparent); border-radius: 14px; margin: 12px 0; }
+    code, pre { font-family: var(--mono); color: var(--accent2); }
+    pre { white-space: pre-wrap; overflow-wrap: anywhere; border: 1px solid var(--line); border-radius: 14px; padding: 12px; background: color-mix(in srgb, #000 18%, transparent); font-size: 13px; line-height: 1.45; }
+    ul, ol { margin: 0; padding-left: 22px; }
+    li { margin: 7px 0; }
+    .ok { color: var(--good); font-weight: 700; }
+  </style>
+</head>
+<body>
+<main>
+  <div class="eyebrow">Implementation blueprint</div>
+  <h1>primeradiant in Elixir</h1>
+  <p class="lede">A senior-engineer-ready shape for turning the architecture into a Phoenix system without writing application code yet.</p>
+
+  <section>
+    <h2>1. Build stance</h2>
+    <div class="callout"><p><strong>Decision:</strong> primeradiant should be an Elixir/Phoenix system because the product is a living supervised swarm, not a request/response CRUD app with some agents bolted on.</p></div>
+    <div class="grid">
+      <div class="card"><span class="label">Runtime truth</span><h3>OTP boundaries first</h3><p>Ingestion, model calls, proposal generation, arbitration, projections, and authoring should fail small and restart cleanly.</p></div>
+      <div class="card"><span class="label">Data truth</span><h3>Postgres remains the soup</h3><p>Ecto schemas and changesets are the gate before any agent proposal becomes durable graph state.</p></div>
+      <div class="card"><span class="label">UX truth</span><h3>LiveView is native</h3><p>Story state is alive. Dashboards, proposal review, watches, and “what changed” should update without frontend sprawl.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>2. Phoenix contexts and umbrella shape</h2>
+    <p>Use a single Phoenix app until the seams prove they need physical separation. Keep domains separated as contexts and supervised workers, not premature services.</p>
+    <pre>Primeradiant
+├── Primeradiant.Repo
+├── Primeradiant.Soup              # nodes, edges, story state, provenance
+├── Primeradiant.Ingestion         # source adapters, canonical input creation
+├── Primeradiant.Proposals         # proposal structs, validation, lifecycle
+├── Primeradiant.Agents            # prompt registry, model adapter, run records
+├── Primeradiant.Arbitration       # proposal decisions and committed mutations
+├── Primeradiant.Projections       # freshness, gravity, deltas, read models
+├── Primeradiant.UserContext       # watches, priorities, seen-state
+├── Primeradiant.Authoring         # evidence packets, planner, narrator outputs
+├── PrimeradiantWeb                # LiveView + JSON API
+└── PrimeradiantMCP                # MCP tools backed by contexts</pre>
+  </section>
+
+  <section>
+    <h2>3. OTP supervision tree</h2>
+    <div class="widegrid">
+      <div class="card"><span class="label">Always-on</span><h3>Core supervision</h3><pre>Primeradiant.Repo
+Phoenix.PubSub
+Oban
+Primeradiant.Agents.ModelClientSupervisor
+Primeradiant.Ingestion.AdapterSupervisor
+PrimeradiantMCP.Server</pre></div>
+      <div class="card"><span class="label">Backpressure</span><h3>Oban queues</h3><pre>ingestion:       source fetch + canonicalization
+extraction:      claim/entity extraction
+swarm:           story/edge/staleness proposals
+arbitration:     proposal decisions
+projection:      story state + gravity + deltas
+authoring:       evidence packets + narration
+maintenance:     stale scans + cleanup + evals</pre></div>
+      <div class="card"><span class="label">Live updates</span><h3>PubSub topics</h3><pre>story:&lt;story_id&gt;
+watch:&lt;user_id&gt;
+proposal_review
+agent_run:&lt;run_id&gt;
+authored_output:&lt;user_id&gt;</pre></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>4. Ecto schema groups</h2>
+    <div class="widegrid">
+      <div class="card"><h3>Evidence layer</h3><ul><li><code>RawSource</code></li><li><code>Input</code></li><li><code>Artifact</code></li><li><code>SourceSpan</code></li></ul></div>
+      <div class="card"><h3>Soup layer</h3><ul><li><code>SoupNode</code></li><li><code>SoupEdge</code></li><li><code>StoryStateSnapshot</code></li><li><code>GraphCommit</code></li></ul></div>
+      <div class="card"><h3>Proposal layer</h3><ul><li><code>Proposal</code></li><li><code>ProposedOp</code></li><li><code>ProposalDecision</code></li><li><code>EvidenceRef</code></li></ul></div>
+      <div class="card"><h3>Agent layer</h3><ul><li><code>AgentRun</code></li><li><code>PromptVersion</code></li><li><code>ModelCall</code></li><li><code>AgentTrace</code></li></ul></div>
+      <div class="card"><h3>User layer</h3><ul><li><code>UserWatch</code></li><li><code>UserPriority</code></li><li><code>UserSeenState</code></li><li><code>AuthoredOutput</code></li></ul></div>
+      <div class="card"><h3>Projection layer</h3><ul><li><code>StoryProjection</code></li><li><code>UserDelta</code></li><li><code>GravityScore</code></li><li><code>UnresolvedQuestion</code></li></ul></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>5. Context contracts</h2>
+    <p>These are the function surfaces a senior engineer should design before implementation. Names are illustrative; the important part is that every mutation crosses a context boundary.</p>
+    <pre>Soup.search(query, filters, actor)
+Soup.expand(seed_nodes, traversal_opts, actor)
+Soup.get_story_state(story_id, actor)
+Soup.delta(story_id, since_ref, actor)
+Soup.provenance(ref, actor)
+
+Ingestion.create_raw_source(envelope, actor)
+Ingestion.canonicalize(raw_source_id)
+
+Proposals.submit(agent_run, proposed_ops, evidence_refs)
+Proposals.list_reviewable(filters)
+
+Arbitration.decide(proposal_id, decision, actor)
+Arbitration.commit_validated_ops(proposal_id, ops, actor)
+
+UserContext.create_watch(user_id, intent, priority, filters)
+UserContext.mark_seen(user_id, authored_output_id, refs)
+
+Authoring.build_evidence_packet(task, user_context)
+Authoring.record_output(user_id, story_id, content, evidence_refs)</pre>
+  </section>
+
+  <section>
+    <h2>6. LiveView screens for v1</h2>
+    <div class="grid">
+      <div class="card"><h3>Story dashboard</h3><p>Active stories, fresh/stale state, gravity, personal priority, and latest material delta.</p></div>
+      <div class="card"><h3>Story detail</h3><p>Current story state, inputs, claims, substories, contradictions, provenance, and user seen-state.</p></div>
+      <div class="card"><h3>Proposal review</h3><p>Agent proposals with evidence, confidence, affected graph ops, and accept/weaken/reject decisions.</p></div>
+      <div class="card"><h3>Watch creation</h3><p>User priorities via <code>/preferences/priorities</code> and story/concept watches via <code>/stories/concepts</code>.</p></div>
+      <div class="card"><h3>Authored preview</h3><p>What primeradiant would tell the user, with evidence and “new to you” markings before delivery.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>7. First proof cut</h2>
+    <p>The first code should be a story-semantics proof harness, not a product app. Its job is to answer whether the soup model can make and defend story-state decisions on a tiny corpus.</p>
+    <ol>
+      <li>Create Phoenix app, Repo, Oban, pgvector migration, and base supervision tree.</li>
+      <li>Define Ecto schemas and changesets for RawSource, Input, SoupNode, SoupEdge, Proposal, AgentRun, UserWatch, UserSeenState, AuthoredOutput.</li>
+      <li>Implement contexts as empty/contract-tested shells before agent work.</li>
+      <li>Create one fixture corpus: public news story, private email thread, user watch, stale/no-op case.</li>
+      <li>Normalize each fixture into canonical input records with source, timestamp, actors/entities, claims, links, raw text, ACL, and provenance.</li>
+      <li>Classify each input as new story, attach to story, substantive update, repeated/no-op, color/spin, stale, or conflict.</li>
+      <li>Write proposal-backed graph changes with evidence and confidence; no committed graph truth may be preseeded to make the proof pass.</li>
+      <li>Build soup.search, soup.expand, story.state, story.delta, soup.provenance, soup.propose as JSON endpoints and MCP tools backed by fixtures.</li>
+      <li>Implement first Oban pipeline: raw input → canonical input → extractor proposal → arbiter commit → projection update.</li>
+      <li>Produce one authored output: what changed for Flynn since last seen, and why, with evidence references.</li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>8. Non-negotiable gates</h2>
+    <ul>
+      <li><span class="ok">Gate:</span> no agent can write committed soup state directly; proposals only.</li>
+      <li><span class="ok">Gate:</span> every graph-changing output validates through JSON Schema and Ecto changesets.</li>
+      <li><span class="ok">Gate:</span> every authored sentence can trace back to inputs/claims/proposals.</li>
+      <li><span class="ok">Gate:</span> seen-state is updated from authored outputs, not inferred from story existence.</li>
+      <li><span class="ok">Gate:</span> staleness is story/claim/input/user-relative state, not just a timestamp.</li>
+      <li><span class="ok">Gate:</span> graph analytics and optional external workers are projections, never source of truth.</li>
+      <li><span class="ok">Gate:</span> the proof harness must pass explicit attach/new/update/no-op/color/stale/conflict expectations without demo shortcuts, preseeded trusted state, or broad summarization.</li>
+    </ul>
+  </section>
+
+  <p class="lede">This stops one step before code: the next owner can create the Phoenix project and start by turning these contexts, schemas, queues, and gates into tests.</p>
+</main>
+</body>
+</html>

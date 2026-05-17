@@ -1,0 +1,9 @@
+{
+  "fixture_id": "public_story_001_initial_report",
+  "source_type": "news_article",
+  "external_id": "fixture:public:001",
+  "observed_at": "2026-05-01T08:00:00-07:00",
+  "title": "Harbor ferry strike halts evening crossings",
+  "acl": {"privacy": "public"},
+  "body_text": "The harbor ferry labor strike is active and evening crossings are halted. Commuters stood in the rain waiting for buses."
+}

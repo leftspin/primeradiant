@@ -1,0 +1,5 @@
+WARNING: proceeding, even though we could not update PATH: No locks available (os error 77)
+Reading additional input from stdin...
+2026-05-17T09:43:46.187610Z ERROR codex_models_manager::manager: failed to refresh available models: stream disconnected before completion: error sending request for url (https://chatgpt.com/backend-api/codex/models?client_version=0.124.0)
+2026-05-17T09:43:46.298281Z ERROR codex_core::session: Failed to create session: No locks available (os error 77)
+Error: thread/start: thread/start failed: error creating thread: Fatal error: Failed to initialize session: No locks available (os error 77)

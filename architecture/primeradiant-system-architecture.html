@@ -1,0 +1,486 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>primeradiant System Architecture</title>
+  <style>
+    :root {
+      color-scheme: dark light;
+      --fg: var(--clawline-fg, #f4ead7);
+      --muted: color-mix(in srgb, var(--fg) 68%, transparent);
+      --soft: color-mix(in srgb, var(--fg) 52%, transparent);
+      --line: color-mix(in srgb, var(--fg) 18%, transparent);
+      --card: color-mix(in srgb, var(--fg) 7%, transparent);
+      --card2: color-mix(in srgb, var(--fg) 11%, transparent);
+      --accent: #d39b48;
+      --accent2: #9bc7ff;
+      --ok: #9be6bd;
+      --warn: #ffd28a;
+      --bad: #ff9b9b;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+    html, body { margin: 0; background: transparent; color: var(--fg); font: 16px/1.56 -apple-system, BlinkMacSystemFont, "SF Pro Text", Inter, Segoe UI, sans-serif; }
+    body { padding: 28px 18px 48px; }
+    main { max-width: 1080px; margin: 0 auto; }
+    .eyebrow { color: var(--accent); text-transform: uppercase; letter-spacing: .13em; font-size: 12px; font-weight: 800; margin-bottom: 10px; }
+    h1 { margin: 0 0 14px; font-size: clamp(36px, 7vw, 72px); line-height: .94; letter-spacing: -0.055em; }
+    .subtitle { max-width: 860px; margin: 0 0 22px; color: var(--muted); font-size: clamp(19px, 3vw, 25px); line-height: 1.35; }
+    .meta { display: flex; flex-wrap: wrap; gap: 8px; margin: 20px 0 26px; }
+    .pill { border: 1px solid var(--line); background: var(--card); border-radius: 999px; padding: 6px 10px; color: var(--muted); font-size: 13px; }
+    section { border: 1px solid var(--line); background: var(--card); border-radius: 24px; padding: clamp(18px, 3vw, 28px); margin: 18px 0; }
+    h2 { margin: 0 0 12px; font-size: clamp(24px, 4vw, 36px); line-height: 1.08; letter-spacing: -.025em; }
+    h3 { margin: 22px 0 8px; font-size: 20px; letter-spacing: -.01em; }
+    h4 { margin: 14px 0 6px; font-size: 15px; color: var(--accent2); text-transform: uppercase; letter-spacing: .08em; }
+    p { margin: 0 0 13px; }
+    p:last-child { margin-bottom: 0; }
+    ul, ol { margin: 0 0 13px; padding-left: 22px; }
+    li { margin: 7px 0; }
+    strong { color: var(--accent); }
+    em { color: var(--soft); }
+    code { font: 0.92em/1.35 var(--mono); color: var(--accent2); }
+    pre { overflow-x: auto; border: 1px solid var(--line); border-radius: 16px; background: color-mix(in srgb, black 18%, transparent); padding: 14px; margin: 12px 0; font: 13px/1.45 var(--mono); color: var(--fg); }
+    .callout { border-left: 4px solid var(--accent); background: var(--card2); border-radius: 16px; padding: 14px 16px; margin: 16px 0; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 12px; margin: 14px 0; }
+    .widegrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(310px, 1fr)); gap: 12px; margin: 14px 0; }
+    .card { border: 1px solid var(--line); background: color-mix(in srgb, var(--fg) 5%, transparent); border-radius: 18px; padding: 15px; }
+    .card h3 { margin-top: 0; }
+    .label { display: inline-block; color: var(--accent2); font-size: 12px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; margin-bottom: 5px; }
+    .diagram { display: grid; grid-template-columns: 1fr; gap: 10px; margin: 16px 0; }
+    .stage { border: 1px solid var(--line); border-radius: 18px; padding: 14px 16px; background: var(--card2); }
+    .stage b { color: var(--accent); }
+    .arrow { text-align: center; color: var(--muted); font-weight: 800; }
+    .term { border-bottom: 1px solid var(--line); padding: 13px 0; }
+    .term:first-child { padding-top: 0; }
+    .term:last-child { border-bottom: none; padding-bottom: 0; }
+    .term b { color: var(--accent); }
+    .seam { border-left: 4px solid var(--accent2); }
+    .prompt { white-space: pre-wrap; }
+    .footer { color: var(--muted); font-size: 13px; margin-top: 18px; text-align: center; }
+  </style>
+</head>
+<body>
+<main>
+  <div class="eyebrow">System architecture · companion to the primeradiant whitepaper</div>
+  <h1>primeradiant architecture</h1>
+  <p class="subtitle">A technical design for building the agentic storytelling system: selected technology, named seams, data model, agent catalog, prompt kernels, workflows, and MVP cut line.</p>
+  <div class="meta">
+    <span class="pill">System: primeradiant</span>
+    <span class="pill">Category: agentic storytelling</span>
+    <span class="pill">Audience: senior engineer / architect</span>
+    <span class="pill">Status: implementation-ready design, not code</span>
+    <span class="pill">Last updated: 2026-05-13</span>
+  </div>
+
+  <section>
+    <h2>0. Executive architecture</h2>
+    <p><strong>primeradiant is not a memory store.</strong> It is a live story-state system. Its job is to ingest fragmented inputs, maintain a semantically rich story graph, let agents spelunk that graph, and author user-relative updates: what matters now, what changed, what is stale, and what is new to this user.</p>
+    <div class="diagram">
+      <div class="stage"><b>Source adapters</b><br/>News, RSS, web pages, email, messages, social posts, documents, user story seeds.</div>
+      <div class="arrow">↓</div>
+      <div class="stage"><b>Canonical input pipeline</b><br/>Normalize, classify, extract text, embed, dedupe, store immutable source record.</div>
+      <div class="arrow">↓</div>
+      <div class="stage"><b>Soup core</b><br/>Typed graph of Inputs, Stories, Claims, Entities, User Watches, and named Edges with provenance.</div>
+      <div class="arrow">↕</div>
+      <div class="stage"><b>Agentic soup API</b><br/>Search, traverse, inspect provenance, ask for deltas, follow unresolved questions, and propose graph changes.</div>
+      <div class="arrow">↕</div>
+      <div class="stage"><b>Swarm workflows</b><br/>Specialized agents propose stories, connections, contradictions, developments, staleness changes, and larger-story structure.</div>
+      <div class="arrow">↓</div>
+      <div class="stage"><b>Projection layer</b><br/>Story state, freshness, rank/gravity, user relevance, and “what changed” materialized for fast reads.</div>
+      <div class="arrow">↓</div>
+      <div class="stage"><b>Authoring system</b><br/>Planner + retriever + narrator + verifier + seen-state writer produce grounded updates for each user.</div>
+    </div>
+    <div class="callout"><p><strong>Design stance:</strong> use a boring, auditable core store first. Let agents be creative at the proposal layer, not in the committed truth layer.</p></div>
+  </section>
+
+  <section>
+    <h2>1. Architectural invariants</h2>
+    <div class="grid">
+      <div class="card"><h3>Story over item</h3><p>Incoming inputs are evidence. The maintained object is the evolving story state.</p></div>
+      <div class="card"><h3>State over memory</h3><p>The system tracks freshness, staleness, deltas, unresolved questions, and per-user seen-state.</p></div>
+      <div class="card"><h3>Proposals before commits</h3><p>Swarm agents propose changes with evidence and confidence. A controlled seam commits durable graph state.</p></div>
+      <div class="card"><h3>Named relationships</h3><p>Edges are never just “related.” They say supports, contradicts, updates, duplicates, reframes, part-of, etc.</p></div>
+      <div class="card"><h3>Web search is acquisition</h3><p>External search gathers evidence. It does not bypass the soup as the situated reality layer.</p></div>
+      <div class="card"><h3>User-relative output</h3><p>The authoring system always asks: what has this user already seen, and what is new to them?</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>2. Selected technology</h2>
+    <p>This selection optimizes for agent-written correctness, living-system concurrency, auditability, privacy control, and operational simplicity. Hiring-market breadth is intentionally not a selection criterion. The stack should fit primeradiant's shape, not the average web app.</p>
+    <div class="callout"><p><strong>Stack decision:</strong> use Elixir/Phoenix as the application substrate. OTP is not an implementation detail here; it is the natural runtime model for supervised swarm agents, evented ingestion, story-state maintenance, and live user-facing updates.</p></div>
+    <div class="widegrid">
+      <div class="card"><span class="label">Backend/API</span><h3>Elixir · Phoenix · Ecto</h3><p>Elixir fits primeradiant's living-system shape: concurrent agents, supervised workers, evented story updates, subscriptions, and fault-tolerant ingestion. Phoenix gives HTTP, channels, and LiveView; Ecto keeps Postgres explicit and migration-friendly.</p></div>
+      <div class="card"><span class="label">System of record</span><h3>PostgreSQL 17 + pgvector</h3><p>Postgres stores raw inputs, graph nodes/edges, proposals, story states, seen-state, audit logs, and embeddings. Graph is represented with typed node/edge tables first; no separate graph SoR.</p></div>
+      <div class="card"><span class="label">Raw artifacts</span><h3>S3-compatible object storage</h3><p>Store source HTML, email MIME, attachments, screenshots, PDFs, and extracted text artifacts in object storage. Postgres stores metadata and content hashes.</p></div>
+      <div class="card"><span class="label">Search</span><h3>Postgres full-text + pgvector hybrid</h3><p>Use BM25-ish full-text + vector similarity + reranking. Add OpenSearch/Qdrant only if scale proves Postgres insufficient.</p></div>
+      <div class="card"><span class="label">Workflows/jobs</span><h3>Oban · Oban Pro when justified</h3><p>Oban runs ingestion, swarm passes, authoring, retries, scheduled staleness checks, and durable job observability inside the Phoenix/Postgres stack. Start there; do not add an external workflow engine until the product proves it needs one.</p></div>
+      <div class="card"><span class="label">Agent API</span><h3>MCP server + Phoenix JSON API</h3><p>MCP exposes soup spelunking tools to agents. Phoenix JSON endpoints serve product UI and internal services. Both call the same domain/context layer.</p></div>
+      <div class="card"><span class="label">Models</span><h3>Model adapter + structured outputs</h3><p>Use provider-agnostic LLM adapters. Require JSON Schema-validated outputs and Ecto changeset validation for all graph-changing agents. Keep prompt versions in the database.</p></div>
+      <div class="card"><span class="label">Embeddings</span><h3>Local-private default, cloud-optional</h3><p>For private inputs, default to local embeddings such as BGE-M3 or nomic-embed-text. Public/news data may use cloud embeddings if policy allows.</p></div>
+      <div class="card"><span class="label">Graph analytics</span><h3>Materialized projections + optional analysis worker</h3><p>Compute story gravity/PageRank-like scores from Postgres edge snapshots. Start with SQL/Ecto projection jobs. If heavier graph math is needed, put Python/NetworkX or graphblas behind the projection seam. Do not make it source of truth.</p></div>
+      <div class="card"><span class="label">Frontend</span><h3>Phoenix LiveView</h3><p>Story dashboards, live updates, watches, proposal review, correction UI, and provenance views map naturally to LiveView. If graph visualization needs custom rendering, isolate it behind a small web component rather than changing the app shell.</p></div>
+      <div class="card"><span class="label">Observability</span><h3>OpenTelemetry + Langfuse + Prometheus</h3><p>Trace every ingestion, agent run, prompt version, proposal, commit, author output, cost, and error. Agents without traces are bugs.</p></div>
+      <div class="card"><span class="label">Deployment</span><h3>Elixir release + Docker Compose first</h3><p>Compose is enough for first production-ish deployment: Phoenix release, Postgres, object store, and worker nodes. Kubernetes can wait until load/ops needs justify it.</p></div>
+    </div>
+    <div class="callout"><p><strong>Explicit non-selection for v1:</strong> do not use Neo4j/Memgraph as the primary truth store yet. If needed, add a read-only graph projection later. The committed graph, proposals, audit, user state, and raw evidence should start in one transactional store.</p></div>
+    <h3>Elixir runtime shape</h3>
+    <div class="widegrid">
+      <div class="card"><span class="label">Phoenix contexts</span><h3>Domain boundaries</h3><p>Use contexts such as <code>Primeradiant.Soup</code>, <code>Primeradiant.Ingestion</code>, <code>Primeradiant.Proposals</code>, <code>Primeradiant.Authoring</code>, and <code>Primeradiant.UserContext</code>. Contexts own rules; controllers, LiveViews, MCP tools, and workers call contexts.</p></div>
+      <div class="card"><span class="label">OTP supervision</span><h3>Failure containment</h3><p>Run source adapters, model clients, MCP server, projection workers, and live subscription broadcasters under explicit supervisors. A bad connector or stuck agent pass must fail small, restart cleanly, and leave audit traces.</p></div>
+      <div class="card"><span class="label">Oban queues</span><h3>Agent execution lanes</h3><p>Separate queues for ingestion, extraction, swarm proposals, arbitration, projections, authoring, and maintenance. Queue names become operational vocabulary and backpressure controls.</p></div>
+      <div class="card"><span class="label">PubSub</span><h3>Living story updates</h3><p>Use Phoenix.PubSub to broadcast committed story-state changes, proposal review updates, watch matches, and authored-output readiness to LiveView dashboards and subscription workers.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>3. Named seams</h2>
+    <p>These seams are the boundaries a senior engineer should preserve. Each seam should have typed contracts, tests, audit, and ownership.</p>
+    <div class="widegrid">
+      <div class="card seam"><span class="label">S1 · Source Adapter Seam</span><h3>Outside world → RawInputEnvelope</h3><p>Connectors normalize external sources into a minimal envelope without deciding story meaning.</p><pre>{ sourceType, externalId, observedAt, actor, uri, rawObjectUri, extractedText?, metadata, acl }</pre></div>
+      <div class="card seam"><span class="label">S2 · Canonical Input Seam</span><h3>RawInputEnvelope → Input node</h3><p>Extract text, classify source, dedupe by content hash, embed, and create an immutable Input node.</p></div>
+      <div class="card seam"><span class="label">S3 · Soup Core Write Seam</span><h3>Committed graph mutation</h3><p>The only seam allowed to commit durable nodes/edges/story state. It accepts validated operations, not free-form agent text.</p></div>
+      <div class="card seam"><span class="label">S4 · Proposal Seam</span><h3>Agent output → proposed operations</h3><p>All swarm agents write proposals with evidence, confidence, and intended graph operations. Proposals are inspectable and reversible.</p></div>
+      <div class="card seam"><span class="label">S5 · Agentic Soup API Seam</span><h3>Agents → soup spelunking</h3><p>Search, traverse, delta, provenance, unresolved questions, watches, and proposal submission. This is how agents reason from current situated truth.</p></div>
+      <div class="card seam"><span class="label">S6 · Arbitration Seam</span><h3>Proposal → commit / reject / weaken</h3><p>Rules and arbiter agents decide whether proposed graph changes become committed state, remain weak, or are rejected.</p></div>
+      <div class="card seam"><span class="label">S7 · Projection Seam</span><h3>Graph/events → read models</h3><p>Build story state, freshness, gravity rank, user relevance, and delta projections. Projections are derived and rebuildable.</p></div>
+      <div class="card seam"><span class="label">S8 · User Context Seam</span><h3>User state → watches/seen-state/preferences</h3><p>Tracks subscriptions, priorities, corrections, authored outputs, and what each user has seen at story/input/claim/output granularity.</p></div>
+      <div class="card seam"><span class="label">S9 · Authoring Seam</span><h3>Evidence packet → user-facing output</h3><p>The authoring system writes only from a bounded evidence packet and records what it showed the user.</p></div>
+      <div class="card seam"><span class="label">S10 · External Acquisition Seam</span><h3>Soup gap → source search/fetch</h3><p>When the soup lacks evidence, acquisition can fetch web/news/public sources and re-ingest them as inputs. It does not directly author claims.</p></div>
+      <div class="card seam"><span class="label">S11 · Audit/Trace Seam</span><h3>Every action → durable trace</h3><p>Agent runs, prompt versions, model calls, proposals, commits, and author outputs are logged with correlation IDs.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>4. Core data model</h2>
+    <p>Use Postgres as the system of record. Treat graph, proposals, story state, and user state as first-class relational structures with JSONB for flexible attributes.</p>
+    <h3>Minimum viable node types</h3>
+    <div class="grid">
+      <div class="card"><h3>Input</h3><p>An immutable incoming item: article, email, post, message, document, alert, user note.</p></div>
+      <div class="card"><h3>Story</h3><p>An evolving narrative object with state, freshness, developments, and relationships.</p></div>
+      <div class="card"><h3>Claim</h3><p>An atomic assertion extracted from inputs or story synthesis.</p></div>
+      <div class="card"><h3>Entity</h3><p>People, orgs, products, places, accounts, projects, agencies, etc.</p></div>
+      <div class="card"><h3>UserWatch</h3><p>A user-submitted priority/story seed/subscription target.</p></div>
+      <div class="card"><h3>AuthoredOutput</h3><p>A thing the system told a user, used for seen-state and accountability.</p></div>
+    </div>
+    <h3>Later first-class nodes</h3>
+    <p>Facet, Perspective/Spin, Question/Unknown, Development/Event, Source, Collection, and Correction can start as attributes/prompt concepts and become nodes when behavior proves they need durable relationships.</p>
+    <h3>Core tables</h3>
+    <pre>raw_sources(id, tenant_id, source_type, external_id, observed_at, checksum, object_uri, acl, metadata)
+inputs(id, raw_source_id, title, body_text, source_type, actor, occurred_at, observed_at, canonical_uri, embedding, attrs)
+soup_nodes(id, tenant_id, node_type, title, summary, state, attrs, embedding, created_by, created_at, updated_at)
+soup_edges(id, tenant_id, from_node_id, to_node_id, edge_type, confidence, status, evidence_refs, attrs, created_by, created_at)
+proposals(id, tenant_id, agent_type, agent_run_id, proposed_ops, evidence_refs, confidence, status, rationale, created_at)
+story_state_snapshots(id, story_id, version, freshness, activity_state, gravity_score, unresolved_count, state_json, created_at)
+user_watches(id, user_id, node_id, intent, priority, filters, created_at, status)
+user_seen_state(id, user_id, story_id, seen_story_version, seen_input_ids, seen_claim_ids, seen_output_ids, last_briefed_at)
+authored_outputs(id, user_id, story_id, output_type, content, evidence_refs, story_version, created_at)
+agent_runs(id, agent_type, prompt_version, model, scope, input_refs, output_json, cost, trace_id, status, started_at, ended_at)</pre>
+    <h3>Edge types for v1</h3>
+    <ul>
+      <li><code>mentions</code> — Input/Claim mentions Entity.</li>
+      <li><code>supports</code> — Input supports Claim or Story.</li>
+      <li><code>updates</code> — Input adds a development to Story.</li>
+      <li><code>duplicates</code> — Input repeats the substance of another Input/Claim.</li>
+      <li><code>contradicts</code> — Claim/Input conflicts with Claim/Story state.</li>
+      <li><code>reframes</code> — Input changes the interpretation or source framing.</li>
+      <li><code>adds_color</code> — Input adds useful context but not a material development.</li>
+      <li><code>part_of</code> — Story is substory/facet of larger Story.</li>
+      <li><code>adjacent_to</code> — Stories are related but should not collapse.</li>
+      <li><code>watch_applies_to</code> — UserWatch attaches to Story/Input/Entity/Claim.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>5. Agentic Soup API</h2>
+    <p>This is the core product API for agents. It should be available as MCP tools and backed by the internal domain service. Agents should use this before web search when the question concerns current story state, personal context, prior inputs, or user-specific novelty.</p>
+    <div class="widegrid">
+      <div class="card"><h3><code>soup.search</code></h3><p>Natural-language and filtered search across nodes, inputs, stories, claims, entities, and watches.</p><pre>{ query, nodeTypes?, userId?, since?, limit? }</pre></div>
+      <div class="card"><h3><code>soup.expand</code></h3><p>Traverse from seed nodes by edge type, direction, confidence, depth, and time window.</p><pre>{ seedNodeIds, edgeTypes?, depth, strategy }</pre></div>
+      <div class="card"><h3><code>story.state</code></h3><p>Return current story projection: freshness, activity, latest developments, unresolved questions, substories, and rank.</p></div>
+      <div class="card"><h3><code>story.delta</code></h3><p>Return what changed since a timestamp, story version, authored output, or user seen-state.</p><pre>{ storyId, since: { userId } | { version } | { time } }</pre></div>
+      <div class="card"><h3><code>soup.provenance</code></h3><p>Trace a node, edge, claim, or authored sentence back to inputs, agents, proposals, and commits.</p></div>
+      <div class="card"><h3><code>soup.unresolved</code></h3><p>Return open questions, low-confidence claims, contradictions, or missing evidence for a story.</p></div>
+      <div class="card"><h3><code>watch.create</code> / <code>watch.update</code></h3><p>Create user story seeds and priority anchors; connect them to graph nodes as evidence appears.</p></div>
+      <div class="card"><h3><code>soup.propose</code></h3><p>Submit graph operations as proposals, never raw commits, unless caller has committer authority.</p><pre>{ agentRunId, ops[], evidenceRefs[], confidence, rationale }</pre></div>
+      <div class="card"><h3><code>author.evidencePacket</code></h3><p>Build a bounded, citable packet for authoring: story state, deltas, inputs, claims, provenance, and seen-state.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>6. Workflows</h2>
+    <h3>6.1 Ingestion workflow</h3>
+    <ol>
+      <li>Source adapter receives/fetches external item and writes <code>raw_sources</code>.</li>
+      <li>Canonicalizer extracts text, normalizes metadata, computes hashes, embeds content, creates Input node.</li>
+      <li>Claim/Entity Extractor proposes Claim and Entity nodes and <code>mentions/supports</code> edges.</li>
+      <li>Story Seeker and Connection Weaver inspect nearby soup and propose Story nodes/edges.</li>
+      <li>Arbitration promotes valid proposals to committed soup nodes/edges.</li>
+      <li>Projection jobs update story state, gravity, freshness, unresolved questions, and user-watch matches.</li>
+      <li>Author Planner decides whether any user-facing update is warranted.</li>
+    </ol>
+    <h3>6.2 Maintenance workflow</h3>
+    <ol>
+      <li>Scheduled Oban job selects active/stale/high-change story regions.</li>
+      <li>Staleness Keeper updates freshness/activity proposals.</li>
+      <li>Contradiction Scout and Perspective Scout scan for drift, conflict, and framing changes.</li>
+      <li>Larger-Story Cartographer proposes new higher-level stories; it does not destructively merge old ones.</li>
+      <li>Gravity jobs recompute rank and user relevance projections.</li>
+    </ol>
+    <h3>6.3 User briefing workflow</h3>
+    <ol>
+      <li>Trigger: user asks, subscription fires, story delta crosses threshold, or scheduled digest runs.</li>
+      <li>Author Planner chooses output type: breaking story, update, digest, explainer, thread catch-up, or no-op.</li>
+      <li>Retriever builds evidence packet from soup API, including per-user seen-state.</li>
+      <li>Narrator drafts concise user-facing text.</li>
+      <li>Verifier checks every claim against evidence packet and marks uncertainty.</li>
+      <li>Seen-State Writer records story version, inputs/claims shown, and authored output ID.</li>
+    </ol>
+    <h3>6.4 Agent spelunking workflow</h3>
+    <ol>
+      <li>External agent starts with <code>soup.search</code> instead of web search.</li>
+      <li>Agent expands graph around candidate stories/entities/inputs.</li>
+      <li>Agent asks for story state, deltas, unresolved questions, and provenance.</li>
+      <li>If soup lacks evidence, agent requests acquisition through the External Acquisition Seam.</li>
+      <li>Agent answers from situated soup truth and may submit proposals for newly discovered structure.</li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>7. Agent catalog and prompt kernels</h2>
+    <p>These are prompt sketches, not final production prompts. Production prompts should include schema, examples, abstention rules, and version IDs. Every graph-changing agent must output structured JSON and cite node/input IDs.</p>
+
+    <div class="card">
+      <h3>Claim & Entity Extractor</h3>
+      <p><strong>Purpose:</strong> turn a new Input into candidate Claims and Entities.</p>
+      <pre class="prompt">You are the Claim & Entity Extractor for primeradiant.
+Read the provided Input. Extract only claims and entities that are directly supported by the input.
+Do not infer story membership. Do not summarize broadly.
+For each claim, include exact evidence spans and confidence.
+For each entity, include type and evidence spans.
+Output JSON: { claims[], entities[], proposedEdges[] }.</pre>
+    </div>
+
+    <div class="card">
+      <h3>Story Seeker</h3>
+      <p><strong>Purpose:</strong> identify when inputs/claims suggest a new Story node.</p>
+      <pre class="prompt">You are the Story Seeker for primeradiant.
+Given a cluster of Inputs, Claims, Entities, and nearby Stories, decide whether there is a coherent evolving story not yet represented.
+A story is not a topic label; it is a situation that can change over time.
+Propose a new Story only if future inputs could update it.
+Return: proposedStory { title, summary, scope, why_story_not_topic, evidenceRefs, confidence }.</pre>
+    </div>
+
+    <div class="card">
+      <h3>Connection Weaver</h3>
+      <p><strong>Purpose:</strong> create named relationships between nodes.</p>
+      <pre class="prompt">You are the Connection Weaver for primeradiant.
+Inspect the provided candidate nodes and evidence. Propose named edges only when the relationship type is clear.
+Allowed edge types: supports, updates, duplicates, contradicts, reframes, adds_color, part_of, adjacent_to, mentions, watch_applies_to.
+Never output a generic "related" edge. If unsure, abstain.
+For each edge include: from, to, edgeType, rationale, evidenceRefs, confidence.</pre>
+    </div>
+
+    <div class="card">
+      <h3>Development Detector</h3>
+      <p><strong>Purpose:</strong> detect material changes inside existing stories.</p>
+      <pre class="prompt">You are the Development Detector for primeradiant.
+Given a Story state and new Inputs, identify whether anything materially changed.
+Classify each input as: no_change, duplicate, reinforcement, adds_color, material_update, contradiction, or reframing.
+Focus on what should change the user's understanding.
+Output proposed updates with evidence and suggested user-facing significance.</pre>
+    </div>
+
+    <div class="card">
+      <h3>Contradiction Scout</h3>
+      <p><strong>Purpose:</strong> find conflicts and uncertainty.</p>
+      <pre class="prompt">You are the Contradiction Scout for primeradiant.
+Look for Claims or Story state that conflict with each other or with new evidence.
+Distinguish true contradiction from different scope, time, opinion, or framing.
+Return proposed contradicts edges, affected claims, and what must be verified next.</pre>
+    </div>
+
+    <div class="card">
+      <h3>Perspective Scout</h3>
+      <p><strong>Purpose:</strong> preserve spin/framing rather than flattening sources.</p>
+      <pre class="prompt">You are the Perspective Scout for primeradiant.
+Compare how sources frame the same story or claim.
+Identify differences in emphasis, blame, certainty, emotion, ideology, business interest, or audience.
+Do not treat perspective as fact. Propose reframes/adds_color edges and optional Perspective nodes when useful.</pre>
+    </div>
+
+    <div class="card">
+      <h3>Larger-Story Cartographer</h3>
+      <p><strong>Purpose:</strong> notice when multiple stories are substories of a larger story.</p>
+      <pre class="prompt">You are the Larger-Story Cartographer for primeradiant.
+Given a region of the soup, decide whether several Stories are better understood as parts of a larger evolving story.
+Do not merge or delete existing stories.
+If warranted, propose a new larger Story and part_of edges from substories to it.
+Explain what new understanding the larger story provides.</pre>
+    </div>
+
+    <div class="card">
+      <h3>Granularity Gardener</h3>
+      <p><strong>Purpose:</strong> correct overbroad or too-narrow story shapes without destructive rewrites.</p>
+      <pre class="prompt">You are the Granularity Gardener for primeradiant.
+Inspect a Story and its connected inputs. Determine whether the story is too broad, too narrow, or appropriately scoped.
+If too broad, propose smaller child stories. If too narrow, propose a larger framing story.
+Do not remove existing story identity. Use edges to represent improved structure.</pre>
+    </div>
+
+    <div class="card">
+      <h3>Staleness Keeper</h3>
+      <p><strong>Purpose:</strong> maintain freshness/activity state.</p>
+      <pre class="prompt">You are the Staleness Keeper for primeradiant.
+Evaluate Story, Claim, Question, and Input freshness.
+Classify state as active, escalating, dormant, stale, resolved, unresolved_but_cold, or background.
+Use timestamps, update velocity, unresolved questions, user watches, and recent evidence.
+Propose state changes only; do not delete stories.</pre>
+    </div>
+
+    <div class="card">
+      <h3>User Watch Matcher</h3>
+      <p><strong>Purpose:</strong> connect personal priorities to the soup.</p>
+      <pre class="prompt">You are the User Watch Matcher for primeradiant.
+Given a UserWatch and new/nearby soup nodes, find evidence that should attach to the watch.
+Prioritize user intent over global popularity, but do not overconnect.
+Return watch_applies_to edges, rationale, and whether the user should be alerted.</pre>
+    </div>
+
+    <div class="card">
+      <h3>Arbiter / Committer</h3>
+      <p><strong>Purpose:</strong> promote, weaken, or reject proposals.</p>
+      <pre class="prompt">You are the Arbiter for primeradiant.
+Review proposals from swarm agents. Check evidence, edge type correctness, confidence, duplication, ACL safety, and conflicts with committed graph state.
+Return one decision per proposed op: commit, commit_weak, reject, needs_more_evidence.
+Never invent new facts. Prefer reversible weak commits when useful but uncertain.</pre>
+    </div>
+
+    <div class="card">
+      <h3>Author Planner</h3>
+      <p><strong>Purpose:</strong> decide whether and how to communicate.</p>
+      <pre class="prompt">You are the Author Planner for primeradiant.
+Given user context, watches, seen-state, and story deltas, decide whether the user needs output now.
+Choose one: no_op, breaking_story, update, digest, explainer, thread_catchup, ask_user.
+Explain why this output is warranted and what evidence packet is needed.</pre>
+    </div>
+
+    <div class="card">
+      <h3>Soup Retriever</h3>
+      <p><strong>Purpose:</strong> build bounded evidence packets for authors.</p>
+      <pre class="prompt">You are the Soup Retriever for primeradiant.
+Use the soup API to build an evidence packet for the requested authoring task.
+Include story state, user seen-state, material deltas, source inputs, claims, contradictions, unresolved questions, and provenance.
+Exclude graph noise. Prefer evidence over broad context.</pre>
+    </div>
+
+    <div class="card">
+      <h3>Narrator</h3>
+      <p><strong>Purpose:</strong> write human-facing output from evidence.</p>
+      <pre class="prompt">You are the Narrator for primeradiant.
+Write only from the evidence packet.
+Lead with what changed or what matters now. Distinguish fact, uncertainty, and source framing.
+Respect the user's desired depth and what they have already seen.
+Do not mention internal graph mechanics unless asked.</pre>
+    </div>
+
+    <div class="card">
+      <h3>Verifier / Attribution Checker</h3>
+      <p><strong>Purpose:</strong> keep narration grounded.</p>
+      <pre class="prompt">You are the Verifier for primeradiant.
+Check each material sentence in the draft against the evidence packet.
+Mark unsupported, overstated, missing uncertainty, or missing attribution.
+Return a corrected draft or required edits. Do not add new claims.</pre>
+    </div>
+
+    <div class="card">
+      <h3>Seen-State Recorder</h3>
+      <p><strong>Purpose:</strong> update what the user has seen.</p>
+      <pre class="prompt">You are the Seen-State Recorder for primeradiant.
+Given a verified authored output, record which story version, inputs, claims, developments, and questions were shown to the user.
+This determines future "what's new" behavior, so be precise and conservative.</pre>
+    </div>
+  </section>
+
+  <section>
+    <h2>8. Prompt and agent governance</h2>
+    <ul>
+      <li><strong>All prompts are versioned.</strong> Store prompt hash/version with every agent run.</li>
+      <li><strong>All graph-changing outputs are structured.</strong> No prose-only proposal is allowed to mutate the soup.</li>
+      <li><strong>Every proposal cites evidence.</strong> Evidence can be Input IDs, Claim IDs, Edge IDs, source spans, or prior proposals.</li>
+      <li><strong>Agents can abstain.</strong> Abstention is a valid output and should be rewarded when evidence is weak.</li>
+      <li><strong>Private data policy is enforced before prompt construction.</strong> Prompt context must be built through ACL-aware soup APIs.</li>
+      <li><strong>Committed state is reversible.</strong> Edges have status and history; corrections weaken/supersede rather than silently delete.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>9. Privacy and security architecture</h2>
+    <p>primeradiant becomes most valuable when it handles private threads and personal stories, so privacy cannot be bolted on later.</p>
+    <div class="grid">
+      <div class="card"><h3>Tenant/user ACL on every object</h3><p>Raw sources, inputs, nodes, edges, proposals, authored outputs, and traces carry access scope.</p></div>
+      <div class="card"><h3>Policy-aware model routing</h3><p>Private/personal inputs default to local embeddings and approved LLM routes. Public sources may use cloud models if allowed.</p></div>
+      <div class="card"><h3>Audit every read and write</h3><p>Agent spelunking is powerful. Reads should be traceable, especially for private data.</p></div>
+      <div class="card"><h3>Deletion and retention</h3><p>Raw source deletion must cascade or tombstone derived nodes/edges according to policy. The soup must know when evidence was removed.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>10. MVP cut line</h2>
+    <p>The MVP should prove the core product magic, not every primitive.</p>
+    <h3>Include</h3>
+    <ul>
+      <li>Sources: RSS/news article ingestion, one email-thread connector, user story seed/watch creation.</li>
+      <li>Node types: Input, Story, Claim, Entity, UserWatch, AuthoredOutput.</li>
+      <li>Edge types: mentions, supports, updates, duplicates, contradicts, part_of, watch_applies_to.</li>
+      <li>Agents: Claim & Entity Extractor, Story Seeker, Connection Weaver, Development Detector, Staleness Keeper, User Watch Matcher, Arbiter, Author Planner, Retriever, Narrator, Verifier, Seen-State Recorder.</li>
+      <li>API: soup.search, soup.expand, story.state, story.delta, soup.provenance, soup.propose, watch.create, author.evidencePacket.</li>
+      <li>UI: story list, story detail, “what changed,” source evidence, user watches, correction/proposal review, authored update preview.</li>
+    </ul>
+    <h3>Defer</h3>
+    <ul>
+      <li>Full graph explorer as primary UI.</li>
+      <li>Neo4j/Memgraph as source of truth.</li>
+      <li>Automatic write commits from all agents.</li>
+      <li>First-class Perspective/Facet/Question nodes unless needed for MVP stories.</li>
+      <li>Multi-tenant enterprise controls beyond basic ACL model.</li>
+      <li>Full autonomous web acquisition loops beyond explicit source adapters and gap-triggered fetches.</li>
+    </ul>
+    <div class="callout"><p><strong>MVP proof:</strong> user submits a watch, public/private inputs arrive, primeradiant links them into a story, detects what changed, marks stale/no-op when nothing changed, and authors “what’s new to you” with evidence.</p></div>
+  </section>
+
+  <section>
+    <h2>11. Implementation sequence</h2>
+    <ol>
+      <li><strong>Contracts first:</strong> define node/edge/proposal schemas as Ecto schemas, changesets, API contracts, and prompt output schemas.</li>
+      <li><strong>Storage core:</strong> Ecto migrations for raw sources, inputs, nodes, edges, proposals, agent runs, story state, user state.</li>
+      <li><strong>Soup API:</strong> implement Phoenix contexts for search/expand/state/delta/provenance/propose with fixtures.</li>
+      <li><strong>Ingestion v1:</strong> RSS/news + email-thread connector + user watch input.</li>
+      <li><strong>Agent harness:</strong> Oban workers, prompt registry, structured output validation, trace logging.</li>
+      <li><strong>First swarm:</strong> Extractor, Story Seeker, Connection Weaver, Staleness Keeper, Arbiter.</li>
+      <li><strong>Projection layer:</strong> story state snapshots, freshness, simple gravity, user relevance, seen-state deltas.</li>
+      <li><strong>Authoring v1:</strong> planner/retriever/narrator/verifier/seen-state recorder.</li>
+      <li><strong>UI v1:</strong> LiveView story dashboard, story detail, evidence view, watch creation, authored update preview.</li>
+      <li><strong>Hardening:</strong> privacy policy enforcement, prompt evals, proposal review UI, observability dashboards.</li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>12. Senior engineer handoff checklist</h2>
+    <ul>
+      <li>Confirm Postgres + pgvector as v1 SoR and reject/accept the no-Neo4j-v1 decision.</li>
+      <li>Draft Ecto migrations, schemas, changesets, and typed contracts for seams S1-S11.</li>
+      <li>Write contract tests for graph mutation: proposals cannot bypass committer.</li>
+      <li>Build MCP tool surface for soup.search, soup.expand, story.state, story.delta, provenance, propose.</li>
+      <li>Set up Oban job/workflow modules for ingestion, maintenance, and authoring.</li>
+      <li>Create prompt registry with versioned prompt kernels, JSON Schema outputs, and Ecto changeset validation before proposal persistence.</li>
+      <li>Define ACL/model-routing policy before private email/message ingestion.</li>
+      <li>Create a golden demo corpus: one public news story, one private email thread, one user watch, and a stale/no-op case.</li>
+      <li>Build evals around the product invariants: story over item, named edges, staleness, seen-state, grounded authoring.</li>
+    </ul>
+  </section>
+
+  <p class="footer">primeradiant · technical architecture companion to the explanatory whitepaper · designed to stop where a senior engineer can take over.</p>
+</main>
+</body>
+</html>

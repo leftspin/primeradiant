@@ -1,0 +1,32 @@
+Reading additional input from stdin...
+OpenAI Codex v0.124.0 (research preview)
+--------
+workdir: /Users/mike/shared-workspace/primeradiant/proof-harness
+model: gpt-5.2-codex
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: xhigh
+reasoning summaries: none
+session id: 019e34c9-79e1-7130-a4f2-48913120a6dc
+--------
+user
+Review the Primeradiant proof-harness near-collision changes against these source docs: /Users/mike/shared-workspace/primeradiant/product/primeradiant-fixture-corpus-plan.html, /Users/mike/shared-workspace/primeradiant/product/primeradiant-mvp-slice.html, /Users/mike/shared-workspace/primeradiant/architecture/primeradiant-elixir-contracts.html. Focus only on these files in /Users/mike/shared-workspace/primeradiant/proof-harness: lib/primeradiant/projections/story_classifier.ex, lib/primeradiant/proposals/builder.ex, lib/primeradiant/arbitration/engine.ex, test/primeradiant/proof_harness_test.exs, priv/fixtures/primeradiant_golden/manifest.json, priv/fixtures/primeradiant_golden/inputs/public_story_001_initial_report.json, priv/fixtures/primeradiant_golden/inputs/public_story_002_followup_update.json, priv/fixtures/primeradiant_golden/inputs/public_story_003_duplicate_reinforcement.json, priv/fixtures/primeradiant_golden/inputs/public_story_004_correction_or_contradiction.json, priv/fixtures/primeradiant_golden/inputs/public_story_006_near_duplicate_overlap.json, priv/fixtures/primeradiant_golden/inputs/public_story_007_adjacent_distinct_terminal_walkout.json, priv/fixtures/primeradiant_golden/inputs/private_thread_005_low_global_rank_personal_watch.json, priv/fixtures/primeradiant_golden/watches/low_global_rank_personal_watch.json. Blocking findings first. Explicitly check no demo-code cheating, proposal-backed graph writes, evidence/provenance preservation, named edge contracts, and spec embellishment. Read-only review; do not edit files.
+2026-05-17T07:14:39.722593Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: IO error: failed to lookup address information: nodename nor servname provided, or not known, url: wss://api.openai.com/v1/responses
+2026-05-17T07:14:39.744256Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: IO error: failed to lookup address information: nodename nor servname provided, or not known, url: wss://api.openai.com/v1/responses
+2026-05-17T07:14:39.936924Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: IO error: failed to lookup address information: nodename nor servname provided, or not known, url: wss://api.openai.com/v1/responses
+ERROR: Reconnecting... 2/5
+2026-05-17T07:14:40.367280Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: IO error: failed to lookup address information: nodename nor servname provided, or not known, url: wss://api.openai.com/v1/responses
+ERROR: Reconnecting... 3/5
+2026-05-17T07:14:41.180245Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: IO error: failed to lookup address information: nodename nor servname provided, or not known, url: wss://api.openai.com/v1/responses
+ERROR: Reconnecting... 4/5
+2026-05-17T07:14:42.852195Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: IO error: failed to lookup address information: nodename nor servname provided, or not known, url: wss://api.openai.com/v1/responses
+ERROR: Reconnecting... 5/5
+2026-05-17T07:14:46.203053Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: IO error: failed to lookup address information: nodename nor servname provided, or not known, url: wss://api.openai.com/v1/responses
+ERROR: Reconnecting... 1/5
+ERROR: Reconnecting... 2/5
+ERROR: Reconnecting... 3/5
+ERROR: Reconnecting... 4/5
+ERROR: Reconnecting... 5/5
+ERROR: stream disconnected before completion: error sending request for url (https://api.openai.com/v1/responses)
+ERROR: stream disconnected before completion: error sending request for url (https://api.openai.com/v1/responses)

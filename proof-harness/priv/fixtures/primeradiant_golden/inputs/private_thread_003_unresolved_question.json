@@ -1,0 +1,9 @@
+{
+  "fixture_id": "private_thread_003_unresolved_question",
+  "source_type": "email",
+  "external_id": "fixture:private:003",
+  "observed_at": "2026-05-11T09:00:00-07:00",
+  "title": "Roof repair thread waiting on HOA approval",
+  "acl": {"privacy": "private", "participants": ["flynn", "contractor", "hoa"]},
+  "body_text": "The roof repair thread is waiting for the HOA board packet. The open blocker is HOA approval."
+}

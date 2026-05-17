@@ -1,0 +1,7 @@
+{
+  "watch_id": "watch:basement_humidity",
+  "user_id": "flynn",
+  "label": "Basement humidity sensor",
+  "match_any": ["basement", "humidity"],
+  "why": "Flynn asked to surface the basement humidity sensor even when it has little global graph gravity."
+}

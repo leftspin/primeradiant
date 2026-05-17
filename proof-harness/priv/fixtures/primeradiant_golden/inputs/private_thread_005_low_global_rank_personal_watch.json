@@ -1,0 +1,9 @@
+{
+  "fixture_id": "private_thread_005_low_global_rank_personal_watch",
+  "source_type": "email",
+  "external_id": "fixture:private:005",
+  "observed_at": "2026-05-06T07:40:00-07:00",
+  "title": "Basement humidity sensor battery reminder",
+  "acl": {"privacy": "private", "participants": ["flynn"]},
+  "body_text": "The basement humidity sensor battery is low. It is a tiny maintenance note, but Flynn asked to track it."
+}

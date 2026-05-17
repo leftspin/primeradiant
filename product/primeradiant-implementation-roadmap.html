@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>primeradiant — Implementation Roadmap</title>
+  <style>
+    :root { color-scheme: dark light; --fg: var(--clawline-fg, #f4ead7); --muted: color-mix(in srgb, var(--fg) 68%, transparent); --line: color-mix(in srgb, var(--fg) 18%, transparent); --card: color-mix(in srgb, var(--fg) 7%, transparent); --card2: color-mix(in srgb, var(--fg) 11%, transparent); --accent: #d39b48; --accent2: #9bc7ff; --good: #9fd39b; --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+    html, body { margin: 0; background: transparent; color: var(--fg); font: 16px/1.55 -apple-system, BlinkMacSystemFont, "SF Pro Text", Inter, sans-serif; }
+    body { padding: 28px 18px 52px; }
+    main { max-width: 1080px; margin: 0 auto; }
+    .eyebrow { color: var(--accent); text-transform: uppercase; letter-spacing: .13em; font-size: 12px; font-weight: 800; }
+    h1 { margin: 8px 0 12px; font-size: clamp(34px, 6vw, 64px); line-height: .96; letter-spacing: -.045em; }
+    h2 { margin: 0 0 12px; font-size: 24px; }
+    h3 { margin: 0 0 8px; font-size: 18px; }
+    p { margin: 0 0 10px; }
+    .lede { color: var(--muted); font-size: clamp(18px, 2.5vw, 23px); max-width: 880px; }
+    section { border: 1px solid var(--line); background: var(--card); border-radius: 24px; padding: 18px; margin: 16px 0; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+    .widegrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 12px; }
+    .card { border: 1px solid var(--line); background: var(--card2); border-radius: 18px; padding: 14px; }
+    .label { color: var(--accent); text-transform: uppercase; letter-spacing: .09em; font-size: 11px; font-weight: 800; }
+    .callout { border-left: 4px solid var(--accent); padding: 12px 14px; background: color-mix(in srgb, var(--accent) 10%, transparent); border-radius: 14px; margin: 12px 0; }
+    code, pre { font-family: var(--mono); color: var(--accent2); }
+    pre { white-space: pre-wrap; overflow-wrap: anywhere; border: 1px solid var(--line); border-radius: 14px; padding: 12px; background: color-mix(in srgb, #000 18%, transparent); font-size: 13px; line-height: 1.45; }
+    ul, ol { margin: 0; padding-left: 22px; }
+    li { margin: 7px 0; }
+    .ok { color: var(--good); font-weight: 700; }
+  </style>
+</head>
+<body>
+<main>
+  <div class="eyebrow">Implementation roadmap</div>
+  <h1>Build order for primeradiant</h1>
+  <p class="lede">A staged plan for turning the Elixir architecture into a working product without losing the core invariant: live story state, not summaries.</p>
+
+  <section>
+    <h2>0. Roadmap rule</h2>
+    <div class="callout"><p><strong>Every phase must preserve the same product proof:</strong> input fragments become story state; story state produces user-relative deltas; agents propose with evidence; authored output is grounded and updates seen-state.</p></div>
+    <p>The first implementation target is not “an app.” It is a story-semantics proof harness whose only job is to prove or disprove the core model on a tiny fixed corpus.</p>
+  </section>
+
+  <section>
+    <h2>Phase 1 — Story-semantics proof harness</h2>
+    <div class="widegrid">
+      <div class="card"><span class="label">Build</span><h3>Tiny proof loop</h3><ul><li>Phoenix app + Repo + core Ecto schemas</li><li>Golden corpus loader</li><li>Canonical input normalization</li><li>Soup decision classifier</li><li>Proposal-backed graph writes</li><li>One “what changed for Flynn” output</li></ul></div>
+      <div class="card"><span class="label">Gate</span><h3>Story decisions are real</h3><ul><li>New story / attach / update / no-op tests pass</li><li>Color, stale, and conflict cases are labeled with evidence</li><li>No committed graph truth is preseeded</li><li>Output is grounded in soup state, not broad summarization</li></ul></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Phase 2 — Contracts and soup API</h2>
+    <div class="widegrid">
+      <div class="card"><span class="label">Build</span><h3>Formalize the harness</h3><ul><li>Context API tests exist</li><li>MCP tool contracts are stubbed</li><li>Basic full-text/vector indexing path</li><li>soup.search / expand / state / delta / provenance / propose</li></ul></div>
+      <div class="card"><span class="label">Gate</span><h3>Evidence is immutable</h3><ul><li>Fixture inputs survive round-trip</li><li>Duplicate input detected without story rewrite</li><li>Private/public ACL tags preserved</li><li>Every Input has provenance</li></ul></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Phase 3 — First swarm loop</h2>
+    <div class="widegrid">
+      <div class="card"><span class="label">Build</span><h3>Proposal-producing agents</h3><ul><li>Claim & Entity Extractor</li><li>Story Seeker</li><li>Connection Weaver</li><li>Development Detector</li><li>Staleness Keeper</li></ul></div>
+      <div class="card"><span class="label">Gate</span><h3>Agents propose, not commit</h3><ul><li>JSON Schema validation</li><li>Ecto changeset validation</li><li>Evidence refs required</li><li>Generic related edges rejected</li></ul></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Phase 4 — Arbitration and projections</h2>
+    <div class="widegrid">
+      <div class="card"><span class="label">Build</span><h3>Trusted graph state</h3><ul><li>Arbiter accepts/rejects/weak-commits proposals</li><li>GraphCommit audit trail</li><li>StoryStateSnapshot projection</li><li>Freshness, activity, gravity, unresolved count</li></ul></div>
+      <div class="card"><span class="label">Gate</span><h3>Story state is rebuildable</h3><ul><li>Projection can be rebuilt from committed graph</li><li>Contradiction/supersession does not erase history</li><li>Stale state changes without deletion</li><li>User watch can raise personal relevance</li></ul></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Phase 5 — Authoring and seen-state</h2>
+    <div class="widegrid">
+      <div class="card"><span class="label">Build</span><h3>What’s new to you</h3><ul><li>Author Planner</li><li>Soup Retriever evidence packets</li><li>Narrator + Verifier</li><li>AuthoredOutput records</li><li>Seen-State Recorder</li></ul></div>
+      <div class="card"><span class="label">Gate</span><h3>No ungrounded output</h3><ul><li>Every material sentence has evidence refs</li><li>Second briefing excludes already-seen facts</li><li>Duplicate/no-op does not trigger fake update</li><li>User-specific privacy is preserved</li></ul></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Phase 6 — LiveView operator/product UI</h2>
+    <div class="widegrid">
+      <div class="card"><span class="label">Build</span><h3>Visible story state</h3><ul><li>Story dashboard</li><li>Story detail with evidence/provenance</li><li>Proposal review queue</li><li>Watch creation for /preferences/priorities and /stories/concepts</li><li>Authored preview pane</li></ul></div>
+      <div class="card"><span class="label">Gate</span><h3>Flynn can verify the product</h3><ul><li>Hybrid MVP demo runs end-to-end</li><li>Live updates appear via PubSub/LiveView</li><li>Proposal decisions are inspectable</li><li>Briefings show “new to you” correctly</li></ul></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Phase 7 — Real connectors after proof</h2>
+    <p>Only after the golden corpus passes should real source adapters be added. Start with the smallest safe connectors:</p>
+    <ol>
+      <li>RSS/news article adapter for public inputs.</li>
+      <li>Local/imported email-thread adapter for private thread inputs.</li>
+      <li>Manual user watch/story seed entry.</li>
+    </ol>
+    <div class="callout"><p><strong>Do not start here.</strong> Real connectors create noise before the story-state loop is proven.</p></div>
+  </section>
+
+  <section>
+    <h2>Stop/go criteria</h2>
+    <ul>
+      <li><span class="ok">Go:</span> proof harness produces correct new/attach/update/no-op/color/stale/conflict decisions, story nodes, named edges, and user-relative deltas.</li>
+      <li><span class="ok">Go:</span> all graph mutations are proposals with evidence and arbitration trail.</li>
+      <li><span class="ok">Stop:</span> the system can only prove itself through demo shortcuts or preseeded trusted state.</li>
+      <li><span class="ok">Stop:</span> output quality depends on broad summarization rather than soup state and evidence packets.</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>primeradiant — Project Index</title>
+  <style>
+    :root {
+      color-scheme: dark light;
+      --fg: var(--clawline-fg, #f4ead7);
+      --muted: color-mix(in srgb, var(--fg) 68%, transparent);
+      --line: color-mix(in srgb, var(--fg) 18%, transparent);
+      --card: color-mix(in srgb, var(--fg) 7%, transparent);
+      --card2: color-mix(in srgb, var(--fg) 11%, transparent);
+      --accent: #d39b48;
+      --accent2: #9bc7ff;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+    html, body { margin: 0; background: transparent; color: var(--fg); font: 16px/1.55 -apple-system, BlinkMacSystemFont, "SF Pro Text", Inter, sans-serif; }
+    body { padding: 28px 18px 48px; }
+    main { max-width: 900px; margin: 0 auto; }
+    .eyebrow { color: var(--accent); text-transform: uppercase; letter-spacing: .13em; font-size: 12px; font-weight: 800; }
+    h1 { margin: 8px 0 12px; font-size: clamp(38px, 7vw, 72px); line-height: .94; letter-spacing: -.055em; }
+    .lede { color: var(--muted); font-size: clamp(18px, 3vw, 24px); max-width: 760px; }
+    section { border: 1px solid var(--line); background: var(--card); border-radius: 24px; padding: 18px; margin: 16px 0; }
+    h2 { margin: 0 0 10px; font-size: 22px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+    .card { border: 1px solid var(--line); background: var(--card2); border-radius: 8px; padding: 14px; color: inherit; display: block; text-decoration: none; }
+    .card:hover { border-color: color-mix(in srgb, var(--accent) 56%, var(--line)); background: color-mix(in srgb, var(--accent) 8%, var(--card2)); }
+    .card b { color: var(--accent); }
+    code { color: var(--accent2); font-family: var(--mono); font-size: 13px; overflow-wrap: anywhere; }
+    p { margin: 0 0 10px; }
+    p:last-child { margin-bottom: 0; }
+    ul { margin: 0; padding-left: 20px; }
+    li { margin: 7px 0; }
+  </style>
+</head>
+<body>
+<main>
+  <div class="eyebrow">Project index</div>
+  <h1>primeradiant</h1>
+  <p class="lede">An agentic storytelling system: a live story-state layer for messy input streams, agent spelunking, staleness, and user-relative “what’s new.”</p>
+
+  <section>
+    <h2>Canonical docs</h2>
+    <div class="grid">
+      <a class="card" href="/Users/mike/.openclaw/workspace/www/primeradiant/manifesto.html"><p><b>Manifesto</b></p><p>Vision and product promise.</p><p><code>/Users/mike/.openclaw/workspace/www/primeradiant/manifesto.html</code></p></a>
+      <a class="card" href="whitepaper/primeradiant-architecture-whitepaper.html"><p><b>Whitepaper</b></p><p>Explanatory product architecture: soup, swarm, authoring, story state.</p><p><code>/Users/mike/shared-workspace/primeradiant/whitepaper/primeradiant-architecture-whitepaper.html</code></p></a>
+      <a class="card" href="architecture/primeradiant-system-architecture.html"><p><b>System architecture</b></p><p>Senior-engineer handoff: tech stack, seams, agents, prompts, workflows.</p><p><code>/Users/mike/shared-workspace/primeradiant/architecture/primeradiant-system-architecture.html</code></p></a>
+      <a class="card" href="architecture/primeradiant-elixir-implementation-blueprint.html"><p><b>Elixir implementation blueprint</b></p><p>Phoenix contexts, OTP supervision, Oban queues, Ecto schema groups, LiveView screens, and first sprint cut.</p><p><code>/Users/mike/shared-workspace/primeradiant/architecture/primeradiant-elixir-implementation-blueprint.html</code></p></a>
+      <a class="card" href="architecture/primeradiant-phoenix-module-map.html"><p><b>Phoenix module map</b></p><p>Concrete context/module ownership map for Phoenix, MCP, LiveView, Oban workers, and tests.</p><p><code>/Users/mike/shared-workspace/primeradiant/architecture/primeradiant-phoenix-module-map.html</code></p></a>
+      <a class="card" href="architecture/primeradiant-elixir-contracts.html"><p><b>Elixir contracts</b></p><p>Ecto invariants, context APIs, agent operation schemas, MCP tool surface, validation gates, and starter tests.</p><p><code>/Users/mike/shared-workspace/primeradiant/architecture/primeradiant-elixir-contracts.html</code></p></a>
+      <a class="card" href="architecture/primeradiant-agent-prompt-pack.html"><p><b>Agent prompt pack</b></p><p>Production-oriented swarm and authoring prompt contracts with abstention rules, forbidden behavior, and eval checks.</p><p><code>/Users/mike/shared-workspace/primeradiant/architecture/primeradiant-agent-prompt-pack.html</code></p></a>
+    </div>
+  </section>
+
+  <section>
+    <h2>Current thesis</h2>
+    <p><b>General memory remembers facts; primeradiant maintains live story state.</b></p>
+    <p>Its value is situated awareness: what matters now, what is stale, what changed, what is unresolved, and what is new to this user.</p>
+    <p><b>Stack decision:</b> Elixir/Phoenix/Ecto + Postgres/pgvector + Oban. Hiring-market breadth is not a criterion; fit to the living swarm architecture is.</p>
+  </section>
+
+  <section>
+    <h2>Next move: story-semantics proof</h2>
+    <p>This is not an app build yet. The next implementation step is a deliberately small proof harness that tests whether primeradiant can make concrete story-state decisions.</p>
+    <ul>
+      <li>Use a tiny fixed corpus: one public story, one private thread, one user watch, and one stale/no-op case.</li>
+      <li>Normalize each input with provenance, source, timestamp, actors/entities, claims, and links.</li>
+      <li>Classify each input as new story, attach to story, substantive update, repeated/no-op, color/spin, stale, or conflict.</li>
+      <li>Write proposed graph changes with evidence and confidence; do not let agents silently commit truth.</li>
+      <li>Produce one user-facing “what changed for Flynn since last seen, and why” output.</li>
+    </ul>
+    <div class="callout"><p><strong>Proof gate:</strong> if the harness cannot pass explicit attach/new/update/no-op/color/stale/conflict expectations without demo shortcuts, preseeded trusted state, or broad summarization, primeradiant is not ready for broader implementation.</p></div>
+  </section>
+
+  <section>
+    <h2>Product slice</h2>
+    <div class="grid">
+      <a class="card" href="product/primeradiant-mvp-slice.html"><p><b>MVP slice</b></p><p>Recommended first build: hybrid proof of story state, staleness, seen-state, user watch priority, and evidence-backed narration.</p><p><code>/Users/mike/shared-workspace/primeradiant/product/primeradiant-mvp-slice.html</code></p></a>
+      <a class="card" href="product/primeradiant-fixture-corpus-plan.html"><p><b>Fixture corpus plan</b></p><p>Golden corpus layout and acceptance tests for proving story state rather than summarization cosplay.</p><p><code>/Users/mike/shared-workspace/primeradiant/product/primeradiant-fixture-corpus-plan.html</code></p></a>
+      <a class="card" href="product/primeradiant-implementation-roadmap.html"><p><b>Implementation roadmap</b></p><p>Phased Elixir build order from Phoenix skeleton through corpus, swarm, arbitration, authoring, LiveView, and real connectors.</p><p><code>/Users/mike/shared-workspace/primeradiant/product/primeradiant-implementation-roadmap.html</code></p></a>
+    </div>
+  </section>
+</main>
+</body>
+</html>

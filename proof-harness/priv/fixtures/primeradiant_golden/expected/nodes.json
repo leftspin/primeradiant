@@ -1,0 +1,12 @@
+{
+  "stories": [
+    "harbor-ferry-strike",
+    "harbor-ferry-terminal",
+    "basement-humidity-sensor",
+    "roof-repair-quote"
+  ],
+  "watches": [
+    "watch:roof_repair",
+    "watch:basement_humidity"
+  ]
+}

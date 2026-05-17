@@ -1,0 +1,636 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>primeradiant: Agentic Storytelling, Soup, Swarm, and Authoring</title>
+  <style>
+    :root {
+      color-scheme: dark light;
+      --fg: var(--clawline-fg, #f4ead7);
+      --muted: color-mix(in srgb, var(--fg) 68%, transparent);
+      --soft: color-mix(in srgb, var(--fg) 50%, transparent);
+      --line: color-mix(in srgb, var(--fg) 18%, transparent);
+      --card: color-mix(in srgb, var(--fg) 7%, transparent);
+      --card2: color-mix(in srgb, var(--fg) 11%, transparent);
+      --accent: #d39b48;
+      --accent2: #9bc7ff;
+      --danger: #ff9b9b;
+      --ok: #9be6bd;
+    }
+    html, body {
+      margin: 0;
+      background: transparent;
+      color: var(--fg);
+      font: 17px/1.58 -apple-system, BlinkMacSystemFont, "SF Pro Text", Inter, Segoe UI, sans-serif;
+    }
+    body { padding: 28px 18px 48px; }
+    main { max-width: 980px; margin: 0 auto; }
+    .eyebrow {
+      color: var(--accent);
+      text-transform: uppercase;
+      letter-spacing: .13em;
+      font-size: 12px;
+      font-weight: 800;
+      margin-bottom: 10px;
+    }
+    h1 {
+      margin: 0 0 14px;
+      font-size: clamp(36px, 7vw, 72px);
+      line-height: .94;
+      letter-spacing: -0.055em;
+    }
+    .subtitle {
+      max-width: 820px;
+      margin: 0 0 22px;
+      color: var(--muted);
+      font-size: clamp(19px, 3vw, 25px);
+      line-height: 1.35;
+    }
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 20px 0 26px;
+    }
+    .pill {
+      border: 1px solid var(--line);
+      background: var(--card);
+      border-radius: 999px;
+      padding: 6px 10px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    section {
+      border: 1px solid var(--line);
+      background: var(--card);
+      border-radius: 24px;
+      padding: clamp(18px, 3vw, 28px);
+      margin: 18px 0;
+    }
+    h2 {
+      margin: 0 0 12px;
+      font-size: clamp(24px, 4vw, 36px);
+      line-height: 1.08;
+      letter-spacing: -.025em;
+    }
+    h3 {
+      margin: 22px 0 8px;
+      font-size: 20px;
+      letter-spacing: -.01em;
+    }
+    p { margin: 0 0 13px; }
+    p:last-child { margin-bottom: 0; }
+    ul, ol { margin: 0 0 13px; padding-left: 22px; }
+    li { margin: 7px 0; }
+    strong { color: var(--accent); }
+    em { color: var(--soft); }
+    .callout {
+      border-left: 4px solid var(--accent);
+      background: var(--card2);
+      border-radius: 16px;
+      padding: 14px 16px;
+      margin: 16px 0;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 12px;
+      margin: 14px 0;
+    }
+    .card {
+      border: 1px solid var(--line);
+      background: color-mix(in srgb, var(--fg) 5%, transparent);
+      border-radius: 18px;
+      padding: 15px;
+    }
+    .card h3 { margin-top: 0; }
+    .label {
+      display: inline-block;
+      color: var(--accent2);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      margin-bottom: 5px;
+    }
+    .diagram {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 10px;
+      margin: 16px 0;
+    }
+    .stage {
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 14px 16px;
+      background: var(--card2);
+    }
+    .stage b { color: var(--accent); }
+    .arrow { text-align: center; color: var(--muted); font-weight: 800; }
+    .quote {
+      font-size: clamp(22px, 4vw, 34px);
+      line-height: 1.18;
+      letter-spacing: -.025em;
+      color: var(--fg);
+      margin: 8px 0 0;
+    }
+    .small { color: var(--muted); font-size: 14px; }
+    .two-col {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 14px;
+    }
+    .term {
+      border-bottom: 1px solid var(--line);
+      padding: 13px 0;
+    }
+    .term:first-child { padding-top: 0; }
+    .term:last-child { border-bottom: none; padding-bottom: 0; }
+    .term b { color: var(--accent); }
+    .footer {
+      color: var(--muted);
+      font-size: 13px;
+      margin-top: 18px;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+<main>
+  <div class="eyebrow">Architecture whitepaper · current thinking</div>
+  <h1>primeradiant</h1>
+  <p class="subtitle">An agentic storytelling system: story detection, story state, and personalized updates for messy real-world information streams.</p>
+  <div class="meta">
+    <span class="pill">System: primeradiant</span>
+    <span class="pill">Vision: story over item</span>
+    <span class="pill">Architecture: soup · swarm · agentic API · authoring system</span>
+    <span class="pill">Status: explanatory draft</span>
+    <span class="pill">Last updated: 2026-05-13</span>
+  </div>
+
+  <section>
+    <h2>Memory vs. story state</h2>
+    <p><strong>General memory remembers facts; agentic storytelling maintains live story state.</strong> It tracks what changed, what is stale, what is unresolved, how inputs relate, and what each user has already seen. Its value over normal memory is that agents can answer from situated awareness — <em>what matters now, what is new to you, and why it changed</em> — instead of merely retrieving old facts and re-summarizing from scratch.</p>
+  </section>
+
+  <section>
+    <h2>Technical companion</h2>
+    <p>This explanatory whitepaper now has a companion implementation architecture for senior engineering handoff: <code>/Users/mike/shared-workspace/primeradiant/architecture/primeradiant-system-architecture.html</code>.</p>
+  </section>
+
+  <section>
+    <h2>Name</h2>
+    <p><strong>primeradiant</strong> is the system name. <strong>Agentic storytelling</strong> is the product category and vision: a living model of stories, relationships, staleness, and user-relative novelty. The name points at a map of unfolding forces rather than a static archive.</p>
+  </section>
+
+  <section>
+    <h2>1. The idea in one sentence</h2>
+    <p class="quote">Agentic storytelling turns disconnected inputs into living stories that can be detected, updated, connected, personalized, and narrated over time.</p>
+  </section>
+
+  <section>
+    <h2>2. The problem</h2>
+    <p>Modern information does not arrive as clean stories. It arrives as fragments.</p>
+    <p>An email reply, a news alert, a tweet, a source article, a Slack thread, a forum post, a regulatory filing, a personal message, and a follow-up correction may all be part of the same thing. But most products treat them as separate units because that is how they arrived.</p>
+    <p>Feeds show items. Inboxes show messages. News apps show articles. Social networks show posts. Search engines show results. Even summarizers usually begin with a bounded pile of documents and compress them.</p>
+    <p>But the human question is often different:</p>
+    <ul>
+      <li>What story is this part of?</li>
+      <li>Is this actually new, or just another source repeating the same thing?</li>
+      <li>Does this add a fact, a contradiction, a perspective, or only noise?</li>
+      <li>Did two stories that looked separate just become one larger story?</li>
+      <li>What changed since I last looked?</li>
+      <li>What should I care about, given my priorities?</li>
+    </ul>
+    <div class="callout">
+      <p><strong>The product exists because the natural unit of meaning is not the incoming item. The natural unit of meaning is the evolving story.</strong></p>
+    </div>
+  </section>
+
+  <section>
+    <h2>3. What agentic storytelling is not</h2>
+    <p>This product should not be understood as a smarter RSS reader, an email thread summarizer, or a generic knowledge graph. Those may be ingredients, but they are not the product truth.</p>
+    <div class="grid">
+      <div class="card">
+        <span class="label">Not this</span>
+        <h3>A feed reader</h3>
+        <p>A feed reader organizes incoming items. Agentic storytelling organizes the story those items belong to.</p>
+      </div>
+      <div class="card">
+        <span class="label">Not this</span>
+        <h3>A summarizer</h3>
+        <p>A summarizer compresses known material. Agentic storytelling tracks what changed, why it matters, and how new material relates to the story state.</p>
+      </div>
+      <div class="card">
+        <span class="label">Not this</span>
+        <h3>A dedupe engine</h3>
+        <p>Repetition is not always useless. Repetition can indicate confirmation, coordinated messaging, source consensus, social weight, or stale noise.</p>
+      </div>
+      <div class="card">
+        <span class="label">Not this</span>
+        <h3>A fixed taxonomy</h3>
+        <p>Stories do not fit cleanly into static folders. They merge, split, nest, decay, and revive.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>4. The high-level architecture</h2>
+    <p>The current architecture has three major layers: the <strong>soup</strong>, the <strong>swarm</strong>, and the <strong>authoring system</strong>. It also needs a crucial access layer: an <strong>agentic soup API</strong> that lets agents inspect, traverse, question, and contribute to the soup without falling back to generic web search for everything.</p>
+    <div class="diagram">
+      <div class="stage"><b>Inputs</b><br/>News, messages, tweets, emails, documents, user-submitted story seeds, and any other incoming signal.</div>
+      <div class="arrow">↓</div>
+      <div class="stage"><b>The soup</b><br/>A semantically rich graph containing inputs, stories, concepts, claims, entities, relationships, user watch targets, and evolving story state.</div>
+      <div class="arrow">↕</div>
+      <div class="stage"><b>Agentic soup API</b><br/>A spelunking interface for agents: semantic search, graph traversal, story-state lookup, provenance inspection, delta queries, subscriptions, and proposal/write operations.</div>
+      <div class="arrow">↕</div>
+      <div class="stage"><b>The swarm</b><br/>A population of specialized agents that continuously read from and contribute to the soup: suggesting stories, creating relationships, correcting mistakes, tracking staleness, identifying developments, and enriching structure.</div>
+      <div class="arrow">↓</div>
+      <div class="stage"><b>Story ranking and state</b><br/>Emergent importance, freshness, user relevance, relationship density, and story activity are computed from the graph over time.</div>
+      <div class="arrow">↓</div>
+      <div class="stage"><b>The authoring system</b><br/>A user-facing system that decides what to say, selects the relevant subgraph, writes the narrative, personalizes it, and tracks what the user has already seen.</div>
+    </div>
+    <p>This separation matters. The soup is not trying to write beautiful prose. The swarm is not trying to be the final user interface. The author is not inventing facts from scratch. Each layer has a different job.</p>
+  </section>
+
+  <section>
+    <h2>5. The soup</h2>
+    <p>The soup is the shared semantic substrate. It is called a soup because it is not a clean tree, not a strict hierarchy, and not always fully connected.</p>
+    <p>It is a graph, possibly cyclic, with many islands. Some islands may represent fully formed stories. Others may be loose clusters of related inputs. Some may be raw inputs that have not yet found a home. Some may be user-submitted watch targets waiting for evidence to attach to them.</p>
+    <p>The soup is where the system stores its evolving sense of what is going on.</p>
+
+    <h3>Why a graph?</h3>
+    <p>Stories are relational. One input can support a story, contradict another input, quote a source, repeat a claim, introduce an entity, reframe an event, or connect two previously separate narratives.</p>
+    <p>A graph is the right shape because the world is not organized into one parent-child hierarchy. A single article may be part of a business story, an AI regulation story, a market story, and a personal user watch. A single email can belong to a thread, a project, a legal issue, and a deadline story at once.</p>
+
+    <h3>What lives in the soup?</h3>
+    <p>The two essential primitives are <strong>Input</strong> and <strong>Story</strong>.</p>
+    <ul>
+      <li><strong>Inputs</strong> are the things that arrive: messages, articles, tweets, emails, posts, documents, alerts, transcripts, and user submissions.</li>
+      <li><strong>Stories</strong> are evolving narrative objects: “new interstellar asteroid detected,” “new ways AI affects business,” “the Kaywood email thread about the filing,” or “the user’s ongoing travel logistics.”</li>
+    </ul>
+    <p>But as the system matures, more primitives are useful because they give the swarm and authoring system better handles on meaning.</p>
+    <div class="two-col">
+      <div class="card">
+        <h3>Candidate soup primitives</h3>
+        <div class="term"><b>Claim</b><br/>An atomic assertion, such as “a company announced layoffs” or “the agency denied the request.” Claims help separate facts from documents.</div>
+        <div class="term"><b>Entity</b><br/>A person, organization, place, product, project, account, or institution.</div>
+        <div class="term"><b>Event or Development</b><br/>Something that changed inside a story. This is especially important for “what’s new?”</div>
+        <div class="term"><b>Facet</b><br/>A sub-angle within a story: legal, technical, business, personal, political, emotional, operational, etc.</div>
+      </div>
+      <div class="card">
+        <h3>More candidate primitives</h3>
+        <div class="term"><b>Perspective or Spin</b><br/>A source’s framing of the same situation. This lets the system preserve different angles instead of flattening them.</div>
+        <div class="term"><b>Question or Unknown</b><br/>A thing the story is tracking but does not yet know.</div>
+        <div class="term"><b>User Watch / Intent</b><br/>A user-submitted priority, story seed, or “watch this for me” object.</div>
+        <div class="term"><b>Concept</b><br/>A looser semantic object, useful when inputs cluster around an idea before they become a story.</div>
+      </div>
+    </div>
+
+    <h3>Primitives do not all need to exist on day one</h3>
+    <p>A key design principle is that new primitives can be introduced gradually. They may begin as language in the storyteller prompt, then become recurring patterns, then become explicit graph nodes, and eventually get dedicated agents.</p>
+    <p>For example, “perspective” might start as a prompt instruction: “notice whether sources frame the story differently.” Later, if that becomes central, the system can introduce Perspective nodes and perspective-detection agents.</p>
+    <p>This keeps the architecture flexible. The product can learn which distinctions matter before hardening everything into schema.</p>
+  </section>
+
+  <section>
+    <h2>6. Relationships are named, evidenced, and revisable</h2>
+    <p>The power of the soup comes from relationships. An edge should not merely say “related.” It should say how and why.</p>
+    <p>Examples of relationship names:</p>
+    <ul>
+      <li><strong>supports</strong> — this input supports this story or claim.</li>
+      <li><strong>contradicts</strong> — this input conflicts with another claim, input, or story framing.</li>
+      <li><strong>updates</strong> — this input adds a new development to an existing story.</li>
+      <li><strong>duplicates</strong> — this input repeats the substance of another input.</li>
+      <li><strong>reframes</strong> — this input changes the interpretation or angle.</li>
+      <li><strong>adds color</strong> — this input adds useful context without changing the core facts.</li>
+      <li><strong>is substory of</strong> — one story is a component of a larger story.</li>
+      <li><strong>is adjacent to</strong> — two stories are related but should not be merged.</li>
+      <li><strong>tracks user intent</strong> — this story is important because the user explicitly cares about it.</li>
+    </ul>
+    <p>Relationships should also carry provenance: what agent created them, what evidence it used, when it happened, and how confident the system is. This is what allows correction without chaos.</p>
+    <div class="callout">
+      <p><strong>The soup should be allowed to change its mind.</strong> A mature story system needs a memory of why it believed something, not just the current graph shape.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2>7. The swarm</h2>
+    <p>The swarm is the active sensemaking layer. It consists of agents that read the soup, notice patterns, and contribute structure back into the soup.</p>
+    <p>Instead of one omniscient agent trying to understand everything at once, the system can use many narrower agents with different jobs. Each agent looks for a specific kind of improvement.</p>
+
+    <div class="grid">
+      <div class="card">
+        <h3>Story suggestion agents</h3>
+        <p>Look at loose clusters of inputs and existing stories, then suggest new story nodes when a coherent narrative appears.</p>
+      </div>
+      <div class="card">
+        <h3>Connection agents</h3>
+        <p>Create named relationships between inputs, stories, claims, entities, concepts, and user watches.</p>
+      </div>
+      <div class="card">
+        <h3>Correction / disconnection agents</h3>
+        <p>Detect relationships that appear weak, wrong, stale, overbroad, or misleading, then weaken or remove them.</p>
+      </div>
+      <div class="card">
+        <h3>Bigger-story agents</h3>
+        <p>Notice when several stories are actually facets or substories of a larger story, then submit that larger story into the soup.</p>
+      </div>
+      <div class="card">
+        <h3>Granularity agents</h3>
+        <p>Notice when a story is too broad or too narrow, then propose better-grained stories rather than destructively rewriting the old one.</p>
+      </div>
+      <div class="card">
+        <h3>Staleness agents</h3>
+        <p>Adjust story attributes such as freshness, active/background state, decay, confidence, or need-for-update.</p>
+      </div>
+      <div class="card">
+        <h3>Contradiction agents</h3>
+        <p>Look for claims, inputs, or perspectives that conflict in ways the user should understand.</p>
+      </div>
+      <div class="card">
+        <h3>Perspective agents</h3>
+        <p>Identify how different sources frame the same story differently, preserving spin instead of flattening it.</p>
+      </div>
+      <div class="card">
+        <h3>User-priority agents</h3>
+        <p>Connect user-submitted stories, preferences, and watch targets to the broader soup, even when global rank is low.</p>
+      </div>
+    </div>
+
+    <h3>Merge and split without destructive rewriting</h3>
+    <p>One important architectural decision: merge/split behavior should not be a destructive operation where agents rewrite story identity.</p>
+    <p>If an agent notices that two stories are part of a larger story, it should submit the larger story into the soup. The connection agents can then form relationships from the larger story to its substories, inputs, claims, and concepts.</p>
+    <p>Likewise, if a story is too broad, the system can introduce better-grained stories and connect them. The original story does not need to disappear. It can become a parent, a framing concept, a stale container, or simply one node among others.</p>
+    <p>This makes story evolution safer. The system does not have to choose between “merge forever” and “keep separate forever.” It can represent the relationship explicitly.</p>
+
+    <h3>Agent actions can begin as suggestions</h3>
+    <p>Early in the product, swarm agents should probably write proposals or low-confidence edges rather than immediately reshaping the trusted graph. Over time, recurring high-quality patterns can be promoted automatically.</p>
+    <p>This gives the system a path from tentative interpretation to durable story state.</p>
+  </section>
+
+  <section>
+    <h2>8. Ranking: headliners emerge, they are not predeclared</h2>
+    <p>A major strength of this architecture is that the system does not need to predict in advance which stories will matter.</p>
+    <p>Stories become important because the soup changes around them. They gain links. They receive updates. They connect to many inputs. They become parents of substories. They attract contradiction, perspective, and user attention. They stay fresh. They connect to important entities. They create downstream consequences.</p>
+    <p>This suggests a PageRank-like idea: graph structure over time can help reveal “headliner” stories.</p>
+    <p>But global graph rank should not be the only signal.</p>
+    <div class="grid">
+      <div class="card">
+        <h3>Global story gravity</h3>
+        <p>How important the story appears to be in the whole soup: links, freshness, source diversity, contradiction, update velocity, and relationship centrality.</p>
+      </div>
+      <div class="card">
+        <h3>Personal story gravity</h3>
+        <p>How important the story is to a particular user: subscriptions, explicit watches, preferences, history, tasks, relationships, and what the user has already seen.</p>
+      </div>
+    </div>
+    <p>This distinction matters because a user-submitted story can be low-rank globally and still be the most important thing for that user.</p>
+  </section>
+
+  <section>
+    <h2>9. Story state</h2>
+    <p>A story is not just a title attached to related inputs. A story has state.</p>
+    <p>Story state is what lets the system answer: “what changed?”</p>
+    <ul>
+      <li>Is the story active, dormant, stale, resolved, escalating, or background?</li>
+      <li>What is the latest meaningful development?</li>
+      <li>What has the user already seen?</li>
+      <li>Which claims are confirmed, disputed, or unresolved?</li>
+      <li>Which sources are adding substance versus repeating known information?</li>
+      <li>Which facets matter right now?</li>
+      <li>Is the story growing into something larger?</li>
+      <li>Is it connected to a user watch or personal priority?</li>
+    </ul>
+    <p>Staleness agents are a good example of state maintenance. They do not need to delete stories. They can adjust attributes: freshness, activity, confidence, priority, background status, or need-for-review.</p>
+    <p>This preserves the graph while letting the product present a clean current view.</p>
+  </section>
+
+  <section>
+    <h2>10. The author is not one agent</h2>
+    <p>The user-facing layer is best thought of as an <strong>authoring system</strong>, not a single author agent.</p>
+    <p>“Author” is the product metaphor: the thing that turns the soup into something a human can read. Internally, it likely needs several functions.</p>
+    <div class="grid">
+      <div class="card">
+        <h3>Planner</h3>
+        <p>Decides what kind of communication is needed: breaking story, update, digest, explanation, thread catch-up, warning, or quiet no-op.</p>
+      </div>
+      <div class="card">
+        <h3>Retriever</h3>
+        <p>Selects the relevant subgraph from the soup: stories, inputs, claims, entities, developments, perspectives, and user-specific context.</p>
+      </div>
+      <div class="card">
+        <h3>Narrator</h3>
+        <p>Writes the human-facing article, update, briefing, thread summary, or answer.</p>
+      </div>
+      <div class="card">
+        <h3>Personalizer</h3>
+        <p>Applies user preferences, priorities, subscriptions, watch targets, tone, desired depth, and previously seen state.</p>
+      </div>
+      <div class="card">
+        <h3>Verifier / attribution layer</h3>
+        <p>Keeps the author honest: what does the soup actually support, where did it come from, what is uncertain, and what should not be overstated?</p>
+      </div>
+      <div class="card">
+        <h3>Memory updater</h3>
+        <p>Records what the user has now seen so future updates can say what is new instead of repeating the whole story.</p>
+      </div>
+    </div>
+    <p>The authoring system is where the product becomes useful. The soup can be rich, but users do not want to stare at a graph all day. They want to know what happened, what changed, why it matters, and whether they should act.</p>
+  </section>
+
+  <section>
+    <h2>11. Personalization is not an afterthought</h2>
+    <p>Agentic storytelling is not only for public news. The same architecture can apply to an email thread, a personal project, a legal dispute, a family plan, a workstream, or a private message conversation.</p>
+    <p>For example, a user may be tracking an email thread. Each reply is an input. The soup links the replies, extracts claims or decisions, connects related documents, notices unresolved questions, and tracks what changed since the last time the user checked.</p>
+    <p>The authoring system can then say:</p>
+    <div class="callout">
+      <p>“There are three new replies. The only material change is that Kaywood agreed to the draft, but the deadline question is still unanswered. One new attachment appears relevant to the filing story.”</p>
+    </div>
+    <p>That is the same story engine as public news, applied to private information.</p>
+    <p>User-submitted stories are especially important. A user can create a story seed — “watch this company,” “track this legal issue,” “follow this email thread,” “tell me if anything affects my trip” — and the swarm can connect future inputs to that story. The story does not need high global rank to matter.</p>
+  </section>
+
+  <section>
+    <h2>12. The soup as an agentic knowledge API</h2>
+    <p>Another important implication of this architecture is that the soup is not only storage for the storytelling product. It can become the place an agent goes when it needs current, contextual knowledge.</p>
+    <p>Today, when an agent needs to know what is happening, it often reaches for web search. That is useful for public facts, but it is weak for personal stories, private threads, active projects, and anything whose current state lives across messages, emails, documents, and prior interactions.</p>
+    <p>The soup can become a better substrate: a living database of stories, inputs, relationships, claims, and user-specific state. Instead of asking the open web, an agent can go spelunking in the soup.</p>
+
+    <div class="callout">
+      <p><strong>The soup is the agent's local reality layer.</strong> Web search finds external public information. The soup tells the agent what this system already knows, what the user has seen, what is still unresolved, and how the current facts relate to each other.</p>
+    </div>
+
+    <h3>Why this matters</h3>
+    <p>A story system that only writes articles is useful. A story system that becomes an agent-accessible knowledge substrate is much more powerful.</p>
+    <p>For example, if a user asks, “what’s going on with that email thread?”, an agent should not have to search the web, reread the entire inbox from scratch, or rely on brittle memory. It should query the soup:</p>
+    <ul>
+      <li>Which story does this thread belong to?</li>
+      <li>What inputs are connected to it?</li>
+      <li>What has changed since the user last saw it?</li>
+      <li>What questions remain unresolved?</li>
+      <li>Which claims are supported by which messages or documents?</li>
+      <li>Is this connected to another larger story?</li>
+    </ul>
+    <p>This lets agents reason from a maintained story state instead of reconstructing reality from scratch each time.</p>
+
+    <h3>What the agentic API should expose</h3>
+    <p>The API should not feel like a thin database wrapper. It should be designed around how agents investigate.</p>
+    <div class="grid">
+      <div class="card">
+        <h3>Semantic entry points</h3>
+        <p>Find stories, inputs, entities, claims, or user watches related to a natural-language question.</p>
+      </div>
+      <div class="card">
+        <h3>Graph traversal</h3>
+        <p>Move from a story to its inputs, substories, related entities, contradictions, updates, facets, and adjacent stories.</p>
+      </div>
+      <div class="card">
+        <h3>Story-state lookup</h3>
+        <p>Ask for the current state of a story: active, stale, unresolved, escalating, resolved, or newly changed.</p>
+      </div>
+      <div class="card">
+        <h3>Delta queries</h3>
+        <p>Ask what changed since a time, since the user last saw the story, or since a previous briefing.</p>
+      </div>
+      <div class="card">
+        <h3>Provenance inspection</h3>
+        <p>Trace claims and relationships back to source inputs, agents, timestamps, confidence, and evidence.</p>
+      </div>
+      <div class="card">
+        <h3>Question following</h3>
+        <p>Find unresolved questions, open loops, missing evidence, and places where the soup knows it does not know.</p>
+      </div>
+      <div class="card">
+        <h3>Subscription and watch APIs</h3>
+        <p>Let agents create or inspect user watches: “keep tracking this,” “tell me if this changes,” or “prioritize this despite low global rank.”</p>
+      </div>
+      <div class="card">
+        <h3>Proposal/write operations</h3>
+        <p>Let agents suggest new stories, edges, claims, staleness changes, or corrections, ideally with confidence and evidence.</p>
+      </div>
+    </div>
+
+    <h3>Spelunking, not just querying</h3>
+    <p>The word “spelunking” is important. An agent often does not know the exact query it needs at the beginning. It starts with a clue, follows relationships, opens a substory, checks provenance, notices an unresolved question, jumps to a related entity, and eventually forms an answer.</p>
+    <p>That means the API should support iterative exploration. It should let an agent ask broad questions, narrow down, traverse, inspect evidence, and come back with a grounded explanation.</p>
+
+    <h3>Read paths and write paths should be different</h3>
+    <p>Agents should be able to read richly and freely within their permissions. Writing should be more disciplined.</p>
+    <p>A good early model is:</p>
+    <ul>
+      <li><strong>Read:</strong> agents can search, traverse, inspect, and summarize the soup.</li>
+      <li><strong>Propose:</strong> agents can propose new edges, stories, claims, and state changes.</li>
+      <li><strong>Commit:</strong> trusted maintainers or arbitration processes promote proposals into stronger story state.</li>
+    </ul>
+    <p>This preserves agentic exploration without letting every agent permanently mutate the user’s reality model.</p>
+
+    <h3>Web search still has a role</h3>
+    <p>The soup does not replace the web. It changes when the web is needed.</p>
+    <p>For public unknowns, web search is still an acquisition tool. For current personal context, ongoing stories, prior inputs, private threads, and user-specific state, the soup should be the first place an agent looks.</p>
+    <p>In other words: <strong>web search gathers external evidence; the soup maintains situated story truth.</strong></p>
+  </section>
+
+  <section>
+    <h2>13. Relationship to memory and LLM wikis</h2>
+    <p>This architecture is adjacent to memory systems and to Andrej Karpathy's LLM Wiki pattern, but it is not identical to either.</p>
+
+    <h3>What Karpathy's LLM Wiki gets right</h3>
+    <p>Karpathy's pattern argues that agents should not repeatedly rediscover knowledge from raw documents. Instead, an LLM should maintain a persistent, interlinked wiki between the raw sources and the agent's answers. New sources are ingested once, then integrated into existing pages. Contradictions are noted. Cross-references are maintained. Periodic lint passes can look for stale claims, contradictions, orphan pages, missing links, and gaps.</p>
+    <p>That is strongly aligned with agentic storytelling. Both ideas reject naive RAG as the whole answer. Both say knowledge should compound into a maintained intermediate layer.</p>
+
+    <h3>Where agentic storytelling goes further</h3>
+    <p>The soup is not just a maintained wiki. It is a living story-state substrate.</p>
+    <p>A wiki page usually answers, “what do we know about this topic?” A story object also asks:</p>
+    <ul>
+      <li>Is this story active, stale, escalating, dormant, resolved, or background?</li>
+      <li>What changed since the last meaningful update?</li>
+      <li>What has this specific user already seen?</li>
+      <li>What is new to this user, not merely new in the world?</li>
+      <li>Which inputs are repetitive, and which repetitions are themselves meaningful?</li>
+      <li>Which substories are forming around a larger story?</li>
+      <li>Which questions remain unresolved?</li>
+    </ul>
+
+    <h3>Why this is not “memory”</h3>
+    <p>Calling this memory is too small.</p>
+    <p>Memory usually means stored facts, preferences, prior conversations, or retrieved context. Those are useful, but they are mostly static. Agentic storytelling needs dynamic state: freshness, staleness, seen/unseen boundaries, unresolved questions, story activity, relationship changes, and personal deltas.</p>
+    <p>The key object is not “what the system remembers.” The key object is “what story state is currently true, how that state changed, and what this user has or has not already been told.”</p>
+    <div class="callout">
+      <p><strong>This is closer to situational awareness than memory.</strong> Memory stores prior facts. The soup maintains evolving story state.</p>
+    </div>
+
+    <h3>Staleness is first-class</h3>
+    <p>Staleness should not be treated as cleanup metadata. It is part of the product.</p>
+    <p>A stale claim, stale thread, stale development, or stale story changes what the author should say. Sometimes the right output is not a new summary but: “nothing material has changed,” “this is now background,” “the last known state is old,” or “this looks unresolved but inactive.”</p>
+    <p>That is different from a wiki that merely contains old pages. Agentic storytelling has to understand temporal relevance.</p>
+
+    <h3>Seen-state is also first-class</h3>
+    <p>For a user, “what happened?” is often less important than “what is new since I last looked?”</p>
+    <p>The system therefore needs per-user seen-state. Two users can look at the same story and need different outputs. One may need the full story broken for the first time. Another may only need the latest development. A third may care only when a watched question changes.</p>
+    <p>This makes the authoring system fundamentally user-relative. The soup may contain global story state, but the product experience depends on the boundary between what the soup knows and what this user has already been told.</p>
+  </section>
+
+  <section>
+    <h2>14. How new capabilities grow</h2>
+    <p>This architecture supports gradual capability growth.</p>
+    <p>A new distinction can start as a language instruction in the storyteller prompt. If it proves useful, it can become a repeated authoring pattern. If it becomes structurally important, it can become a graph primitive. If it needs active maintenance, it can get a dedicated swarm agent.</p>
+    <div class="diagram">
+      <div class="stage"><b>Prompt instruction</b><br/>“Notice when sources frame the story differently.”</div>
+      <div class="arrow">↓</div>
+      <div class="stage"><b>Authoring pattern</b><br/>The author begins regularly explaining source differences to users.</div>
+      <div class="arrow">↓</div>
+      <div class="stage"><b>Graph primitive</b><br/>Perspective becomes a first-class node or attribute in the soup.</div>
+      <div class="arrow">↓</div>
+      <div class="stage"><b>Dedicated agent</b><br/>Perspective agents scan the soup and maintain source-framing relationships.</div>
+    </div>
+    <p>This is important because it avoids premature schema worship. The product can begin with fewer primitives and let actual storytelling needs reveal which concepts deserve to become durable structure.</p>
+  </section>
+
+  <section>
+    <h2>15. The product promise</h2>
+    <p>The product should let users subscribe to living stories, not just feeds or keywords.</p>
+    <ul>
+      <li>“Tell me when this story materially develops.”</li>
+      <li>“Tell me when a new perspective appears.”</li>
+      <li>“Tell me what changed since I last looked.”</li>
+      <li>“Show me the facets if I want depth.”</li>
+      <li>“Warn me when a private thread has a real decision hidden inside it.”</li>
+      <li>“Connect this to the bigger story if one emerges.”</li>
+      <li>“Keep watching this even if nobody else cares.”</li>
+    </ul>
+    <p>That is a very different product from a feed, an inbox, or a dashboard. It is a sensemaking system with a narrative interface.</p>
+  </section>
+
+  <section>
+    <h2>16. Open design questions</h2>
+    <p>This whitepaper describes the current thinking, not the final implementation. The biggest open questions are product-shaping questions, not coding details.</p>
+    <ul>
+      <li><strong>First domain:</strong> should the first working version focus on public news, private inbox/message threads, or a hybrid?</li>
+      <li><strong>Minimum soup primitives:</strong> what is the smallest set that still demonstrates the magic? Likely Input, Story, Edge, Claim, Entity, and User Watch.</li>
+      <li><strong>Trust model:</strong> when do agents write directly versus propose changes?</li>
+      <li><strong>Author behavior:</strong> should the author write only from committed soup state, or should it be allowed to request more swarm investigation before answering?</li>
+      <li><strong>User control:</strong> how does a user correct the soup when the system misunderstands a story?</li>
+      <li><strong>Story identity:</strong> what makes a story the same story over time, especially when it grows, narrows, or becomes part of something larger?</li>
+      <li><strong>Agentic API shape:</strong> what are the right primitives for agents to spelunk safely: search, traversal, deltas, provenance, subscriptions, proposals, and committed writes?</li>
+      <li><strong>Seen-state model:</strong> how should the system represent what a user has already seen, at what granularity, and how does that differ from global story freshness?</li>
+      <li><strong>Interface:</strong> is the primary surface a digest, a story dashboard, a graph explorer, notifications, conversation, or all of these over time?</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>17. Current architectural thesis</h2>
+    <p>The strongest version of this product is not “AI summarizes your feeds.”</p>
+    <p>The strongest version is:</p>
+    <div class="callout">
+      <p><strong>A living story graph, exposed through an agentic spelunking API, maintained by a swarm of sensemaking agents, and narrated by a personalized authoring system.</strong></p>
+    </div>
+    <p>The soup gives the system memory and structure. The agentic API lets other agents investigate that memory instead of starting from scratch. The swarm gives it agency and continuous interpretation. The authoring system gives it a human interface.</p>
+    <p>That combination is the core of agentic storytelling.</p>
+  </section>
+
+  <p class="footer">primeradiant · agentic storytelling architecture whitepaper draft · stored on the shared workspace/NFS share.</p>
+</main>
+</body>
+</html>

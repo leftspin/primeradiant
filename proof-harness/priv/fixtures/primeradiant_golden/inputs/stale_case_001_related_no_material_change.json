@@ -1,0 +1,9 @@
+{
+  "fixture_id": "stale_case_001_related_no_material_change",
+  "source_type": "news_brief",
+  "external_id": "fixture:public:006",
+  "observed_at": "2026-05-15T08:00:00-07:00",
+  "title": "Harbor ferry service remains quiet after last week\u2019s strike",
+  "acl": {"privacy": "public"},
+  "body_text": "Harbor ferry service remains quiet after last week's strike. There are no new filings and the status is quiet after resolution."
+}

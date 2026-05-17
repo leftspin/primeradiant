@@ -1,0 +1,9 @@
+{
+  "fixture_id": "public_story_007_adjacent_distinct_terminal_walkout",
+  "source_type": "news_article",
+  "external_id": "fixture:public:007",
+  "observed_at": "2026-05-04T09:15:00-07:00",
+  "title": "Harbor ferry terminal cafe workers stage brief walkout",
+  "acl": {"privacy": "public"},
+  "body_text": "Cafe workers at the harbor ferry terminal staged a brief wage walkout. Ferry crossings remained normal, and passengers still boarded ferries while the cafe counter stayed closed."
+}

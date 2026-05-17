@@ -1,0 +1,9 @@
+{
+  "fixture_id": "public_story_003_duplicate_reinforcement",
+  "source_type": "news_article",
+  "external_id": "fixture:public:003",
+  "observed_at": "2026-05-02T11:00:00-07:00",
+  "title": "Second outlet repeats Harbor ferry strike details",
+  "acl": {"privacy": "public"},
+  "body_text": "A second outlet repeated that the harbor ferry strike remains active, crossings are limited to morning service only, and negotiations are scheduled for 17:00."
+}

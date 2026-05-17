@@ -1,0 +1,9 @@
+{
+  "fixture_id": "private_thread_004_later_update",
+  "source_type": "email",
+  "external_id": "fixture:private:004",
+  "observed_at": "2026-05-12T16:20:00-07:00",
+  "title": "Roof repair quote arrives with final price",
+  "acl": {"privacy": "private", "participants": ["flynn", "contractor"]},
+  "body_text": "The roof repair quote arrived with a final price of 14800. Same-week installation is available if Flynn approves tonight."
+}

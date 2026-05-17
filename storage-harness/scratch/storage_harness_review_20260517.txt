@@ -1,0 +1,29 @@
+Primeradiant storage/schema hardening reconciliation review
+Date: 2026-05-17
+Scope: /Users/mike/shared-workspace/primeradiant/storage-harness only
+Spec: /Users/mike/shared-workspace/primeradiant/specs/primeradiant-storage-schema-hardening.html
+
+Review result: No blockers remain.
+
+Reviewed prior blocker set:
+1. Persistence boundary: resolved. The harness is explicitly non-DB-backed by default and reports db_backed?: false / persistence_mode: :changeset_validated. Production-shaped schemas, changesets, and migration-equivalent SQL are present. Residual risk: SQL was not executed against a live Postgres instance.
+2. Proposal/arbitration boundary: resolved. Fixture import persists pending proposal/op rows, then proposal_decisions from pending to accepted, then committed proposal_ops and graph_commits before graph-visible state is written.
+3. Proof-harness dependency/demo-code risk: resolved for this slice. The path dependency is still used for fixture source semantics (normalizer/classifier/proposal builder), but expected artifacts are only existence/assertion inputs. Authoring outputs and seen-state refs are now rendered/derived from persisted storage rows, not copied from final proof-store projections.
+4. Accepted op effects: resolved. merge_background, append_colors, add_questions, mark_state, and mark_last_seen_input are applied by storage and now also emit durable story_events with proposal_id, proposal_op_id, graph_commit_id, confidence, and evidence refs.
+5. ACL arbitration: resolved. Pending create_input evidence is checked against actor visibility, and authoring/seen-state validation checks both top-level and sentence-level evidence refs for actor access.
+6. Verified authoring/seen-state: resolved. Seen-state validation rejects unverified, ungrounded, inaccessible, and unknown-input authored output refs. SQL includes the seen_states_verified_output_trigger.
+7. Provenance constraints: resolved. EvidenceRef changesets enforce supported subject contracts and direct/via-proposal-op FK requirements; importer rejects unknown input refs and unknown/uncommitted evidence subjects. SQL includes subject_type allowlist, direct-FK consistency checks, and evidence_refs_subject_contract_trigger for via-proposal-op subjects.
+
+Reviewer result:
+No blockers remain.
+
+Reviewer residual risks:
+- Non-DB-backed harness: migration SQL is production-shaped but not validated against a live Postgres instance.
+- storage-harness still depends on ../proof-harness for fixture semantic behavior; acceptable for this fixture acceptance slice, not a production runtime dependency.
+- Fixture proposal generation still uses proof-harness normalizer/classifier/builder semantics; real ingestion/story identity remains later product work.
+
+Verification:
+- cd /Users/mike/shared-workspace/primeradiant/storage-harness && /opt/homebrew/bin/mix clean && /opt/homebrew/bin/mix test
+  Result: 14 tests, 0 failures.
+- cd /Users/mike/shared-workspace/primeradiant/proof-harness && /opt/homebrew/bin/mix test
+  Result: 11 tests, 0 failures.

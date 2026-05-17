@@ -1,0 +1,38 @@
+Primeradiant real ingestion/story identity implementation review
+Date: 2026-05-17
+Reviewer: Codex focused self-review against specs/primeradiant-real-ingestion-story-identity.html
+
+Result: PASS for the bounded storage-harness slice. No implementation blockers remain for this slice.
+
+Scope reviewed:
+- Manual source admission rejects trusted fixture/demo labels, requires tenant/source mode/source identity/provenance/ACL, and deduplicates only inside tenant scope.
+- Real source item normalization emits deterministic claim/entity/event/question/color/topic packets with provenance and time scopes, without reading expected labels or fixture ids.
+- Candidate retrieval is recall-oriented and ACL-aware. Unauthorized actors do not receive private candidate evidence or private-derived story metadata.
+- Story identity decisioning covers split, attach, part_of, conflict, no_op, color, stale, and abstain/needs_more_evidence.
+- Decisions map through pending proposals, accepted proposal decisions, proposal ops, graph commits, evidence refs, and confidence before committed graph rows are inserted.
+- Committed edges stay within the validated vocabulary and reject generic related/adjacent/reframes/mentions edges.
+- Conflict checks compare normalized fact key/value against stored prior fact versions with compatible time scope. Change-over-time with a distinct scope is persisted as an update, not a conflict.
+- Story key collision handling is deterministic and non-destructive.
+- Live migration SQL remains valid against the local Postgres validation path.
+
+Acceptance checks:
+- Real-style public pack: PASS.
+- Real-style private/ACL pack: PASS.
+- Collision pack: PASS.
+- Conflict scope pack: PASS.
+- Golden proof harness remains green: PASS.
+- Storage harness remains green: PASS.
+- Postgres schema validator remains green: PASS.
+
+Commands reviewed:
+- cd /Users/mike/shared-workspace/primeradiant/storage-harness && /opt/homebrew/bin/mix clean && /opt/homebrew/bin/mix test
+  Result: 22 tests, 0 failures.
+- cd /Users/mike/shared-workspace/primeradiant/proof-harness && /opt/homebrew/bin/mix test
+  Result: 11 tests, 0 failures.
+- cd /Users/mike/shared-workspace/primeradiant/storage-harness && scripts/validate_postgres_schema.sh
+  Result: postgres_schema_validation_ok.
+
+Notes:
+- This is still a bounded harness implementation, not a production daemon or connector path.
+- Extraction is deterministic/rule-based and intentionally narrow. It proves the admission/identity/storage boundary, not broad natural-language extraction quality.
+- Engram check was attempted for real_ingestion.ex and decider.ex; no provenance output was available, so it did not influence the review.

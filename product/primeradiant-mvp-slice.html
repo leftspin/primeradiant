@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>primeradiant — MVP Slice</title>
+  <style>
+    :root { color-scheme: dark light; --fg: var(--clawline-fg, #f4ead7); --muted: color-mix(in srgb, var(--fg) 68%, transparent); --line: color-mix(in srgb, var(--fg) 18%, transparent); --card: color-mix(in srgb, var(--fg) 7%, transparent); --card2: color-mix(in srgb, var(--fg) 11%, transparent); --accent: #d39b48; --accent2: #9bc7ff; --good: #9fd39b; --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+    html, body { margin: 0; background: transparent; color: var(--fg); font: 16px/1.55 -apple-system, BlinkMacSystemFont, "SF Pro Text", Inter, sans-serif; }
+    body { padding: 28px 18px 52px; }
+    main { max-width: 1040px; margin: 0 auto; }
+    .eyebrow { color: var(--accent); text-transform: uppercase; letter-spacing: .13em; font-size: 12px; font-weight: 800; }
+    h1 { margin: 8px 0 12px; font-size: clamp(34px, 6vw, 64px); line-height: .96; letter-spacing: -.045em; }
+    h2 { margin: 0 0 12px; font-size: 24px; }
+    h3 { margin: 0 0 8px; font-size: 18px; }
+    p { margin: 0 0 10px; }
+    .lede { color: var(--muted); font-size: clamp(18px, 2.5vw, 23px); max-width: 860px; }
+    section { border: 1px solid var(--line); background: var(--card); border-radius: 24px; padding: 18px; margin: 16px 0; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(255px, 1fr)); gap: 12px; }
+    .widegrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); gap: 12px; }
+    .card { border: 1px solid var(--line); background: var(--card2); border-radius: 18px; padding: 14px; }
+    .label { color: var(--accent); text-transform: uppercase; letter-spacing: .09em; font-size: 11px; font-weight: 800; }
+    .callout { border-left: 4px solid var(--accent); padding: 12px 14px; background: color-mix(in srgb, var(--accent) 10%, transparent); border-radius: 14px; margin: 12px 0; }
+    code, pre { font-family: var(--mono); color: var(--accent2); }
+    pre { white-space: pre-wrap; overflow-wrap: anywhere; border: 1px solid var(--line); border-radius: 14px; padding: 12px; background: color-mix(in srgb, #000 18%, transparent); font-size: 13px; line-height: 1.45; }
+    ul, ol { margin: 0; padding-left: 22px; }
+    li { margin: 7px 0; }
+    .ok { color: var(--good); font-weight: 700; }
+  </style>
+</head>
+<body>
+<main>
+  <div class="eyebrow">Product slice</div>
+  <h1>MVP slice: prove story state</h1>
+  <p class="lede">The first primeradiant build should prove the magic in one narrow loop: messy inputs become a living story, the system knows what changed, what went stale, and what is new to the user.</p>
+
+  <section>
+    <h2>1. Recommendation</h2>
+    <div class="callout"><p><strong>Build a hybrid slice:</strong> one public story, one private email/message thread, one user watch, and one stale/no-op case. Do not start with a generic news feed or a generic personal-memory product.</p></div>
+    <p>This slice forces the architecture to prove the things that make primeradiant different: cross-source story identity, private context, user-relative novelty, evidence-backed narration, and staleness.</p>
+  </section>
+
+  <section>
+    <h2>2. Why hybrid, not “news first” or “email first”</h2>
+    <div class="grid">
+      <div class="card"><span class="label">News-only risk</span><h3>Looks like aggregation</h3><p>If v1 is only public articles, the product can accidentally become a smarter feed reader. That undersells the soup/API/user-state thesis.</p></div>
+      <div class="card"><span class="label">Email-only risk</span><h3>Looks like memory</h3><p>If v1 is only private threads, the product can accidentally become thread summarization. That hides story gravity, public evidence, and cross-source relationships.</p></div>
+      <div class="card"><span class="label">Hybrid value</span><h3>Forces the real abstraction</h3><p>The same story machinery must handle public evidence, private context, personal priority, repetition, and stale/no-change updates.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>3. Golden corpus</h2>
+    <div class="widegrid">
+      <div class="card"><span class="label">Public story</span><h3>Multi-source event</h3><p>3–5 public inputs about one evolving event: initial report, follow-up, repeated report, contradiction or correction, and a framing/spin difference.</p></div>
+      <div class="card"><span class="label">Private thread</span><h3>Personal story</h3><p>4–6 messages/emails around one ongoing personal task or decision: request, reply, unresolved question, later update, and duplicate/no-op reply.</p></div>
+      <div class="card"><span class="label">User watch</span><h3>Priority override</h3><p>A watch created from <code>/preferences/priorities</code> or <code>/stories/concepts</code> that should matter even if global graph rank is low.</p></div>
+      <div class="card"><span class="label">Stale/no-op case</span><h3>Negative proof</h3><p>An input that is related but not materially new, plus a story with no updates long enough to become dormant/stale without disappearing.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>4. End-to-end demo path</h2>
+    <ol>
+      <li>User creates a watch: “track this story/concept for me.”</li>
+      <li>Public and private inputs arrive through source adapters.</li>
+      <li>Canonicalization creates immutable Input nodes.</li>
+      <li>Extractor proposes Claims and Entities.</li>
+      <li>Story Seeker proposes a Story node when inputs become an evolving situation.</li>
+      <li>Connection Weaver proposes named edges: supports, updates, duplicates, contradicts, adds_color, part_of, watch_applies_to.</li>
+      <li>Arbiter commits or weak-commits validated proposals.</li>
+      <li>Projection updates story state, gravity, freshness, unresolved questions, and user relevance.</li>
+      <li>Author Planner decides whether to produce output.</li>
+      <li>Narrator writes “what changed / what’s new to you” from evidence packet only.</li>
+      <li>Seen-State Recorder marks exactly what the user was shown.</li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>5. Acceptance criteria</h2>
+    <ul>
+      <li><span class="ok">Story identity:</span> related public/private inputs attach to an evolving Story rather than sitting as separate summaries.</li>
+      <li><span class="ok">Named relationships:</span> no committed edge is merely “related.”</li>
+      <li><span class="ok">Novelty:</span> duplicate/reinforcing inputs do not create fake material updates.</li>
+      <li><span class="ok">Staleness:</span> dormant stories change state without deletion or destructive rewrite.</li>
+      <li><span class="ok">User priority:</span> a low-global-rank watch can still trigger personal relevance.</li>
+      <li><span class="ok">Seen-state:</span> the second briefing says only what is new since the first briefing.</li>
+      <li><span class="ok">Grounding:</span> every material authored sentence traces to evidence refs.</li>
+      <li><span class="ok">Agent safety:</span> all graph-changing agents write proposals, not direct commits.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>6. Out of scope for this slice</h2>
+    <ul>
+      <li>Full social/news ingestion at scale.</li>
+      <li>Multi-tenant enterprise administration.</li>
+      <li>Autonomous web crawling loops.</li>
+      <li>Graph explorer as primary UX.</li>
+      <li>Neo4j/Memgraph as source of truth.</li>
+      <li>Perfect ranking; only simple story gravity and user relevance are needed.</li>
+      <li>First-class Perspective/Facet/Question nodes unless the corpus proves they are necessary.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>7. Next implementation move</h2>
+    <p>Before building the product app, create a story-semantics proof harness. The harness should be small enough to inspect manually and rich enough to catch fake summarization.</p>
+    <pre>fixtures/
+  public_story/
+    input_001_initial_report.json
+    input_002_followup.json
+    input_003_duplicate.json
+    input_004_correction.json
+  private_thread/
+    input_001_request.json
+    input_002_reply.json
+    input_003_unresolved_question.json
+    input_004_later_update.json
+  watches/
+    user_priority_watch.json
+  expected/
+    story_nodes.json
+    edges.json
+    first_briefing.html
+    second_briefing_delta.html
+    stale_noop_state.json</pre>
+    <div class="callout"><p><strong>Proof gate:</strong> the harness must decide, with evidence, which inputs create new stories, attach to existing stories, update story state, add color/spin, conflict, or do nothing. If it cannot produce those decisions and one grounded “what changed for Flynn” output without demo shortcuts or preseeded trusted state, stop before broader implementation.</p></div>
+  </section>
+</main>
+</body>
+</html>

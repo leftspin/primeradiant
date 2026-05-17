@@ -1,0 +1,14 @@
+{
+  "harbor-ferry-strike": {
+    "must_include_inputs": [
+      "public_story_001_initial_report",
+      "public_story_006_near_duplicate_overlap"
+    ],
+    "must_exclude_inputs": [
+      "public_story_007_adjacent_distinct_terminal_walkout"
+    ]
+  },
+  "basement-humidity-sensor": {
+    "must_include_watch": "watch:basement_humidity"
+  }
+}

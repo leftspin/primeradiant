@@ -1,0 +1,23 @@
+{
+  "corpus_id": "primeradiant_golden_v1",
+  "reference_now": "2026-05-15T19:00:00-07:00",
+  "inputs": [
+    "public_story_001_initial_report.json",
+    "public_story_002_followup_update.json",
+    "public_story_003_duplicate_reinforcement.json",
+    "public_story_004_correction_or_contradiction.json",
+    "public_story_005_framing_spin.json",
+    "public_story_006_near_duplicate_overlap.json",
+    "public_story_007_adjacent_distinct_terminal_walkout.json",
+    "private_thread_005_low_global_rank_personal_watch.json",
+    "private_thread_001_request.json",
+    "private_thread_002_reply_attach.json",
+    "private_thread_003_unresolved_question.json",
+    "private_thread_004_later_update.json",
+    "stale_case_001_related_no_material_change.json"
+  ],
+  "watches": [
+    "user_priority_watch.json",
+    "low_global_rank_personal_watch.json"
+  ]
+}

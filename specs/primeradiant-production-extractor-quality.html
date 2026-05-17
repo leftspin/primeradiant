@@ -1,0 +1,557 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Primeradiant Production Extractor Quality</title>
+  <style>
+    :root {
+      color-scheme: dark light;
+      --fg: var(--clawline-fg, #f4ead7);
+      --muted: color-mix(in srgb, var(--fg) 68%, transparent);
+      --soft: color-mix(in srgb, var(--fg) 52%, transparent);
+      --line: color-mix(in srgb, var(--fg) 18%, transparent);
+      --card: color-mix(in srgb, var(--fg) 7%, transparent);
+      --card2: color-mix(in srgb, var(--fg) 11%, transparent);
+      --accent: #d39b48;
+      --accent2: #9bc7ff;
+      --good: #9fd39b;
+      --warn: #ffd27a;
+      --bad: #ff9b9b;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+    html, body {
+      margin: 0;
+      background: transparent;
+      color: var(--fg);
+      font: 16px/1.56 -apple-system, BlinkMacSystemFont, "SF Pro Text", Inter, sans-serif;
+    }
+    body { padding: 36px; }
+    main { max-width: 1180px; margin: 0 auto; }
+    .eyebrow {
+      color: var(--accent);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: .13em;
+      text-transform: uppercase;
+    }
+    h1 {
+      margin: 8px 0 12px;
+      font-size: clamp(34px, 5vw, 58px);
+      line-height: 1.02;
+      letter-spacing: 0;
+    }
+    h2 {
+      margin: 34px 0 12px;
+      padding-top: 18px;
+      border-top: 1px solid var(--line);
+      font-size: clamp(23px, 3vw, 34px);
+      letter-spacing: 0;
+    }
+    h3 { margin: 18px 0 8px; font-size: 18px; color: var(--accent2); letter-spacing: 0; }
+    p { margin: 8px 0; }
+    .lede { max-width: 960px; color: var(--muted); font-size: clamp(18px, 2.5vw, 23px); }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+    .card {
+      border: 1px solid var(--line);
+      background: var(--card);
+      border-radius: 8px;
+      padding: 14px;
+    }
+    .callout {
+      border-left: 4px solid var(--accent);
+      background: color-mix(in srgb, var(--accent) 10%, transparent);
+      border-radius: 8px;
+      padding: 12px 14px;
+      margin: 12px 0;
+    }
+    .risk { border-left-color: var(--warn); background: color-mix(in srgb, var(--warn) 10%, transparent); }
+    .blocker { border-left-color: var(--bad); background: color-mix(in srgb, var(--bad) 10%, transparent); }
+    .ok { color: var(--good); font-weight: 700; }
+    .warn { color: var(--warn); font-weight: 700; }
+    .bad { color: var(--bad); font-weight: 700; }
+    .label {
+      color: var(--accent);
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: .09em;
+      text-transform: uppercase;
+    }
+    code, pre { font-family: var(--mono); color: var(--accent2); }
+    code { font-size: .92em; overflow-wrap: anywhere; }
+    pre {
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      background: color-mix(in srgb, #000 18%, transparent);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+    table { width: 100%; border-collapse: collapse; margin: 12px 0; }
+    th, td { border: 1px solid var(--line); padding: 9px 10px; vertical-align: top; }
+    th {
+      color: var(--accent);
+      font-size: 12px;
+      text-align: left;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    ul, ol { padding-left: 24px; }
+    li { margin: 6px 0; }
+    .tight li { margin: 3px 0; }
+    .small { color: var(--soft); font-size: 14px; }
+  </style>
+</head>
+<body>
+<main>
+  <div class="eyebrow">T321 source-of-truth spec after T312 proof</div>
+  <h1>Production extractor quality</h1>
+  <p class="lede">Defines the next Primeradiant boundary: can production extraction turn messy real-world inputs into trustworthy story facts without fixture labels, story hints, or demo shortcuts?</p>
+
+  <section>
+    <h2>1. Source Truth and Status</h2>
+    <table>
+      <thead>
+        <tr><th>Source</th><th>Constraint for T321</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>index.html</code></td><td>Primeradiant maintains live story state. Extracted facts are evidence candidates for story state, not summaries to display as truth.</td></tr>
+        <tr><td><code>whitepaper/primeradiant-architecture-whitepaper.html</code></td><td>The soup contains inputs, stories, claims, entities, relationships, perspective/spin, unresolved questions, user watches, and evolving state. The extractor must feed those primitives without flattening them.</td></tr>
+        <tr><td><code>architecture/primeradiant-system-architecture.html</code></td><td>Source adapters do not decide story meaning. Canonical input, proposal, arbitration, projection, authoring, and seen-state seams remain separate.</td></tr>
+        <tr><td><code>architecture/primeradiant-elixir-contracts.html</code></td><td>Agent/model output is hostile until validated. Graph-changing output must be structured, evidence-backed, confidence-bearing, ACL-aware, and never use generic <code>related</code> edges.</td></tr>
+        <tr><td><code>product/primeradiant-mvp-slice.html</code></td><td>The product proof is story identity, novelty, contradiction, personal relevance, stale/no-op behavior, and evidence-backed narration across public and private inputs.</td></tr>
+        <tr><td><code>specs/primeradiant-real-ingestion-story-identity.html</code></td><td>Manual real ingestion, candidate retrieval, and identity decisions are already specified. T321 defines the production-quality extractor output that feeds that path.</td></tr>
+        <tr><td><code>proof-harness</code> and <code>storage-harness</code></td><td>T312 proves semantics and storage gates, but the current extraction surface is bounded/rule-shaped. T321 must not treat that convenience as product truth.</td></tr>
+      </tbody>
+    </table>
+
+    <div class="callout">
+      <p><strong>Baseline:</strong> T312 and the storage-harness hard knowledge eval prove the downstream story-semantics loop: identity, novelty, conflict, framing, user watch relevance, seen-state deltas, evidence refs, ACL boundaries, proposal-backed graph commits, and rejection of fixture/story hints.</p>
+      <p><strong>Unproven boundary:</strong> broad extraction quality from messy source text remains unproven. Existing deterministic grammar and fixture-era keyword paths are not acceptable evidence that production extraction works.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2>2. Product Purpose</h2>
+    <div class="grid">
+      <div class="card">
+        <span class="label">Purpose</span>
+        <h3>Evidence into story facts</h3>
+        <p>Read one admitted source item and emit structured, span-backed claims, entities, times, source stance, uncertainty, framing, and refusal state that downstream systems can validate and use.</p>
+      </div>
+      <div class="card">
+        <span class="label">Product question</span>
+        <h3>Trust without labels</h3>
+        <p>The extractor must work when the input has no fixture ID, expected label, story hint, preselected story, source file order, or hard-coded corpus vocabulary.</p>
+      </div>
+      <div class="card">
+        <span class="label">Boundary</span>
+        <h3>Extractor only</h3>
+        <p>The extractor does not fetch sources, rank stories, choose headliners, author user copy, run a production daemon, or commit graph truth.</p>
+      </div>
+    </div>
+
+    <h3>2.1 Non-Goals</h3>
+    <ul>
+      <li>No connector implementation: no RSS, email, message, social, web-search, browser, or document acquisition connector.</li>
+      <li>No daemon/runtime shell, background service, Oban production lane, swarm scaling, deployment, release packaging, merge, or production config.</li>
+      <li>No UI, story dashboard, proposal review screen, ranking/headliner system, feed placement, notification threshold, or authored briefing output.</li>
+      <li>No story identity invention beyond extractor output. Story attachment, split, contradiction, personal relevance, and seen-state decisions remain downstream responsibilities.</li>
+      <li>No broad world-truth validation. The extractor records what the source says, how strongly it says it, and what evidence span supports it; it does not decide whether the world is actually that way.</li>
+      <li>No schema expansion unless the implementation proves the existing normalized envelope cannot represent a required extractor field. A missing convenience column is not a blocker by itself.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>3. Input Classes and Messy Failure Modes</h2>
+    <p>T321 extraction starts after real admission. Inputs are admitted source items or normalized input rows from <code>manual_real_ingest_v1</code>. They may be public or private, but they must already carry tenant, ACL, source identity, timestamps, text or artifact reference, and provenance.</p>
+
+    <table>
+      <thead>
+        <tr><th>Input class</th><th>Examples</th><th>Extractor obligation</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Reported public article</td><td>News article, agency wire, institutional update, filing excerpt.</td><td>Extract asserted claims, named entities, event/time scopes, attribution, and correction language without assuming the source is true.</td></tr>
+        <tr><td>Opinion or analysis</td><td>Column, editorial, blog analysis, pundit post.</td><td>Separate factual assertions from interpretation. Preserve framing as source stance or color unless a span directly asserts a structural fact.</td></tr>
+        <tr><td>Private thread item</td><td>Email, message, user note, project update.</td><td>Extract task/decision/deadline/question facts with participant/source context while respecting ACL and private provenance.</td></tr>
+        <tr><td>Thin or partial page</td><td>Search snippet, landing page, copied excerpt, clipped text.</td><td>Emit low-confidence or refusal state when spans are insufficient. Do not manufacture missing facts to make story identity easier.</td></tr>
+        <tr><td>Correction or update</td><td>Correction notice, revised article, later message, follow-up filing.</td><td>Preserve prior/new timing and source stance so downstream contradiction logic can distinguish correction, update-over-time, and disputed fact.</td></tr>
+        <tr><td>Quoted or attributed source</td><td>Article quoting an agency, company, witness, or anonymous source.</td><td>Represent who asserts the claim: publisher voice, quoted actor, unnamed source, reported allegation, or source characterization.</td></tr>
+        <tr><td>Compound item</td><td>Article with multiple sub-events, thread digest, mixed public/private note.</td><td>Emit multiple atomic claims and entities with spans. Do not collapse distinct situations into one topic label.</td></tr>
+      </tbody>
+    </table>
+
+    <h3>3.1 Failure Modes That Must Be Tested</h3>
+    <ul>
+      <li><strong>Boilerplate contamination:</strong> navigation text, ads, unrelated recommendations, email footers, legal disclaimers, and share buttons must not become story facts.</li>
+      <li><strong>Headline/body mismatch:</strong> a sensational or stale title must not override body evidence. Claims cite body spans unless the headline is the only available evidence and is marked as such.</li>
+      <li><strong>Multi-story collision:</strong> one source may mention several events. The extractor emits separate claims/entities/events; it does not choose a single story container.</li>
+      <li><strong>Near-miss identity anchors:</strong> same topic with different venue, actor, date, scope, or affected group must preserve those anchors so downstream identity can split correctly.</li>
+      <li><strong>Quote laundering:</strong> a quoted accusation, rumor, denial, or campaign framing must not be promoted into publisher-asserted fact.</li>
+      <li><strong>Opinion-as-fact drift:</strong> evaluative language, blame assignment, motives, and strategic spin stay source stance/framing unless directly evidenced as an observable fact.</li>
+      <li><strong>Temporal ambiguity:</strong> vague times such as "today", "last week", "since Friday", and "by tomorrow" are normalized only relative to source timestamps and carry ambiguity when needed.</li>
+      <li><strong>Correction ambiguity:</strong> later text may correct a prior report, describe a new state, or dispute a source. The extractor must preserve correction cues and time scope, not pre-decide contradiction.</li>
+      <li><strong>Negation and modality:</strong> "did not approve", "may approve", "denied reports", and "plans to approve" must not be extracted as the same positive asserted fact.</li>
+      <li><strong>Thin evidence pressure:</strong> if the item lacks enough text to support a fact, the correct output is low-confidence/refusal, not a generic topic claim.</li>
+      <li><strong>Private source leakage:</strong> source actor, participants, and spans from private items remain in ACL-scoped output and cannot be copied into public story state by extraction.</li>
+      <li><strong>Fixture-shaped cheating:</strong> expected labels, file names, fixture IDs, story hints, external IDs, and source order must not influence claim or entity extraction.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>4. Production Extractor Output Contract</h2>
+    <p>The extractor returns a single validated result per input. The result is stored as a versioned normalized artifact and passed to candidate retrieval, proposal building, and evals. Every material item must point to source evidence spans or explicitly explain why it abstained.</p>
+
+    <pre>{
+  input_id: uuid,
+  tenant_id: uuid,
+  extractor_run: {
+    extractor_version: string,
+    contract_version: "production_extractor_v1",
+    prompt_version: string | null,
+    model: string | null,
+    deterministic: boolean,
+    trace_id: string | null,
+    started_at: utc_datetime_usec | null,
+    completed_at: utc_datetime_usec | null
+  },
+  input_context: {
+    source_type: "news_article" | "opinion_column" | "email" | "message" | "document" | "user_note" | "web_page",
+    source_name: string | null,
+    source_actor: {kind: string, name: string | null, stable_id: string | null},
+    observed_at: utc_datetime_usec,
+    retrieved_at: utc_datetime_usec,
+    occurred_at: utc_datetime_usec | null,
+    canonical_uri: string | null,
+    acl: map
+  },
+  quality: {
+    status: "usable" | "partial" | "low_confidence" | "refused",
+    confidence: decimal_0_to_1,
+    reasons: [string],
+    warnings: [string]
+  },
+  claims: [claim],
+  entities: [entity],
+  times: [time_ref],
+  source_stance: [source_stance],
+  framing: [framing_item],
+  questions: [question_item],
+  evidence_index: [evidence_span]
+}</pre>
+
+    <h3>4.1 Claim Contract</h3>
+    <pre>{
+  claim_id: stable_local_id,
+  text: string,
+  normalized_subject: string | null,
+  predicate: string,
+  object_value: string | number | boolean | null,
+  fact_key: string | null,
+  fact_value: string | null,
+  claim_kind: "event" | "state" | "numeric" | "deadline" | "decision" | "availability" | "location" | "ownership" | "responsibility" | "allegation" | "denial" | "quote" | "other",
+  polarity: "positive" | "negative" | "mixed" | "unknown",
+  modality: "asserted" | "reported" | "alleged" | "planned" | "possible" | "denied" | "corrected" | "opinion" | "unknown",
+  attribution: {
+    asserted_by: "publisher" | "quoted_actor" | "source_actor" | "user" | "unknown",
+    actor_ref: stable_local_id | null,
+    attribution_text: string | null,
+    anonymous: boolean
+  },
+  time_scope: {
+    kind: "instant" | "range" | "relative" | "current" | "unknown",
+    normalized_start: utc_datetime_usec | null,
+    normalized_end: utc_datetime_usec | null,
+    relative_text: string | null,
+    basis: "occurred_at" | "observed_at" | "retrieved_at" | "source_text" | "unknown",
+    confidence: decimal_0_to_1
+  },
+  uncertainty: {
+    level: "high" | "medium" | "low",
+    reasons: ["hedged_language" | "ambiguous_actor" | "thin_context" | "quote_only" | "conflicting_within_source" | "temporal_ambiguous" | "extractor_limit" | "other"]
+  },
+  evidence_refs: [evidence_ref],
+  structural_candidate: boolean,
+  downstream_use: "identity_candidate" | "conflict_candidate" | "background" | "framing_only" | "ignore"
+}</pre>
+
+    <ul>
+      <li><code>fact_key</code> and <code>fact_value</code> are required only when the claim can safely participate in downstream identity or contradiction checks.</li>
+      <li><code>structural_candidate = true</code> means the claim may feed story identity, novelty, contradiction, or material-delta checks. It does not mean the claim is committed truth.</li>
+      <li><code>downstream_use = "framing_only"</code> is required for opinion, spin, motive language, blame, rhetorical characterization, and source interpretation unless a separate factual assertion has direct span support.</li>
+      <li>Claims with <code>modality</code> of <code>alleged</code>, <code>denied</code>, <code>planned</code>, <code>possible</code>, or <code>opinion</code> may be structurally useful, but downstream contradiction must compare modality and attribution before treating them as fact conflicts.</li>
+    </ul>
+
+    <h3>4.2 Entity Contract</h3>
+    <pre>{
+  entity_id: stable_local_id,
+  name: string,
+  canonical_key: string,
+  kind: "person" | "org" | "place" | "product" | "project" | "account" | "agency" | "event" | "document" | "unknown",
+  aliases: [string],
+  role_in_source: "actor" | "affected_party" | "source" | "quoted_source" | "publisher" | "venue" | "subject" | "recipient" | "unknown",
+  evidence_refs: [evidence_ref],
+  confidence: decimal_0_to_1
+}</pre>
+
+    <h3>4.3 Source Stance and Framing Contract</h3>
+    <pre>{
+  stance_id: stable_local_id,
+  stance_kind: "reporting" | "opinion" | "analysis" | "correction" | "denial" | "firsthand_message" | "user_note" | "rumor" | "unknown",
+  target_claim_ids: [stable_local_id],
+  asserted_by: stable_local_id | "publisher" | "unknown",
+  certainty: "high" | "medium" | "low",
+  evidence_refs: [evidence_ref]
+}
+
+{
+  framing_id: stable_local_id,
+  text: string,
+  framing_kind: "blame" | "credit" | "minimization" | "escalation" | "reassurance" | "criticism" | "strategic_spin" | "human_color" | "other",
+  target_claim_ids: [stable_local_id],
+  promoted_to_structural_fact: false,
+  evidence_refs: [evidence_ref],
+  confidence: decimal_0_to_1
+}</pre>
+
+    <h3>4.4 Evidence Span Contract</h3>
+    <pre>{
+  evidence_id: stable_local_id,
+  source: "title" | "body_text" | "extracted_text" | "metadata" | "artifact_text",
+  span_start: integer,
+  span_end: integer,
+  text_hash: string,
+  quote: string,
+  acl: map
+}</pre>
+
+    <ul>
+      <li>Span offsets are byte offsets into the canonical text field used for extraction. If the implementation uses codepoint offsets internally, it must convert or label the offset scheme explicitly.</li>
+      <li><code>quote</code> is a short inspection aid, not a replacement for offsets and hashes.</li>
+      <li>Every claim, entity, time, stance, framing item, and open question has at least one evidence ref unless the whole result is <code>refused</code>.</li>
+      <li>Evidence refs preserve the input ACL. Downstream proposal and authoring paths may only use refs visible to the actor.</li>
+    </ul>
+
+    <h3>4.5 Low-Confidence and Refusal Cases</h3>
+    <pre>{
+  quality: {
+    status: "low_confidence" | "refused",
+    confidence: decimal_0_to_1,
+    reasons: [
+      "no_readable_text",
+      "text_too_short",
+      "boilerplate_only",
+      "unsupported_language",
+      "malformed_input",
+      "ambiguous_scope",
+      "unsafe_to_extract_structural_facts",
+      "extractor_error"
+    ],
+    warnings: [string]
+  },
+  claims: [],
+  entities: [],
+  times: [],
+  source_stance: [],
+  framing: [],
+  questions: [],
+  evidence_index: []
+}</pre>
+
+    <p>Low-confidence/refusal is a successful product behavior when evidence is insufficient. Downstream candidate retrieval may still use raw topic tokens from admission, but no structural facts may be inferred from a refusal.</p>
+  </section>
+
+  <section>
+    <h2>5. Preserving Spin Without Promoting It</h2>
+    <p>Primeradiant needs source perspective because stories are contested and framed. The extractor must preserve that framing while preventing it from mutating structural story facts by accident.</p>
+
+    <table>
+      <thead>
+        <tr><th>Source text pattern</th><th>Extractor treatment</th><th>Downstream effect</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>"Officials blamed early reports for confusion."</td><td>Framing item: blame. Claim only if the source directly says officials made that statement.</td><td>Can feed <code>adds_color</code> or source-stance context; does not overwrite the factual cause of confusion.</td></tr>
+        <tr><td>"The shutdown was avoidable."</td><td>Opinion/framing unless the source provides a specific attributed decision/fact.</td><td>Preserved as color; not a structural fact that the shutdown was avoidable.</td></tr>
+        <tr><td>"The agency denied that service was halted."</td><td>Claim with modality <code>denied</code>, attribution to agency, target fact <code>service_state=halted</code> if span supports it.</td><td>Can become a contradiction candidate only with attribution/modality visible.</td></tr>
+        <tr><td>"A source said talks may resume Friday."</td><td>Claim with modality <code>possible</code> or <code>reported</code>, anonymous attribution, Friday time scope with uncertainty.</td><td>Can inform unresolved/follow-up state; does not become a confirmed schedule.</td></tr>
+        <tr><td>"Commuters stood in the rain waiting for buses."</td><td>Human-color framing plus observable claim if directly stated.</td><td>Can enrich narration if cited; only the observable part may become a structural/background claim.</td></tr>
+      </tbody>
+    </table>
+
+    <h3>5.1 Hard Rules</h3>
+    <ul>
+      <li>Framing items set <code>promoted_to_structural_fact: false</code>. Promotion requires a separate claim with its own evidence span and non-opinion modality.</li>
+      <li>Perspective does not create <code>updates</code>, <code>contradicts</code>, or material deltas by itself. It feeds <code>adds_color</code> unless paired with a structural claim.</li>
+      <li>Source stance is evidence context, not story identity. Opinion articles can contain factual claims; news articles can contain spin. The span and modality decide treatment.</li>
+      <li>Downstream authoring may say "the columnist frames this as..." only from framing evidence. It must not say "the story is..." unless structural claims support it.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>6. Downstream Handoff</h2>
+    <p>The production extractor feeds the already-proven story-semantics path by providing higher-quality, evidence-backed atoms. It does not replace the downstream deciders.</p>
+
+    <table>
+      <thead>
+        <tr><th>Downstream judgment</th><th>Extractor fields used</th><th>Required boundary</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Story identity</td><td>Structural claim candidates, entity canonical keys, event/time scopes, source-thread hints, evidence refs, uncertainty.</td><td>Extractor emits anchors. Candidate retrieval and identity decider choose attach/split/part_of/abstain.</td></tr>
+        <tr><td>Novelty and no-op</td><td>Fact keys/values, claim modality, time scope, evidence hash, source stance, duplicate text hash.</td><td>Extractor does not mark material delta. Projection and story events decide whether a fact is new to story state.</td></tr>
+        <tr><td>Contradiction</td><td>Comparable fact keys/values, polarity, modality, attribution, time scope, uncertainty, correction/denial stance.</td><td>Extractor identifies comparable claims. Conflict logic decides true contradiction versus update-over-time, denial, opinion, or scope difference.</td></tr>
+        <tr><td>Personal relevance</td><td>Entities, projects, deadlines, tasks, participants, private source actor, watchable anchors.</td><td>User watch matcher and relevance projections decide personal importance. Extractor does not boost or rank.</td></tr>
+        <tr><td>Seen-state deltas</td><td>Stable claim IDs, evidence refs, material claim candidates, framing items, questions.</td><td>Authoring and seen-state writers decide what was shown. Extractor does not mark anything seen.</td></tr>
+        <tr><td>Grounded authoring</td><td>Evidence spans, stance, uncertainty, framing, attribution, open questions.</td><td>Authoring may use only visible evidence packets and must preserve uncertainty. Extractor output is not prose-ready truth.</td></tr>
+      </tbody>
+    </table>
+
+    <h3>6.1 Mapping to Existing Real-Ingestion Envelope</h3>
+    <ul>
+      <li><code>claims</code> map to <code>extracted.claims</code> with richer modality, attribution, uncertainty, and time scope.</li>
+      <li><code>entities</code> map to <code>extracted.entities</code>, replacing title-case convenience extraction with role-aware entities.</li>
+      <li><code>source_stance</code> replaces the single posture field when multiple attributions appear in one item.</li>
+      <li><code>framing</code> maps to <code>colors</code> for the current storage vocabulary and later can become perspective nodes if separately specified.</li>
+      <li><code>quality.status = low_confidence/refused</code> maps to downstream <code>abstain</code> or <code>needs_more_evidence</code>. It must not synthesize topic-only facts.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>7. Eval Corpus Shape</h2>
+    <p>The eval corpus is an extractor-quality corpus, not a story-label corpus. It may contain expected outputs for assertions, but production extractor code cannot read expected labels, story IDs, or fixture metadata.</p>
+
+    <h3>7.1 Corpus Packs</h3>
+    <table>
+      <thead>
+        <tr><th>Pack</th><th>Minimum shape</th><th>Must prove</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Public messy articles</td><td>12-18 real-style admitted items with title/body mismatch, boilerplate, correction/update, quote attribution, multi-event article, thin article, and near-miss venues.</td><td>Structural claims, entities, time scopes, source stance, refusal, and near-miss anchors without story hints.</td></tr>
+        <tr><td>Opinion and framing</td><td>6-10 opinion/analysis items that mix factual claims, blame, reassurance, criticism, rumor, and human color.</td><td>Framing preserved as framing; factual claims extracted only when span-supported and modality-correct.</td></tr>
+        <tr><td>Private task threads</td><td>8-12 private messages/emails/user notes with participants, deadlines, unresolved questions, quote/amount changes, duplicate replies, and ACL-only details.</td><td>Task facts, questions, deadlines, participant roles, private evidence ACL, and no public leakage.</td></tr>
+        <tr><td>Temporal and contradiction stress</td><td>8-12 items with "today", "tomorrow", old retrieved pages, current-versus-morning scopes, denial, correction, update-over-time, and negation.</td><td>Time normalization, modality, polarity, and contradiction-ready fact scopes.</td></tr>
+        <tr><td>Low-confidence/refusal</td><td>6-10 thin, malformed, boilerplate-only, unsupported-language, or ambiguous-scope items.</td><td>Refusal and low-confidence behavior is preferred over invented claims.</td></tr>
+        <tr><td>Downstream integration pack</td><td>10-14 items from the existing hard knowledge eval shape, rewritten as messier real text with no grammar shortcuts.</td><td>Extractor output still drives identity, novelty, contradiction, personal relevance, and seen-state judgments through the existing path.</td></tr>
+      </tbody>
+    </table>
+
+    <h3>7.2 Fixture Discipline</h3>
+    <ul>
+      <li>Inputs may have stable test IDs for file management, but extractor code cannot read IDs, paths, filenames, expected artifacts, story labels, or answer keys.</li>
+      <li>Expected outputs live only under eval assertion files and are loaded after extraction. They are never available to the extractor, prompt, candidate retrieval, proposal builder, or downstream decision code.</li>
+      <li>Each eval item includes source text, source metadata, ACL, retrieval/observed timestamps, and optional raw artifact text. It does not include trusted story identity.</li>
+      <li>At least 25 percent of corpus items must be negative or partial cases where the right behavior is low-confidence, refusal, framing-only, no-op, or no structural claim.</li>
+      <li>The corpus must include adversarial examples where a title, source URL, or external ID suggests the wrong answer.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>8. Acceptance Gates</h2>
+    <p>T321 passes only when extractor output quality is sufficient to feed the proven story-semantics path without labels or demo shortcuts.</p>
+
+    <h3>8.1 Contract Gates</h3>
+    <ol class="tight">
+      <li>Every extractor result validates against <code>production_extractor_v1</code>.</li>
+      <li>Every non-refused claim, entity, time, stance, framing item, and question has evidence refs with valid spans and input ACL.</li>
+      <li>Every structural claim has fact key/value or an explicit reason it is not comparable yet.</li>
+      <li>Every claim has polarity, modality, attribution, time scope, uncertainty, and downstream use.</li>
+      <li>Low-confidence/refusal outputs contain no structural claims and produce downstream <code>abstain</code> or <code>needs_more_evidence</code>.</li>
+      <li>Private evidence refs are unavailable to unauthorized actors in retrieval, proposals, authoring, and eval inspection.</li>
+    </ol>
+
+    <h3>8.2 Quality Gates</h3>
+    <ol class="tight">
+      <li>Claim extraction precision on gold structural facts is at least 0.85; recall is at least 0.75 on answerable claims. Refusals and explicitly unanswerable items are excluded from recall denominator but counted in refusal accuracy.</li>
+      <li>Entity extraction precision is at least 0.85 for story-relevant entities and at least 0.80 for role assignment.</li>
+      <li>Time-scope normalization accuracy is at least 0.80 on answerable temporal claims, with relative-date basis recorded.</li>
+      <li>Source stance/modality classification accuracy is at least 0.85 for opinion, correction, denial, quote/allegation, and reporting cases.</li>
+      <li>Framing preservation accuracy is at least 0.85: spin/framing is captured when present and not promoted to structural fact.</li>
+      <li>Low-confidence/refusal accuracy is at least 0.90 on thin, malformed, boilerplate-only, and unsupported cases.</li>
+      <li>False structural fact rate from boilerplate, headlines unsupported by body, quoted rumors, and opinion framing is below 0.05.</li>
+    </ol>
+
+    <h3>8.3 Downstream Integration Gates</h3>
+    <ol class="tight">
+      <li>Extractor output drives all existing decision categories at least once: attach, split, part_of, conflict, no_op, color, stale, and abstain/needs_more_evidence.</li>
+      <li>Near-miss items split when identity anchors differ by venue, actor, time scope, or affected group.</li>
+      <li>Meaningful repeats attach when they add a new question, actor, deadline, amount, or other material claim; exact repeats stay no-op.</li>
+      <li>Contradiction checks use extracted fact key/value, polarity, modality, attribution, and compatible time scope, not correction keywords alone.</li>
+      <li>Opinion/framing items produce <code>adds_color</code> behavior and do not advance <code>last_material_at</code> unless a separate structural claim is extracted.</li>
+      <li>A low-global-rank private/user-watch item can still become personally relevant through watch matching, but extractor output itself does not rank it.</li>
+      <li>After a verified authored output, a second delta includes only unseen material claims and watched updates; it excludes no-op repeats and spin-only items.</li>
+      <li>Proof harness, storage harness, and Postgres schema validation remain green after integrating extractor output.</li>
+    </ol>
+
+    <h3>8.4 Forbidden Pass Conditions</h3>
+    <ul>
+      <li>Any extractor behavior branches on fixture ID, filename, external ID pattern, story hint, expected role, expected story, expected classification, or eval answer key.</li>
+      <li>A regex or prompt is tailored to the eval nouns instead of the contract: ferry, roof, civic clinic, basement, bridge, summit, or any future corpus-specific names.</li>
+      <li>A claim is accepted without evidence spans because it "looks right" from the title or source metadata.</li>
+      <li>A quote, allegation, denial, or opinion is stored as publisher-asserted structural fact without modality/attribution.</li>
+      <li>A thin item is forced into a structural claim to keep downstream story identity tests passing.</li>
+      <li>Downstream code compensates for extractor weakness by adding story-specific heuristics outside the extractor contract.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>9. Exact Next Implementation Slice</h2>
+    <p>The next slice after this spec is a production-extractor contract and eval path inside the current harness boundary. It is not a connector, daemon, UI, deployment, ranking, or merge task.</p>
+
+    <ol>
+      <li>Add a <code>Primeradiant.Extraction</code> boundary in the storage harness or next Phoenix context with <code>extract(input, opts) :: {:ok, extraction_result} | {:error, changeset}</code>.</li>
+      <li>Define <code>production_extractor_v1</code> JSON Schema or Ecto embedded schemas for extractor result, claim, entity, time, source stance, framing, evidence span, quality status, uncertainty, and refusal reasons.</li>
+      <li>Store extractor output under the existing input normalization/provenance path with <code>extractor_version</code>, <code>contract_version</code>, trace metadata, and immutable source evidence hashes.</li>
+      <li>Create the extractor eval corpus under the shared primeradiant harness area with the six packs in section 7. Expected outputs must be assertion-only and unavailable during extraction.</li>
+      <li>Implement the first extractor behind the contract. It may combine deterministic parsing and model-assisted structured output, but it must validate every result and abstain/refuse instead of inventing unsupported structure.</li>
+      <li>Replace downstream use of <code>RealNormalizer</code> convenience grammar in the integration eval with the production extractor result adapter. Keep old fixture/proof paths isolated as regression harnesses only.</li>
+      <li>Add eval tests for contract gates, quality gates, forbidden pass conditions, and downstream integration gates. Include tests that fail if code reads fixture labels, story hints, filenames, or expected artifacts.</li>
+      <li>Run storage harness tests, proof harness tests, extractor eval tests, and live Postgres schema validation before reporting readiness for Flynn verification.</li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>10. Implementation Handoff Boundaries</h2>
+    <ul>
+      <li>Implement exactly the extractor contract and eval path above. Do not add connectors, acquisition loops, UI, ranking/headliner behavior, daemon/runtime shell, deploy scripts, or merge workflow.</li>
+      <li>Do not infer product truth from current code convenience. Existing regex grammar is evidence of a tested boundary, not evidence of broad extraction quality.</li>
+      <li>If a required field cannot be represented in the current normalized payload, stop and amend this spec or the storage spec. Do not hide the field in ambiguous maps without a named contract.</li>
+      <li>If model output is used, every model response is hostile until schema validation, span validation, evidence visibility checks, and confidence/uncertainty checks pass.</li>
+      <li>If eval quality misses a gate, report the miss. Do not tune the corpus, remove hard items, or add item-specific shortcuts to pass.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>11. Internal Adversarial Review</h2>
+    <table>
+      <thead>
+        <tr><th>Review question</th><th>Result</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Does the spec answer the product question directly?</td><td><span class="ok">Pass.</span> It defines how messy inputs become trustworthy, evidence-backed story facts without labels or shortcuts.</td></tr>
+        <tr><td>Does it preserve the architecture boundary?</td><td><span class="ok">Pass.</span> The extractor emits anchors and evidence. Story identity, novelty, contradiction, personal relevance, seen-state, authoring, and commits remain downstream.</td></tr>
+        <tr><td>Does it accidentally add connectors, daemon/runtime shell, UI, ranking, swarm scaling, deploy, or merge?</td><td><span class="ok">Pass.</span> These are explicit non-goals and forbidden handoff scope.</td></tr>
+        <tr><td>Does it promote spin/framing into fact?</td><td><span class="ok">Pass.</span> Framing is first-class and defaults to non-structural. Promotion requires separate span-backed claim evidence and modality.</td></tr>
+        <tr><td>Does it allow fixture or demo cheating?</td><td><span class="ok">Pass with test burden.</span> It forbids fixture labels, answer keys, filenames, story hints, corpus-specific nouns, and downstream compensation shortcuts.</td></tr>
+        <tr><td>Does it overclaim production readiness?</td><td><span class="ok">Pass.</span> The artifact is a source-of-truth spec and marks broad extraction quality as the next thing to prove, not already proven.</td></tr>
+        <tr><td>Is the eval gate too vague?</td><td><span class="warn">Residual risk.</span> Numeric thresholds are concrete, but final corpus difficulty and gold-label policy will determine whether they are meaningful enough. The next implementation must preserve hard negative cases.</td></tr>
+        <tr><td>Can the current storage envelope carry every field?</td><td><span class="warn">Residual risk.</span> Most fields fit normalized JSON/provenance today, but span offset scheme, source stance multiplicity, and immutable extraction versions may need stricter schema in the implementation slice.</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>12. Readiness Verdict and Gaps</h2>
+    <div class="callout">
+      <p><strong>Verdict:</strong> ready for Flynn verification as the T321 source-of-truth spec. No blocker remains in the spec artifact.</p>
+    </div>
+    <div class="callout risk">
+      <p><strong>Remaining implementation risk:</strong> production extraction quality is not proven until the eval corpus exists and the implementation passes the contract, quality, forbidden-pass, and downstream integration gates without fixture labels or corpus-specific shortcuts.</p>
+    </div>
+    <div class="callout risk">
+      <p><strong>Remaining schema risk:</strong> if implementation needs first-class tables for extraction runs, evidence spans, or source stance arrays, that must be specified explicitly before broadening storage behavior.</p>
+    </div>
+  </section>
+</main>
+</body>
+</html>

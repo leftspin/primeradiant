@@ -1,0 +1,9 @@
+{
+  "fixture_id": "public_story_006_near_duplicate_overlap",
+  "source_type": "news_article",
+  "external_id": "fixture:public:006",
+  "observed_at": "2026-05-04T08:00:00-07:00",
+  "title": "Morning bulletin repeats Harbor ferry normal-service correction",
+  "acl": {"privacy": "public"},
+  "body_text": "A morning bulletin repeated the harbor ferry correction: the strike is resolved, crossings are normal, and overnight service was never suspended."
+}

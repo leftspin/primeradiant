@@ -1,0 +1,3 @@
+WARNING: proceeding, even though we could not update PATH: Operation not permitted (os error 1)
+Reading additional input from stdin...
+Not inside a trusted directory and --skip-git-repo-check was not specified.

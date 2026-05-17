@@ -1,0 +1,99 @@
+Primeradiant hard knowledge eval review
+Date: 2026-05-17
+Scope: storage-harness bounded eval slice only
+
+Source docs reviewed:
+- specs/primeradiant-real-ingestion-story-identity.html
+- specs/primeradiant-storage-schema-hardening.html
+- product/primeradiant-fixture-corpus-plan.html
+- product/primeradiant-mvp-slice.html
+
+Verdict:
+SATISFIED for the bounded storage-harness knowledge-work eval. The eval now exercises
+story-intelligence behavior from real-style source items and committed evidence,
+not fixture-trusted story ids, story hints, expected labels, or seeded graph truth.
+
+Requirement matrix:
+- Real-style source items without fixture-trusted identity input: SATISFIED.
+  The hard pack builds manual_real_ingest_v1 source items with fixture_id nil and
+  no trusted story hints; expected behavior exists only in assertions.
+- Same-story vs nearby-story: SATISFIED.
+  Civic Clinic north and south near-miss items split into distinct stories, while
+  the later south follow-up attaches to the south story rather than creating a
+  third story or merging into north.
+- Novelty vs repetition: SATISFIED.
+  Exact repeated civic facts classify no_op and do not advance material story
+  state; repeated base facts plus new question/speaker/deadline attach as
+  material updates.
+- Contradiction vs framing: SATISFIED.
+  Triage open/closed creates a scoped conflict, unchanged hours do not create a
+  false conflict, and opinion framing is stored as color/adds_color without
+  structural fact mutation.
+- Stale/no-op vs meaningful update: SATISFIED.
+  Background check-ins classify stale, exact repeats classify no_op, and later
+  speaker/deadline/basement deadline changes render as material deltas.
+- Low-global/high-personal relevance: SATISFIED.
+  A manual Flynn watch commits watch_applies_to provenance and causes the
+  basement sensor story to render first with a [watch] marker.
+- Per-user relevance isolation: SATISFIED.
+  A non-Flynn render after Flynn's watch has no [watch] boosted bullets.
+- Grounded "what changed for Flynn": SATISFIED.
+  KnowledgeWork records verified authored outputs and units with evidence refs
+  and claim refs, then marks seen state from those grounded units.
+- Per-user seen-state deltas: SATISFIED.
+  The second Flynn delta includes multiple unseen material updates after the
+  first seen mark and excludes no-op/spin items.
+- Proposal/evidence/commit provenance: SATISFIED.
+  Watch attachments and authored-output verification go through pending proposal,
+  accepted decision, committed op, graph commit, and evidence refs; existing
+  storage gates continue to assert graph rows have provenance.
+- ACL-aware retrieval/arbitration: SATISFIED for existing real-ingestion coverage.
+  The hard pack does not broaden private ACL cases, but the existing tests still
+  cover private candidate retrieval and unauthorized evidence rejection.
+- Connectors, UI, ranking/headliners, swarm scaling, runtime shell, deployment:
+  OUT-OF-SCOPE by user instruction and not added.
+
+Unproven or residual product risk:
+- Broad real-world extraction quality remains UNPROVEN. The harness uses a
+  deterministic bounded normalizer/eval grammar, not a production extractor.
+- Runtime row persistence remains non-DB-backed in the hard eval execution path.
+  The migration SQL is separately live-validated by scripts/validate_postgres_schema.sh.
+- The authored delta header is Flynn-oriented by design of this slice; generic
+  multi-user copy quality is outside this eval.
+
+Review cycle:
+- Initial implementation review found three blocking issues:
+  1. Candidate choice used first compatible candidate and could split a third
+     story instead of attaching the south follow-up to the existing south story.
+  2. Seen-state rendering collapsed to the latest story event and marked all
+     current refs, which could skip earlier unseen material updates.
+  3. Watch relevance was global rather than user-specific.
+- Fixes applied:
+  1. StoryIdentity.Decider now scores candidates and carries abstained
+     alternatives from all candidates.
+  2. KnowledgeWork renders one bullet per unseen material event and marks only
+     refs grounded in authored output units.
+  3. Watch relevance checks the owning watch user_id before applying [watch].
+- Post-fix focused review/self-review against the four source docs found no
+  remaining blocker in the bounded knowledge-work eval. An attempted nested
+  external Codex post-fix review confirmed the visible fixes, then failed to
+  complete a second nested review because /Users/mike/.codex/sessions was not
+  writable in that subprocess; that tooling failure did not change the code
+  verdict.
+
+Engram:
+- Queried engram explain for StoryIdentity.Candidates, StoryIdentity.Decider,
+  and StorageHarness.KnowledgeWork. Candidates/Decider returned no relevant
+  provenance. KnowledgeWork returned unrelated low-confidence subspace sessions,
+  so Engram did not materially influence this implementation.
+
+Verification:
+- cd /Users/mike/shared-workspace/primeradiant/storage-harness &&
+  /opt/homebrew/bin/mix clean && /opt/homebrew/bin/mix test
+  Result: 23 tests, 0 failures.
+- cd /Users/mike/shared-workspace/primeradiant/proof-harness &&
+  /opt/homebrew/bin/mix test
+  Result: 11 tests, 0 failures.
+- cd /Users/mike/shared-workspace/primeradiant/storage-harness &&
+  scripts/validate_postgres_schema.sh
+  Result: postgres_schema_validation_ok; validated isolated database on host /tmp.

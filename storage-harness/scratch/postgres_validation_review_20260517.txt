@@ -1,0 +1,36 @@
+Primeradiant storage Postgres validation review
+Date: 2026-05-17
+Scope: /Users/mike/shared-workspace/primeradiant/storage-harness
+Spec: /Users/mike/shared-workspace/primeradiant/specs/primeradiant-storage-schema-hardening.html
+
+Review result: No blockers remain.
+
+Reviewed slice:
+- Live Postgres validation of priv/repo/migrations/20260517000000_create_storage_schema.sql.
+- Non-persistent path only: scripts/validate_postgres_schema.sh creates an isolated database, applies the migration SQL, runs targeted validation SQL, and drops the database via trap cleanup.
+- No package installation, launchd/systemd/cron/service changes, deploy, connectors, ranking/headliners, swarm work, UI, or real ingestion.
+
+Validation coverage:
+- All 18 required storage tables exist.
+- Required hardening triggers exist and are exercised behaviorally.
+- Selected hardening indexes exist.
+- Graph commits reject pre-acceptance commits.
+- Graph commits reject accepted proposals without accepted proposal_decisions.
+- Graph commits accept only after proposal accepted, op committed, and accepted decision recorded.
+- edges rejects unsupported/generic related edge type and accepts supported edge type.
+- evidence_refs enforces subject_type allowlist and graph_commit subject/proposal/op contract.
+- seen_states rejects unverified authored output and accepts verified output.
+
+Reviewer residual risks:
+- Validation checks selected hardening indexes, not every index named in the full spec.
+- Function existence is validated behaviorally through trigger execution, not by direct pg_proc name checks.
+- The script defaults to the Homebrew Postgres 16.13 binary path, with PSQL/CREATEDB/DROPDB overrides available.
+- The workspace root is not a Git checkout, so review was against current files rather than an isolated diff.
+
+Verification:
+- scripts/validate_postgres_schema.sh
+  Result: postgres_schema_validation_ok; validated isolated primeradiant_storage_validation_* database on host /tmp; no leftover validation DBs.
+- cd /Users/mike/shared-workspace/primeradiant/storage-harness && /opt/homebrew/bin/mix clean && /opt/homebrew/bin/mix test
+  Result: 14 tests, 0 failures.
+- cd /Users/mike/shared-workspace/primeradiant/proof-harness && /opt/homebrew/bin/mix test
+  Result: 11 tests, 0 failures.

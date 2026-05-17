@@ -1,0 +1,973 @@
+defmodule Primeradiant.StorageHarness.Schema do
+  @moduledoc false
+
+  defmacro __using__(_opts) do
+    quote do
+      use Ecto.Schema
+      import Ecto.Changeset
+
+      @primary_key {:id, :binary_id, autogenerate: false}
+      @foreign_key_type :binary_id
+
+      defp put_id(changeset),
+        do: put_change(changeset, :id, get_field(changeset, :id) || Ecto.UUID.generate())
+
+      defp validate_confidence(changeset, field \\ :confidence) do
+        changeset
+        |> validate_number(field, greater_than_or_equal_to: Decimal.new("0"))
+        |> validate_number(field, less_than_or_equal_to: Decimal.new("1"))
+      end
+
+      defp validate_non_empty_list(changeset, field) do
+        value = get_field(changeset, field)
+
+        if is_list(value) and value != [] do
+          changeset
+        else
+          add_error(changeset, field, "must be a non-empty list")
+        end
+      end
+    end
+  end
+end
+
+defmodule Primeradiant.StorageHarness.Input do
+  use Primeradiant.StorageHarness.Schema
+
+  schema "inputs" do
+    field(:tenant_id, :binary_id)
+    field(:fixture_id, :string)
+    field(:source_type, :string)
+    field(:external_id, :string)
+    field(:observed_at, :utc_datetime_usec)
+    field(:title, :string)
+    field(:body_text, :string)
+    field(:object_uri, :string)
+    field(:content_sha256, :string)
+    field(:acl, :map, default: %{})
+    field(:normalized, :map, default: %{})
+    field(:facts, :map, default: %{})
+    field(:background, :map, default: %{})
+    field(:questions, :map, default: %{})
+    field(:colors, {:array, :string}, default: [])
+    field(:topic_tokens, {:array, :string}, default: [])
+    timestamps(type: :utc_datetime_usec)
+  end
+
+  def changeset(struct \\ %__MODULE__{}, attrs) do
+    struct
+    |> cast(attrs, [
+      :id,
+      :tenant_id,
+      :fixture_id,
+      :source_type,
+      :external_id,
+      :observed_at,
+      :title,
+      :body_text,
+      :object_uri,
+      :content_sha256,
+      :acl,
+      :normalized,
+      :facts,
+      :background,
+      :questions,
+      :colors,
+      :topic_tokens
+    ])
+    |> put_id()
+    |> validate_required([
+      :tenant_id,
+      :source_type,
+      :external_id,
+      :observed_at,
+      :content_sha256,
+      :acl,
+      :normalized,
+      :facts,
+      :background,
+      :questions,
+      :colors,
+      :topic_tokens
+    ])
+  end
+end
+
+defmodule Primeradiant.StorageHarness.AgentRun do
+  use Primeradiant.StorageHarness.Schema
+
+  schema "agent_runs" do
+    field(:tenant_id, :binary_id)
+    field(:agent_run_key, :string)
+    field(:agent_type, :string)
+    field(:prompt_version, :string)
+    field(:model, :string)
+    field(:scope, :map, default: %{})
+    field(:status, :string, default: "succeeded")
+    field(:trace_id, :string)
+    field(:started_at, :utc_datetime_usec)
+    field(:ended_at, :utc_datetime_usec)
+    timestamps(type: :utc_datetime_usec)
+  end
+
+  def changeset(struct \\ %__MODULE__{}, attrs) do
+    struct
+    |> cast(attrs, [
+      :id,
+      :tenant_id,
+      :agent_run_key,
+      :agent_type,
+      :prompt_version,
+      :model,
+      :scope,
+      :status,
+      :trace_id,
+      :started_at,
+      :ended_at
+    ])
+    |> put_id()
+    |> validate_required([:tenant_id, :agent_run_key, :agent_type, :scope, :status])
+    |> validate_inclusion(:status, ["succeeded", "failed", "running"])
+  end
+end
+
+defmodule Primeradiant.StorageHarness.Watch do
+  use Primeradiant.StorageHarness.Schema
+
+  schema "watches" do
+    field(:tenant_id, :binary_id)
+    field(:user_id, :string)
+    field(:watch_key, :string)
+    field(:intent, :string)
+    field(:priority, :integer, default: 0)
+    field(:match_any, {:array, :string}, default: [])
+    field(:filters, :map, default: %{})
+    field(:status, :string, default: "active")
+    field(:attrs, :map, default: %{})
+    timestamps(type: :utc_datetime_usec)
+  end
+
+  def changeset(struct \\ %__MODULE__{}, attrs) do
+    struct
+    |> cast(attrs, [
+      :id,
+      :tenant_id,
+      :user_id,
+      :watch_key,
+      :intent,
+      :priority,
+      :match_any,
+      :filters,
+      :status,
+      :attrs
+    ])
+    |> put_id()
+    |> validate_required([
+      :tenant_id,
+      :user_id,
+      :watch_key,
+      :intent,
+      :priority,
+      :match_any,
+      :filters,
+      :status,
+      :attrs
+    ])
+    |> validate_inclusion(:status, ["active", "paused"])
+  end
+end
+
+defmodule Primeradiant.StorageHarness.Story do
+  use Primeradiant.StorageHarness.Schema
+
+  schema "stories" do
+    field(:tenant_id, :binary_id)
+    field(:story_key, :string)
+    field(:title, :string)
+    field(:state, :string, default: "active")
+    field(:version, :integer, default: 0)
+    field(:first_observed_at, :utc_datetime_usec)
+    field(:updated_at_story, :utc_datetime_usec)
+    field(:last_material_at, :utc_datetime_usec)
+    field(:structural_facts, :map, default: %{})
+    field(:background_facts, :map, default: %{})
+    field(:colors, {:array, :string}, default: [])
+    field(:questions, :map, default: %{})
+    field(:topic_tokens, {:array, :string}, default: [])
+    field(:attrs, :map, default: %{})
+    timestamps(type: :utc_datetime_usec)
+  end
+
+  def changeset(struct \\ %__MODULE__{}, attrs) do
+    struct
+    |> cast(attrs, [
+      :id,
+      :tenant_id,
+      :story_key,
+      :title,
+      :state,
+      :version,
+      :first_observed_at,
+      :updated_at_story,
+      :last_material_at,
+      :structural_facts,
+      :background_facts,
+      :colors,
+      :questions,
+      :topic_tokens,
+      :attrs
+    ])
+    |> put_id()
+    |> validate_required([
+      :tenant_id,
+      :story_key,
+      :title,
+      :state,
+      :version,
+      :first_observed_at,
+      :updated_at_story,
+      :structural_facts,
+      :background_facts,
+      :colors,
+      :questions,
+      :topic_tokens,
+      :attrs
+    ])
+    |> validate_inclusion(:state, ["active", "background", "stale", "resolved"])
+    |> validate_number(:version, greater_than_or_equal_to: 0)
+  end
+end
+
+defmodule Primeradiant.StorageHarness.Proposal do
+  use Primeradiant.StorageHarness.Schema
+
+  schema "proposals" do
+    field(:tenant_id, :binary_id)
+    field(:proposal_key, :string)
+    field(:agent_run_id, :binary_id)
+    field(:actor_id, :string)
+    field(:story_id, :binary_id)
+    field(:fixture_id, :string)
+    field(:classification, :string)
+    field(:confidence, :decimal)
+    field(:rationale, :string)
+    field(:status, :string, default: "pending")
+    timestamps(type: :utc_datetime_usec)
+  end
+
+  def changeset(struct \\ %__MODULE__{}, attrs) do
+    struct
+    |> cast(attrs, [
+      :id,
+      :tenant_id,
+      :proposal_key,
+      :agent_run_id,
+      :actor_id,
+      :story_id,
+      :fixture_id,
+      :classification,
+      :confidence,
+      :rationale,
+      :status
+    ])
+    |> put_id()
+    |> validate_required([
+      :tenant_id,
+      :proposal_key,
+      :agent_run_id,
+      :actor_id,
+      :classification,
+      :confidence,
+      :rationale,
+      :status
+    ])
+    |> validate_inclusion(:status, [
+      "pending",
+      "accepted",
+      "accepted_weak",
+      "rejected",
+      "needs_more_evidence"
+    ])
+    |> validate_confidence()
+  end
+end
+
+defmodule Primeradiant.StorageHarness.ProposalOp do
+  use Primeradiant.StorageHarness.Schema
+
+  @allowed ~w(create_input create_story attach_input merge_facts merge_background append_colors add_questions record_conflicts attach_watch attach_story_part_of mark_state mark_last_seen_input record_event)
+
+  schema "proposal_ops" do
+    field(:tenant_id, :binary_id)
+    field(:proposal_id, :binary_id)
+    field(:position, :integer)
+    field(:op_type, :string)
+    field(:payload, :map, default: %{})
+    field(:evidence_refs, {:array, :map}, default: [])
+    field(:confidence, :decimal)
+    field(:status, :string, default: "pending")
+    field(:committed_at, :utc_datetime_usec)
+    timestamps(type: :utc_datetime_usec)
+  end
+
+  def changeset(struct \\ %__MODULE__{}, attrs) do
+    struct
+    |> cast(attrs, [
+      :id,
+      :tenant_id,
+      :proposal_id,
+      :position,
+      :op_type,
+      :payload,
+      :evidence_refs,
+      :confidence,
+      :status,
+      :committed_at
+    ])
+    |> put_id()
+    |> validate_required([
+      :tenant_id,
+      :proposal_id,
+      :position,
+      :op_type,
+      :payload,
+      :evidence_refs,
+      :confidence,
+      :status
+    ])
+    |> validate_inclusion(:op_type, @allowed)
+    |> validate_inclusion(:status, [
+      "pending",
+      "accepted",
+      "accepted_weak",
+      "rejected",
+      "needs_more_evidence",
+      "committed"
+    ])
+    |> validate_number(:position, greater_than_or_equal_to: 0)
+    |> validate_confidence()
+    |> validate_non_empty_list(:evidence_refs)
+  end
+end
+
+defmodule Primeradiant.StorageHarness.ProposalDecision do
+  use Primeradiant.StorageHarness.Schema
+
+  schema "proposal_decisions" do
+    field(:tenant_id, :binary_id)
+    field(:proposal_id, :binary_id)
+    field(:from_status, :string)
+    field(:to_status, :string)
+    field(:actor_type, :string)
+    field(:actor_id, :string)
+    field(:evidence_refs, {:array, :map}, default: [])
+    field(:confidence, :decimal)
+    field(:rationale, :string)
+    timestamps(updated_at: false, type: :utc_datetime_usec)
+  end
+
+  def changeset(struct \\ %__MODULE__{}, attrs) do
+    struct
+    |> cast(attrs, [
+      :id,
+      :tenant_id,
+      :proposal_id,
+      :from_status,
+      :to_status,
+      :actor_type,
+      :actor_id,
+      :evidence_refs,
+      :confidence,
+      :rationale
+    ])
+    |> put_id()
+    |> validate_required([
+      :tenant_id,
+      :proposal_id,
+      :from_status,
+      :to_status,
+      :actor_type,
+      :actor_id,
+      :evidence_refs,
+      :confidence
+    ])
+    |> validate_inclusion(:to_status, [
+      "accepted",
+      "accepted_weak",
+      "rejected",
+      "needs_more_evidence"
+    ])
+    |> validate_confidence()
+    |> validate_non_empty_list(:evidence_refs)
+  end
+end
+
+defmodule Primeradiant.StorageHarness.GraphCommit do
+  use Primeradiant.StorageHarness.Schema
+
+  schema "graph_commits" do
+    field(:tenant_id, :binary_id)
+    field(:proposal_id, :binary_id)
+    field(:proposal_op_id, :binary_id)
+    field(:commit_type, :string)
+    field(:committed_by_type, :string)
+    field(:committed_by_id, :string)
+    field(:evidence_refs, {:array, :map}, default: [])
+    field(:confidence, :decimal)
+    timestamps(updated_at: false, type: :utc_datetime_usec)
+  end
+
+  def changeset(struct \\ %__MODULE__{}, attrs) do
+    struct
+    |> cast(attrs, [
+      :id,
+      :tenant_id,
+      :proposal_id,
+      :proposal_op_id,
+      :commit_type,
+      :committed_by_type,
+      :committed_by_id,
+      :evidence_refs,
+      :confidence
+    ])
+    |> put_id()
+    |> validate_required([
+      :tenant_id,
+      :proposal_id,
+      :proposal_op_id,
+      :commit_type,
+      :committed_by_type,
+      :committed_by_id,
+      :evidence_refs,
+      :confidence
+    ])
+    |> validate_confidence()
+    |> validate_non_empty_list(:evidence_refs)
+  end
+end
+
+defmodule Primeradiant.StorageHarness.SoupNode do
+  use Primeradiant.StorageHarness.Schema
+
+  @types ~w(input story claim entity user_watch authored_output)
+
+  schema "soup_nodes" do
+    field(:tenant_id, :binary_id)
+    field(:node_key, :string)
+    field(:node_type, :string)
+    field(:title, :string)
+    field(:state, :string, default: "active")
+    field(:input_id, :binary_id)
+    field(:story_id, :binary_id)
+    field(:watch_id, :binary_id)
+    field(:authored_output_id, :binary_id)
+    field(:proposal_id, :binary_id)
+    field(:proposal_op_id, :binary_id)
+    field(:graph_commit_id, :binary_id)
+    field(:confidence, :decimal)
+    field(:attrs, :map, default: %{})
+    timestamps(type: :utc_datetime_usec)
+  end
+
+  def changeset(struct \\ %__MODULE__{}, attrs) do
+    struct
+    |> cast(attrs, [
+      :id,
+      :tenant_id,
+      :node_key,
+      :node_type,
+      :title,
+      :state,
+      :input_id,
+      :story_id,
+      :watch_id,
+      :authored_output_id,
+      :proposal_id,
+      :proposal_op_id,
+      :graph_commit_id,
+      :confidence,
+      :attrs
+    ])
+    |> put_id()
+    |> validate_required([
+      :tenant_id,
+      :node_key,
+      :node_type,
+      :title,
+      :state,
+      :proposal_id,
+      :proposal_op_id,
+      :graph_commit_id,
+      :confidence,
+      :attrs
+    ])
+    |> validate_inclusion(:node_type, @types)
+    |> validate_inclusion(:state, ["active", "background", "stale", "resolved"])
+    |> validate_confidence()
+  end
+end
+
+defmodule Primeradiant.StorageHarness.Edge do
+  use Primeradiant.StorageHarness.Schema
+
+  @types ~w(supports updates duplicates contradicts adds_color part_of watch_applies_to)
+
+  schema "edges" do
+    field(:tenant_id, :binary_id)
+    field(:from_node_id, :binary_id)
+    field(:to_node_id, :binary_id)
+    field(:edge_type, :string)
+    field(:status, :string, default: "committed")
+    field(:confidence, :decimal)
+    field(:proposal_id, :binary_id)
+    field(:proposal_op_id, :binary_id)
+    field(:graph_commit_id, :binary_id)
+    field(:attrs, :map, default: %{})
+    timestamps(type: :utc_datetime_usec)
+  end
+
+  def changeset(struct \\ %__MODULE__{}, attrs) do
+    struct
+    |> cast(attrs, [
+      :id,
+      :tenant_id,
+      :from_node_id,
+      :to_node_id,
+      :edge_type,
+      :status,
+      :confidence,
+      :proposal_id,
+      :proposal_op_id,
+      :graph_commit_id,
+      :attrs
+    ])
+    |> put_id()
+    |> validate_required([
+      :tenant_id,
+      :from_node_id,
+      :to_node_id,
+      :edge_type,
+      :status,
+      :confidence,
+      :proposal_id,
+      :proposal_op_id,
+      :graph_commit_id,
+      :attrs
+    ])
+    |> validate_inclusion(:edge_type, @types)
+    |> validate_exclusion(:edge_type, ["related"])
+    |> validate_inclusion(:status, ["committed"])
+    |> validate_confidence()
+  end
+end
+
+defmodule Primeradiant.StorageHarness.StoryFactVersion do
+  use Primeradiant.StorageHarness.Schema
+
+  schema "story_fact_versions" do
+    field(:tenant_id, :binary_id)
+    field(:story_id, :binary_id)
+    field(:claim_node_id, :binary_id)
+    field(:fact_key, :string)
+    field(:fact_value, :string)
+    field(:time_scope, :string, default: "current")
+    field(:status, :string, default: "current")
+    field(:proposal_id, :binary_id)
+    field(:proposal_op_id, :binary_id)
+    field(:graph_commit_id, :binary_id)
+    field(:input_id, :binary_id)
+    field(:confidence, :decimal)
+    field(:replaced_fact_version_id, :binary_id)
+    field(:observed_at, :utc_datetime_usec)
+    timestamps(updated_at: false, type: :utc_datetime_usec)
+  end
+
+  def changeset(struct \\ %__MODULE__{}, attrs) do
+    struct
+    |> cast(attrs, [
+      :id,
+      :tenant_id,
+      :story_id,
+      :claim_node_id,
+      :fact_key,
+      :fact_value,
+      :time_scope,
+      :status,
+      :proposal_id,
+      :proposal_op_id,
+      :graph_commit_id,
+      :input_id,
+      :confidence,
+      :replaced_fact_version_id,
+      :observed_at
+    ])
+    |> put_id()
+    |> validate_required([
+      :tenant_id,
+      :story_id,
+      :fact_key,
+      :fact_value,
+      :time_scope,
+      :status,
+      :proposal_id,
+      :proposal_op_id,
+      :graph_commit_id,
+      :input_id,
+      :confidence,
+      :observed_at
+    ])
+    |> validate_inclusion(:status, ["current", "replaced"])
+    |> validate_confidence()
+  end
+end
+
+defmodule Primeradiant.StorageHarness.StoryEvent do
+  use Primeradiant.StorageHarness.Schema
+
+  schema "story_events" do
+    field(:tenant_id, :binary_id)
+    field(:story_id, :binary_id)
+    field(:input_id, :binary_id)
+    field(:classification, :string)
+    field(:story_version, :integer)
+    field(:changed_facts, :map, default: %{})
+    field(:observed_at, :utc_datetime_usec)
+    field(:proposal_id, :binary_id)
+    field(:proposal_op_id, :binary_id)
+    field(:graph_commit_id, :binary_id)
+    field(:confidence, :decimal)
+    timestamps(updated_at: false, type: :utc_datetime_usec)
+  end
+
+  def changeset(struct \\ %__MODULE__{}, attrs) do
+    struct
+    |> cast(attrs, [
+      :id,
+      :tenant_id,
+      :story_id,
+      :input_id,
+      :classification,
+      :story_version,
+      :changed_facts,
+      :observed_at,
+      :proposal_id,
+      :proposal_op_id,
+      :graph_commit_id,
+      :confidence
+    ])
+    |> put_id()
+    |> validate_required([
+      :tenant_id,
+      :story_id,
+      :input_id,
+      :classification,
+      :story_version,
+      :changed_facts,
+      :observed_at,
+      :proposal_id,
+      :proposal_op_id,
+      :graph_commit_id,
+      :confidence
+    ])
+    |> validate_confidence()
+  end
+end
+
+defmodule Primeradiant.StorageHarness.Conflict do
+  use Primeradiant.StorageHarness.Schema
+
+  schema "conflicts" do
+    field(:tenant_id, :binary_id)
+    field(:story_id, :binary_id)
+    field(:fact_key, :string)
+    field(:prior_value, :string)
+    field(:incoming_value, :string)
+    field(:status, :string, default: "open")
+    field(:input_id, :binary_id)
+    field(:proposal_id, :binary_id)
+    field(:proposal_op_id, :binary_id)
+    field(:graph_commit_id, :binary_id)
+    field(:agent_run_id, :binary_id)
+    field(:confidence, :decimal)
+    timestamps(type: :utc_datetime_usec)
+  end
+
+  def changeset(struct \\ %__MODULE__{}, attrs) do
+    struct
+    |> cast(attrs, [
+      :id,
+      :tenant_id,
+      :story_id,
+      :fact_key,
+      :prior_value,
+      :incoming_value,
+      :status,
+      :input_id,
+      :proposal_id,
+      :proposal_op_id,
+      :graph_commit_id,
+      :agent_run_id,
+      :confidence
+    ])
+    |> put_id()
+    |> validate_required([
+      :tenant_id,
+      :story_id,
+      :fact_key,
+      :prior_value,
+      :incoming_value,
+      :status,
+      :input_id,
+      :proposal_id,
+      :proposal_op_id,
+      :graph_commit_id,
+      :agent_run_id,
+      :confidence
+    ])
+    |> validate_inclusion(:status, ["open", "accepted_correction", "resolved", "rejected"])
+    |> validate_confidence()
+  end
+end
+
+defmodule Primeradiant.StorageHarness.AuthoredOutput do
+  use Primeradiant.StorageHarness.Schema
+
+  schema "authored_outputs" do
+    field(:tenant_id, :binary_id)
+    field(:user_id, :string)
+    field(:story_id, :binary_id)
+    field(:output_type, :string)
+    field(:content, :string)
+    field(:evidence_packet, :map, default: %{})
+    field(:verified, :boolean, default: false)
+    field(:story_version, :integer)
+    field(:status, :string, default: "recorded")
+    timestamps(type: :utc_datetime_usec)
+  end
+
+  def changeset(struct \\ %__MODULE__{}, attrs) do
+    struct
+    |> cast(attrs, [
+      :id,
+      :tenant_id,
+      :user_id,
+      :story_id,
+      :output_type,
+      :content,
+      :evidence_packet,
+      :verified,
+      :story_version,
+      :status
+    ])
+    |> put_id()
+    |> validate_required([
+      :tenant_id,
+      :user_id,
+      :output_type,
+      :content,
+      :evidence_packet,
+      :verified,
+      :status
+    ])
+    |> validate_inclusion(:status, ["recorded"])
+  end
+end
+
+defmodule Primeradiant.StorageHarness.AuthoredOutputUnit do
+  use Primeradiant.StorageHarness.Schema
+
+  schema "authored_output_units" do
+    field(:tenant_id, :binary_id)
+    field(:authored_output_id, :binary_id)
+    field(:position, :integer)
+    field(:unit_type, :string)
+    field(:content, :string)
+    field(:story_id, :binary_id)
+    field(:evidence_refs, {:array, :map}, default: [])
+    field(:claim_refs, {:array, :map}, default: [])
+    timestamps(updated_at: false, type: :utc_datetime_usec)
+  end
+
+  def changeset(struct \\ %__MODULE__{}, attrs) do
+    struct
+    |> cast(attrs, [
+      :id,
+      :tenant_id,
+      :authored_output_id,
+      :position,
+      :unit_type,
+      :content,
+      :story_id,
+      :evidence_refs,
+      :claim_refs
+    ])
+    |> put_id()
+    |> validate_required([
+      :tenant_id,
+      :authored_output_id,
+      :position,
+      :unit_type,
+      :content,
+      :evidence_refs,
+      :claim_refs
+    ])
+    |> validate_non_empty_list(:evidence_refs)
+    |> validate_non_empty_list(:claim_refs)
+  end
+end
+
+defmodule Primeradiant.StorageHarness.SeenState do
+  use Primeradiant.StorageHarness.Schema
+
+  schema "seen_states" do
+    field(:tenant_id, :binary_id)
+    field(:user_id, :string)
+    field(:story_id, :binary_id)
+    field(:seen_story_version, :integer)
+    field(:last_authored_output_id, :binary_id)
+    field(:seen_at, :utc_datetime_usec)
+    timestamps(type: :utc_datetime_usec)
+  end
+
+  def changeset(struct \\ %__MODULE__{}, attrs) do
+    struct
+    |> cast(attrs, [
+      :id,
+      :tenant_id,
+      :user_id,
+      :story_id,
+      :seen_story_version,
+      :last_authored_output_id,
+      :seen_at
+    ])
+    |> put_id()
+    |> validate_required([
+      :tenant_id,
+      :user_id,
+      :story_id,
+      :seen_story_version,
+      :last_authored_output_id,
+      :seen_at
+    ])
+  end
+end
+
+defmodule Primeradiant.StorageHarness.SeenStateRef do
+  use Primeradiant.StorageHarness.Schema
+
+  @kinds ~w(input claim story edge conflict authored_output)
+
+  schema "seen_state_refs" do
+    field(:tenant_id, :binary_id)
+    field(:seen_state_id, :binary_id)
+    field(:ref_kind, :string)
+    field(:ref_id, :string)
+    field(:authored_output_id, :binary_id)
+    timestamps(updated_at: false, type: :utc_datetime_usec)
+  end
+
+  def changeset(struct \\ %__MODULE__{}, attrs) do
+    struct
+    |> cast(attrs, [:id, :tenant_id, :seen_state_id, :ref_kind, :ref_id, :authored_output_id])
+    |> put_id()
+    |> validate_required([:tenant_id, :seen_state_id, :ref_kind, :ref_id, :authored_output_id])
+    |> validate_inclusion(:ref_kind, @kinds)
+  end
+end
+
+defmodule Primeradiant.StorageHarness.EvidenceRef do
+  use Primeradiant.StorageHarness.Schema
+
+  schema "evidence_refs" do
+    field(:tenant_id, :binary_id)
+    field(:subject_type, :string)
+    field(:subject_id, :binary_id)
+    field(:input_id, :binary_id)
+    field(:soup_node_id, :binary_id)
+    field(:proposal_id, :binary_id)
+    field(:proposal_op_id, :binary_id)
+    field(:edge_id, :binary_id)
+    field(:conflict_id, :binary_id)
+    field(:authored_output_id, :binary_id)
+    field(:authored_output_unit_id, :binary_id)
+    field(:span_start, :integer)
+    field(:span_end, :integer)
+    field(:evidence_label, :string)
+    field(:evidence_hash, :string)
+    timestamps(updated_at: false, type: :utc_datetime_usec)
+  end
+
+  def changeset(struct \\ %__MODULE__{}, attrs) do
+    struct
+    |> cast(attrs, [
+      :id,
+      :tenant_id,
+      :subject_type,
+      :subject_id,
+      :input_id,
+      :soup_node_id,
+      :proposal_id,
+      :proposal_op_id,
+      :edge_id,
+      :conflict_id,
+      :authored_output_id,
+      :authored_output_unit_id,
+      :span_start,
+      :span_end,
+      :evidence_label,
+      :evidence_hash
+    ])
+    |> put_id()
+    |> validate_required([:tenant_id, :subject_type, :subject_id, :input_id])
+    |> validate_subject_fk()
+  end
+
+  defp validate_subject_fk(changeset) do
+    subject_type = get_field(changeset, :subject_type)
+
+    subject_contract =
+      case subject_type do
+        "soup_node" -> {:direct, :soup_node_id}
+        "proposal" -> {:direct, :proposal_id}
+        "proposal_op" -> {:direct, :proposal_op_id}
+        "edge" -> {:direct, :edge_id}
+        "conflict" -> {:direct, :conflict_id}
+        "authored_output" -> {:direct, :authored_output_id}
+        "authored_output_unit" -> {:direct, :authored_output_unit_id}
+        "story_fact_version" -> {:via_proposal_op, [:proposal_id, :proposal_op_id]}
+        "story_event" -> {:via_proposal_op, [:proposal_id, :proposal_op_id]}
+        "graph_commit" -> {:via_proposal_op, [:proposal_id, :proposal_op_id]}
+        _ -> :unknown
+      end
+
+    case subject_contract do
+      :unknown ->
+        add_error(changeset, :subject_type, "is not supported")
+
+      {:direct, required_fk} ->
+        cond do
+          is_nil(get_field(changeset, required_fk)) ->
+            add_error(changeset, required_fk, "must be present for #{subject_type} evidence")
+
+          get_field(changeset, required_fk) != get_field(changeset, :subject_id) ->
+            add_error(
+              changeset,
+              required_fk,
+              "must match subject_id for #{subject_type} evidence"
+            )
+
+          true ->
+            changeset
+        end
+
+      {:via_proposal_op, required_fks} ->
+        Enum.reduce(required_fks, changeset, fn field, acc ->
+          if is_nil(get_field(acc, field)) do
+            add_error(acc, field, "must be present for #{subject_type} evidence")
+          else
+            acc
+          end
+        end)
+    end
+  end
+end

@@ -1,0 +1,12 @@
+{
+  "required_status_flow": [
+    "pending",
+    "accepted"
+  ],
+  "required_fields": [
+    "agent_run_id",
+    "evidence_refs",
+    "confidence",
+    "rationale"
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "forbidden": [
+    "generic_related_edge",
+    "destructive_story_merge",
+    "trusted_preseeded_story_state",
+    "second_briefing_repeats_seen_facts"
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "fixture_id": "public_story_004_correction_or_contradiction",
+  "source_type": "news_article",
+  "external_id": "fixture:public:004",
+  "observed_at": "2026-05-03T07:45:00-07:00",
+  "title": "Harbor ferry authority corrects overnight service claim",
+  "acl": {"privacy": "public"},
+  "body_text": "The harbor ferry authority corrected earlier reports: the strike is resolved, crossings are normal, and overnight service was never suspended. The authority blamed early reports for confusion."
+}

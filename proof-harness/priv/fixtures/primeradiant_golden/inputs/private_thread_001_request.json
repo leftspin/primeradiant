@@ -1,0 +1,9 @@
+{
+  "fixture_id": "private_thread_001_request",
+  "source_type": "email",
+  "external_id": "fixture:private:001",
+  "observed_at": "2026-05-10T08:15:00-07:00",
+  "title": "Roof repair quote needed before Friday",
+  "acl": {"privacy": "private", "participants": ["flynn", "contractor"]},
+  "body_text": "Flynn asked for a roof repair quote before Friday. The contractor said the ladder crew is backed up."
+}

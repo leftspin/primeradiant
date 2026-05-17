@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>primeradiant — Fixture Corpus Plan</title>
+  <style>
+    :root { color-scheme: dark light; --fg: var(--clawline-fg, #f4ead7); --muted: color-mix(in srgb, var(--fg) 68%, transparent); --line: color-mix(in srgb, var(--fg) 18%, transparent); --card: color-mix(in srgb, var(--fg) 7%, transparent); --card2: color-mix(in srgb, var(--fg) 11%, transparent); --accent: #d39b48; --accent2: #9bc7ff; --good: #9fd39b; --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+    html, body { margin: 0; background: transparent; color: var(--fg); font: 16px/1.55 -apple-system, BlinkMacSystemFont, "SF Pro Text", Inter, sans-serif; }
+    body { padding: 28px 18px 52px; }
+    main { max-width: 1080px; margin: 0 auto; }
+    .eyebrow { color: var(--accent); text-transform: uppercase; letter-spacing: .13em; font-size: 12px; font-weight: 800; }
+    h1 { margin: 8px 0 12px; font-size: clamp(34px, 6vw, 64px); line-height: .96; letter-spacing: -.045em; }
+    h2 { margin: 0 0 12px; font-size: 24px; }
+    h3 { margin: 0 0 8px; font-size: 18px; }
+    p { margin: 0 0 10px; }
+    .lede { color: var(--muted); font-size: clamp(18px, 2.5vw, 23px); max-width: 880px; }
+    section { border: 1px solid var(--line); background: var(--card); border-radius: 24px; padding: 18px; margin: 16px 0; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+    .widegrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 12px; }
+    .card { border: 1px solid var(--line); background: var(--card2); border-radius: 18px; padding: 14px; }
+    .label { color: var(--accent); text-transform: uppercase; letter-spacing: .09em; font-size: 11px; font-weight: 800; }
+    .callout { border-left: 4px solid var(--accent); padding: 12px 14px; background: color-mix(in srgb, var(--accent) 10%, transparent); border-radius: 14px; margin: 12px 0; }
+    code, pre { font-family: var(--mono); color: var(--accent2); }
+    pre { white-space: pre-wrap; overflow-wrap: anywhere; border: 1px solid var(--line); border-radius: 14px; padding: 12px; background: color-mix(in srgb, #000 18%, transparent); font-size: 13px; line-height: 1.45; }
+    ul, ol { margin: 0; padding-left: 22px; }
+    li { margin: 7px 0; }
+    .ok { color: var(--good); font-weight: 700; }
+  </style>
+</head>
+<body>
+<main>
+  <div class="eyebrow">Fixture corpus</div>
+  <h1>Golden corpus plan</h1>
+  <p class="lede">A small, inspectable dataset that proves primeradiant is doing story-state maintenance instead of summarization cosplay.</p>
+
+  <section>
+    <h2>1. Corpus doctrine</h2>
+    <div class="callout"><p><strong>The corpus is a product test, not demo data.</strong> It must make wrong architecture fail: generic summaries, destructive merges, fake novelty, missing seen-state, and ungrounded narration should all be caught.</p></div>
+    <div class="grid">
+      <div class="card"><h3>Small enough to read</h3><p>Every input, expected edge, and expected briefing should be manually inspectable.</p></div>
+      <div class="card"><h3>Rich enough to break cheats</h3><p>The same story must include duplicate, update, contradiction/framing, user priority, and stale/no-op paths.</p></div>
+      <div class="card"><h3>Stable enough for tests</h3><p>The corpus becomes the first regression suite for agents, projections, authoring, and seen-state.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>2. Directory layout</h2>
+    <pre>priv/fixtures/primeradiant_golden/
+├── manifest.json
+├── inputs/
+│   ├── public_story_001_initial_report.json
+│   ├── public_story_002_followup_update.json
+│   ├── public_story_003_duplicate_reinforcement.json
+│   ├── public_story_004_correction_or_contradiction.json
+│   ├── private_thread_001_request.json
+│   ├── private_thread_002_reply.json
+│   ├── private_thread_003_unresolved_question.json
+│   ├── private_thread_004_later_update.json
+│   └── stale_case_001_related_no_material_change.json
+├── watches/
+│   ├── user_priority_watch.json
+│   └── concept_watch.json
+├── expected/
+│   ├── nodes.json
+│   ├── edges.json
+│   ├── proposals.json
+│   ├── story_state_after_first_pass.json
+│   ├── story_state_after_second_pass.json
+│   ├── first_briefing.html
+│   ├── second_briefing_delta.html
+│   └── stale_noop_state.json
+└── tests/
+    ├── acceptance_criteria.json
+    └── forbidden_failures.json</pre>
+  </section>
+
+  <section>
+    <h2>3. Input object shape</h2>
+    <pre>{
+  "fixture_id": "public_story_002_followup_update",
+  "source_type": "news_article",
+  "external_id": "fixture:public:002",
+  "observed_at": "2026-05-14T04:00:00-07:00",
+  "actor": { "name": "Fixture News", "kind": "publisher" },
+  "title": "Follow-up changes the story",
+  "body_text": "...",
+  "metadata": {
+    "expected_role": "material_update",
+    "story_hint": "public_story_alpha",
+    "privacy": "public"
+  },
+  "expected_extractions": {
+    "claims": [],
+    "entities": [],
+    "edge_hints": []
+  }
+}</pre>
+  </section>
+
+  <section>
+    <h2>4. Required story mechanics</h2>
+    <div class="widegrid">
+      <div class="card"><span class="label">Material update</span><h3>Something actually changed</h3><p>An input must force story state to update and justify telling the user.</p></div>
+      <div class="card"><span class="label">Duplicate/reinforcement</span><h3>More source weight, not fake novelty</h3><p>An input repeats the substance of an earlier one. It may affect confidence/social weight, but not “what changed.”</p></div>
+      <div class="card"><span class="label">Correction/contradiction</span><h3>The graph changes its mind safely</h3><p>A later input conflicts with a prior claim and should create contradiction/supersession state, not silent rewrite.</p></div>
+      <div class="card"><span class="label">Personal watch</span><h3>User priority beats global rank</h3><p>A watch from <code>/preferences/priorities</code> or <code>/stories/concepts</code> attaches to relevant story state even when graph gravity is low.</p></div>
+      <div class="card"><span class="label">Staleness/no-op</span><h3>Nothing happened is still state</h3><p>A related input that does not materially change the story should be classified as no-op/related, and a dormant story should become stale without disappearing.</p></div>
+      <div class="card"><span class="label">Seen-state delta</span><h3>New to this user</h3><p>The second briefing must exclude what was already shown and include only material changes since the first authored output.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>5. Expected edge set</h2>
+    <p>The fixture should require at least these named relationships:</p>
+    <ul>
+      <li><code>supports</code> — input supports claim/story.</li>
+      <li><code>updates</code> — input materially changes story state.</li>
+      <li><code>duplicates</code> — input repeats prior substance.</li>
+      <li><code>contradicts</code> — input conflicts with claim/story state.</li>
+      <li><code>adds_color</code> — input adds context but no material update.</li>
+      <li><code>part_of</code> — private/public substories can attach to larger story if warranted.</li>
+      <li><code>watch_applies_to</code> — user watch attaches to story/concept/claim.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>6. Starter acceptance tests</h2>
+    <ol>
+      <li>After first pass, corpus produces at least one Story node, multiple Input nodes, Claim/Entity nodes, and named edges.</li>
+      <li>No committed edge has type <code>related</code>.</li>
+      <li>Duplicate input does not appear in <code>story.delta</code> as a material update.</li>
+      <li>Correction input creates contradiction/supersession state with provenance.</li>
+      <li>User watch attaches through <code>watch_applies_to</code> and can raise user relevance independent of global gravity.</li>
+      <li>First briefing records seen-state at story/input/claim/output level.</li>
+      <li>Second briefing excludes already-seen facts and leads with the new material delta.</li>
+      <li>Stale/no-op case changes freshness/activity state without deleting or rewriting story identity.</li>
+      <li>Every authored material sentence traces to evidence refs.</li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>7. Fixture authoring rule</h2>
+    <p>Use synthetic but realistic content. Do not use demo shortcuts that bypass production invariants. Fixture inputs should pass through the same ingestion, proposal, arbitration, projection, authoring, and seen-state paths as real data.</p>
+    <div class="callout"><p><strong>No cheating:</strong> expected outputs are for tests; they must not seed trusted production state or bypass the soup.</p></div>
+  </section>
+</main>
+</body>
+</html>

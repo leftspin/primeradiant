@@ -1,0 +1,9 @@
+{
+  "fixture_id": "private_thread_002_reply_attach",
+  "source_type": "email",
+  "external_id": "fixture:private:002",
+  "observed_at": "2026-05-10T10:00:00-07:00",
+  "title": "Contractor reply with measurements",
+  "acl": {"privacy": "private", "participants": ["flynn", "contractor"]},
+  "body_text": "Got it. I have the roof measurements and will send the quote line items after lunch."
+}

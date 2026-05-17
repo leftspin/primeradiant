@@ -1,0 +1,546 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Primeradiant Real Ingestion and Story Identity Semantics</title>
+  <style>
+    :root {
+      color-scheme: dark light;
+      --fg: var(--clawline-fg, #f4ead7);
+      --muted: color-mix(in srgb, var(--fg) 68%, transparent);
+      --soft: color-mix(in srgb, var(--fg) 52%, transparent);
+      --line: color-mix(in srgb, var(--fg) 18%, transparent);
+      --card: color-mix(in srgb, var(--fg) 7%, transparent);
+      --card2: color-mix(in srgb, var(--fg) 11%, transparent);
+      --accent: #d39b48;
+      --accent2: #9bc7ff;
+      --good: #9fd39b;
+      --warn: #ffd27a;
+      --bad: #ff9b9b;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+    html, body {
+      margin: 0;
+      background: transparent;
+      color: var(--fg);
+      font: 16px/1.56 -apple-system, BlinkMacSystemFont, "SF Pro Text", Inter, sans-serif;
+    }
+    body { padding: 36px; }
+    main { max-width: 1180px; margin: 0 auto; }
+    .eyebrow {
+      color: var(--accent);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: .13em;
+      text-transform: uppercase;
+    }
+    h1 {
+      margin: 8px 0 12px;
+      font-size: clamp(34px, 5vw, 58px);
+      line-height: 1.02;
+      letter-spacing: 0;
+    }
+    h2 {
+      margin: 34px 0 12px;
+      padding-top: 18px;
+      border-top: 1px solid var(--line);
+      font-size: clamp(23px, 3vw, 34px);
+      letter-spacing: 0;
+    }
+    h3 { margin: 18px 0 8px; font-size: 18px; color: var(--accent2); letter-spacing: 0; }
+    p { margin: 8px 0; }
+    .lede { max-width: 920px; color: var(--muted); font-size: clamp(18px, 2.5vw, 23px); }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+    .card {
+      border: 1px solid var(--line);
+      background: var(--card);
+      border-radius: 8px;
+      padding: 14px;
+    }
+    .callout {
+      border-left: 4px solid var(--accent);
+      background: color-mix(in srgb, var(--accent) 10%, transparent);
+      border-radius: 8px;
+      padding: 12px 14px;
+      margin: 12px 0;
+    }
+    .risk { border-left-color: var(--warn); background: color-mix(in srgb, var(--warn) 10%, transparent); }
+    .blocker { border-left-color: var(--bad); background: color-mix(in srgb, var(--bad) 10%, transparent); }
+    .ok { color: var(--good); font-weight: 700; }
+    .warn { color: var(--warn); font-weight: 700; }
+    .bad { color: var(--bad); font-weight: 700; }
+    .label {
+      color: var(--accent);
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: .09em;
+      text-transform: uppercase;
+    }
+    code, pre { font-family: var(--mono); color: var(--accent2); }
+    code { font-size: .92em; overflow-wrap: anywhere; }
+    pre {
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      background: color-mix(in srgb, #000 18%, transparent);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+    table { width: 100%; border-collapse: collapse; margin: 12px 0; }
+    th, td { border: 1px solid var(--line); padding: 9px 10px; vertical-align: top; }
+    th {
+      color: var(--accent);
+      font-size: 12px;
+      text-align: left;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    ul, ol { padding-left: 24px; }
+    li { margin: 6px 0; }
+    .tight li { margin: 3px 0; }
+    .small { color: var(--soft); font-size: 14px; }
+  </style>
+</head>
+<body>
+<main>
+  <div class="eyebrow">Production semantics slice after T312 validation</div>
+  <h1>Real ingestion and story identity semantics</h1>
+  <p class="lede">Defines the next narrow Primeradiant slice: accept real source items through a manual admission seam, normalize them with provenance, decide story identity without trusted fixture labels, and submit proposal-backed story changes through the validated storage schema.</p>
+
+  <section>
+    <h2>1. Source Truth and Baseline</h2>
+    <table>
+      <thead>
+        <tr><th>Source</th><th>Constraint for this spec</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>index.html</code></td><td>Primeradiant maintains live story state. Inputs are evidence, not standalone summaries.</td></tr>
+        <tr><td><code>primeradiant-system-architecture.html</code></td><td>Source adapters must not decide story meaning. Canonical inputs, proposals, arbitration, soup commits, projections, and user state stay separated.</td></tr>
+        <tr><td><code>primeradiant-elixir-contracts.html</code></td><td>Agent output is hostile until validated. Graph-changing behavior must be structured, evidence-backed, ACL-aware, and never use generic <code>related</code> edges.</td></tr>
+        <tr><td><code>primeradiant-mvp-slice.html</code></td><td>The slice must preserve public/private story identity, user watch priority, stale/no-op behavior, and evidence-backed narration without building the full product.</td></tr>
+        <tr><td><code>primeradiant-fixture-corpus-plan.html</code></td><td>The golden corpus remains a regression suite, not a source of trusted labels or preseeded graph truth.</td></tr>
+        <tr><td><code>primeradiant-storage-schema-hardening.html</code></td><td>The storage contract is already the boundary: accepted proposal ops, graph commits, evidence refs, fact versions, conflicts, story events, ACL checks, and seen-state constraints.</td></tr>
+      </tbody>
+    </table>
+
+    <div class="callout">
+      <p><strong>Validated baseline:</strong> proof harness <code>/opt/homebrew/bin/mix test</code>: <span class="ok">11 tests, 0 failures</span>. Storage harness <code>/opt/homebrew/bin/mix clean &amp;&amp; /opt/homebrew/bin/mix test</code>: <span class="ok">14 tests, 0 failures</span>. Live Postgres validation <code>storage-harness/scripts/validate_postgres_schema.sh</code>: <span class="ok">postgres_schema_validation_ok</span>.</p>
+    </div>
+
+    <p><strong>Current limitation:</strong> T312 proves semantics and storage boundaries using a synthetic corpus. It does not prove connector ingestion, production source acquisition, ranking/headliners, swarm scaling, broad UI, deployment, or a production daemon.</p>
+  </section>
+
+  <section>
+    <h2>2. Goal and Cut Line</h2>
+    <div class="grid">
+      <div class="card">
+        <span class="label">Goal</span>
+        <h3>Replace fixture-shaped identity</h3>
+        <p>Define production story identity behavior for real admitted source items where <code>fixture_id</code>, file order, expected artifacts, and title-derived labels cannot drive decisions.</p>
+      </div>
+      <div class="card">
+        <span class="label">Smallest slice</span>
+        <h3>Manual real ingestion</h3>
+        <p>Accept real items through an explicit ingestion API or batch file, normalize them, retrieve candidate stories, classify identity decisions, and persist proposal-backed changes.</p>
+      </div>
+      <div class="card">
+        <span class="label">Boundary</span>
+        <h3>Semantics only</h3>
+        <p>No connectors, ranking/headliners, autonomous acquisition, broad UI, swarm scaling, deployment, or production daemon in this slice.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>3. Input Admission Contract</h2>
+    <p>Before connectors exist, real source items enter through a controlled admission seam. The caller can be a Mix task, test helper, admin-only context call, or local batch import. It is not a connector and must not contain story labels.</p>
+
+    <h3>3.1 Accepted Item Shape</h3>
+    <pre>{
+  tenant_id: uuid,
+  ingestion_run_key: string,
+  source_type: "news_article" | "opinion_column" | "email" | "message" | "document" | "user_note" | "web_page",
+  source_mode: "manual_real_ingest_v1",
+  external_id: string,
+  observed_at: utc_datetime_usec,
+  retrieved_at: utc_datetime_usec,
+  occurred_at: utc_datetime_usec | null,
+  canonical_uri: string | null,
+  raw_object_uri: string | null,
+  source_name: string | null,
+  source_actor: {kind: string, name: string | null, stable_id: string | null},
+  title: string | null,
+  body_text: string | null,
+  extracted_text: string | null,
+  metadata: map,
+  acl: {privacy: "public" | "private", participants?: [string]},
+  content_sha256: string | null
+}</pre>
+
+    <h3>3.2 Admission Rules</h3>
+    <ul>
+      <li><code>tenant_id</code>, <code>source_type</code>, <code>external_id</code>, <code>observed_at</code>, <code>retrieved_at</code>, <code>acl</code>, and at least one readable text body or raw object reference are required.</li>
+      <li><code>external_id</code> must be stable within <code>(tenant_id, source_type)</code>. For manually captured public URLs, use canonical URL plus retrieval timestamp or source-provided ID. For private items, use source account/thread/message ID if available; otherwise use an importer-provided stable ID.</li>
+      <li><code>content_sha256</code> is computed from canonicalized text and raw object metadata when omitted. It remains the exact duplicate fingerprint, not story identity.</li>
+      <li><code>fixture_id</code> is forbidden for real admission. Test imports may keep <code>fixture_id</code> only inside fixture-specific code paths.</li>
+      <li>Admission rejects metadata fields named <code>expected_role</code>, <code>story_hint</code>, <code>expected_story</code>, <code>expected_classification</code>, <code>edge_hints</code>, or equivalent labels. Those names may appear only in fixture expected artifacts used as assertions.</li>
+      <li>Admission writes an immutable <code>inputs</code> row or returns the existing row for <code>(tenant_id, source_type, external_id)</code> or exact <code>content_sha256</code>. It does not create stories, edges, facts, conflicts, seen-state, or authored outputs.</li>
+      <li>Private inputs require <code>acl.privacy = "private"</code> and a non-empty participant list before the item can become evidence for proposals or authoring.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>4. Normalized Input Envelope</h2>
+    <p>The normalizer converts admitted items into a deterministic envelope for candidate retrieval and proposal building. It may use rules, local extractors, or model-assisted structured extraction, but the stored result must be schema-validated and evidence-span backed.</p>
+
+    <pre>{
+  input_id: uuid,
+  tenant_id: uuid,
+  source_type: string,
+  external_id: string,
+  observed_at: utc_datetime_usec,
+  retrieved_at: utc_datetime_usec,
+  occurred_at: utc_datetime_usec | null,
+  title: string | null,
+  body_text: string,
+  acl: map,
+  provenance: {
+    ingestion_run_key: string,
+    source_mode: "manual_real_ingest_v1",
+    source_name: string | null,
+    source_actor: map,
+    canonical_uri: string | null,
+    raw_object_uri: string | null,
+    content_sha256: string,
+    normalizer_version: string,
+    extractor_version: string | null,
+    trace_id: string | null
+  },
+  extracted: {
+    claims: [{claim_key, text, fact_key?, fact_value?, polarity, modality, time_scope, span}],
+    entities: [{entity_key, kind, name, aliases, span}],
+    events: [{event_key, text, time_scope, span}],
+    questions: [{question_key, text, status, span}],
+    colors: [{color_key, text, framing_kind, span}],
+    topic_tokens: [string],
+    source_posture: {kind, certainty, attribution}
+  }
+}</pre>
+
+    <h3>4.1 Required Provenance Fields</h3>
+    <ul>
+      <li>Every claim, entity, event, question, and color item carries a text span or evidence label that can become an <code>evidence_refs</code> row.</li>
+      <li>The envelope records <code>normalizer_version</code>. Changes to extraction behavior must be visible in tests and should not silently rewrite prior input rows.</li>
+      <li><code>source_posture</code> distinguishes reporting, opinion, correction, firsthand message, user note, and unknown source posture. It is evidence context, not a shortcut to a story decision.</li>
+      <li>Time fields are preserved separately: <code>observed_at</code> is when Primeradiant saw it, <code>retrieved_at</code> is when the item was fetched/imported, and <code>occurred_at</code> is only set when the text supports an event time.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>5. Candidate Story Retrieval</h2>
+    <p>Candidate retrieval is recall-oriented. It gathers plausible existing stories and neighboring evidence for the identity decision. It does not rank stories for users, pick headliners, or decide user-facing importance.</p>
+
+    <h3>5.1 Inputs to Retrieval</h3>
+    <ul>
+      <li>Normalized topic tokens, entity keys, claim fact keys, claim values, event time windows, source type, observed time, and ACL scope.</li>
+      <li>Exact duplicate keys: <code>(tenant_id, source_type, external_id)</code> and <code>content_sha256</code>.</li>
+      <li>Candidate story fields: <code>story_key</code>, title, state, version, structural facts, background facts, questions, colors, topic tokens, first/last observed time, last material time.</li>
+      <li>Graph evidence: <code>supports</code>, <code>updates</code>, <code>duplicates</code>, <code>contradicts</code>, <code>adds_color</code>, <code>part_of</code>, and <code>watch_applies_to</code> edges visible to the actor.</li>
+      <li>Visible fact versions, conflicts, story events, and evidence refs for each candidate story.</li>
+    </ul>
+
+    <h3>5.2 Allowed Retrieval Methods</h3>
+    <ul>
+      <li>Exact source/content dedupe lookup.</li>
+      <li>Token/entity/fact-key overlap against stored inputs and stories.</li>
+      <li>Postgres full-text search over title/body/topic tokens.</li>
+      <li>Optional embedding similarity if already available in the implementation, scoped to candidate retrieval only.</li>
+      <li>Time-window filters that favor recent active stories but still include stale/background stories when entity/fact overlap is strong.</li>
+    </ul>
+
+    <h3>5.3 Forbidden Retrieval Shortcuts</h3>
+    <ul>
+      <li>No fixture IDs, file order, expected artifact IDs, or fixture story labels.</li>
+      <li>No global ranking, headliner scoring, popularity scoring, or feed placement.</li>
+      <li>No broad summarization prompt that receives all stories and returns an unstructured answer.</li>
+      <li>No use of private candidate evidence unless the actor can access it.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>6. Story Identity Decision Model</h2>
+    <p>The decision model returns one primary decision per admitted input plus zero or more proposed edges/fact/conflict/state ops. Decisions are evidence-backed proposals, not committed truth.</p>
+
+    <table>
+      <thead>
+        <tr><th>Decision</th><th>When to use</th><th>Required proposal behavior</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>attach</code></td>
+          <td>The input belongs to an existing story and adds either new evidence, first structured facts, background, questions, or source weight without requiring a new story identity.</td>
+          <td><code>attach_input</code>, <code>record_event</code>, and at least one named edge such as <code>supports</code>, <code>updates</code>, <code>duplicates</code>, or <code>adds_color</code>.</td>
+        </tr>
+        <tr>
+          <td><code>split</code></td>
+          <td>The input shares topic/entity vocabulary with a candidate story but describes a distinct evolving situation with different structural facts, actor/action, venue, scope, or time boundary.</td>
+          <td><code>create_story</code>, <code>attach_input</code>, fact/event ops, and no destructive merge. A parent relation may be proposed separately as <code>part_of</code>.</td>
+        </tr>
+        <tr>
+          <td><code>part_of</code></td>
+          <td>The input or newly split story is best understood as a substory/facet of a larger existing story, while keeping its own identity.</td>
+          <td><code>attach_story_part_of</code> using story-node endpoints. Must not collapse story keys or move inputs from one story to another destructively.</td>
+        </tr>
+        <tr>
+          <td><code>conflict</code></td>
+          <td>Incoming supported claims disagree with current story facts or claim nodes on the same fact key and compatible scope.</td>
+          <td><code>record_conflicts</code>, <code>contradicts</code> edge, <code>story_fact_versions</code> with replacement only when arbitration accepts correction semantics.</td>
+        </tr>
+        <tr>
+          <td><code>no_op</code></td>
+          <td>The input is an exact duplicate or repeats already-current facts without new material facts, questions, conflict, or useful color.</td>
+          <td><code>attach_input</code> and <code>duplicates</code> or support/source-weight event. It must not advance <code>last_material_at</code> or emit a user-facing material delta.</td>
+        </tr>
+        <tr>
+          <td><code>color</code></td>
+          <td>The input adds framing, source posture, attribution, human context, or interpretation without changing structural facts.</td>
+          <td><code>append_colors</code>, <code>adds_color</code>, and <code>record_event</code>. It does not update structural facts or material delta unless separately justified.</td>
+        </tr>
+        <tr>
+          <td><code>stale</code></td>
+          <td>The input is a check-in/background note indicating no new activity, or a maintenance pass finds a story dormant long enough to change activity state.</td>
+          <td><code>merge_background</code> or <code>mark_state</code> plus <code>record_event</code>. Story remains present; no delete or destructive rewrite.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3>6.1 Decision Output Contract</h3>
+    <pre>{
+  input_id: uuid,
+  decision_type: "attach" | "split" | "part_of" | "conflict" | "no_op" | "color" | "stale",
+  candidate_story_id: uuid | null,
+  proposed_story_key: string | null,
+  parent_story_id: uuid | null,
+  changed_facts: map,
+  conflicting_facts: [{fact_key, prior_fact_version_id, prior_value, incoming_value, scope, evidence_refs}],
+  rationale: string,
+  confidence: decimal_0_to_1,
+  evidence_refs: [evidence_ref_input],
+  abstained_candidates: [{story_id, reason}]
+}</pre>
+
+    <h3>6.2 Identity Evidence Rules</h3>
+    <ul>
+      <li>Topic overlap alone is never enough for <code>attach</code>. At least one structural compatibility signal must exist: shared entity plus same event/action, shared fact key with compatible value, same source thread, exact duplicate content, or explicit textual continuity.</li>
+      <li>Shared venue or actor with a different action can justify <code>split</code> plus optional <code>part_of</code>, not <code>attach</code>.</li>
+      <li>Private thread continuity can support <code>attach</code> when message IDs, participants, subject, and text support the same task or decision.</li>
+      <li>Opinion/framing items attach as <code>color</code> only when they discuss an existing story and do not assert incompatible structural facts.</li>
+      <li>When evidence is below threshold, return <code>needs_more_evidence</code> proposal status or abstain; do not create generic relation edges.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>7. Story Key Generation and Collision Handling</h2>
+    <p><code>story_key</code> remains stable production identity, but the generation algorithm must stop relying on fixture names or the first three title tokens.</p>
+
+    <h3>7.1 Key Generation</h3>
+    <ul>
+      <li>For <code>split</code> or new-story creation, generate a canonical key from normalized identity anchors: primary entity or venue, action/situation, and disambiguating scope or time when needed.</li>
+      <li>Keys are lowercase ASCII slugs. Strip punctuation, normalize whitespace, remove stopwords, and cap length. Store a richer title separately.</li>
+      <li>The key input set must be recorded in the proposal payload as <code>identity_anchors</code> so reviewers can inspect why that key was proposed.</li>
+      <li>Do not include <code>fixture_id</code>, importer filename, external ID, source hostname alone, or source title alone as the key basis.</li>
+    </ul>
+
+    <h3>7.2 Collision Handling</h3>
+    <ul>
+      <li>Before proposing <code>create_story</code>, lookup <code>(tenant_id, story_key)</code>. If an existing story has the same key and compatible identity, propose <code>attach</code> instead.</li>
+      <li>If an existing story has the same key but incompatible identity, append a deterministic disambiguator derived from identity anchors, such as venue, actor, or first observed date. Record the collision in proposal rationale.</li>
+      <li>If two candidate keys differ but identity evidence strongly indicates one story, attach to the existing story and preserve the original key.</li>
+      <li>Never rename an existing story key in this slice. Key correction requires a future explicit migration/proposal type.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>8. Conflict and Contradiction Detection</h2>
+    <p>The current proof detects conflicts mainly through correction wording and simple fact deltas. Real ingestion needs a bounded contradiction model that still fits the storage schema.</p>
+
+    <h3>8.1 First Implementation Bounds</h3>
+    <ul>
+      <li>Only compare normalized claims that have a <code>fact_key</code>, <code>fact_value</code>, polarity, and scope. Free-form semantic contradiction without fact keys is out of scope.</li>
+      <li>Support these fact kinds first: status/state, numeric amount/count, schedule/time, availability/service state, ownership/responsibility, location/venue, and deadline.</li>
+      <li>Scope must be compatible before conflict: same story candidate, same fact key, overlapping time scope, and no clear change-over-time relation.</li>
+      <li>Correction wording is a signal, not a requirement. A conflict can be detected when values are incompatible even if the source does not say "corrected" or "contradiction."</li>
+      <li>Change over time is not automatically conflict. If a later input says the service moved from halted to normal after a resolution event, propose <code>updates</code> and fact replacement with provenance; if it disputes the prior report's truth for the same time scope, propose <code>conflict</code>.</li>
+    </ul>
+
+    <h3>8.2 Conflict Output</h3>
+    <pre>{
+  fact_key: string,
+  prior_fact_version_id: uuid,
+  prior_value: string,
+  incoming_value: string,
+  comparison_type: "mutually_exclusive_value" | "numeric_delta" | "time_scope_overlap" | "negated_claim",
+  scope: {story_id, time_scope, entity_keys},
+  proposed_status: "open" | "accepted_correction",
+  evidence_refs: [evidence_ref_input],
+  confidence: decimal_0_to_1
+}</pre>
+
+    <p>A proposed correction may update current story facts only through accepted <code>record_conflicts</code> and <code>merge_facts</code> ops. The conflict record remains durable even after resolution.</p>
+  </section>
+
+  <section>
+    <h2>9. Proposal and Arbitration Requirements</h2>
+    <p>This slice uses the validated storage schema without expanding it unless implementation discovers a blocker. New behavior is expressed as stricter proposal payloads, tests, and context rules.</p>
+
+    <h3>9.1 Required Proposal Ops by Decision</h3>
+    <table>
+      <thead>
+        <tr><th>Decision</th><th>Minimum ops</th><th>Allowed edge types</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>attach</code></td><td><code>create_input</code> if not admitted, <code>attach_input</code>, <code>record_event</code>, optional fact/background/question ops</td><td><code>supports</code>, <code>updates</code></td></tr>
+        <tr><td><code>split</code></td><td><code>create_story</code>, <code>attach_input</code>, <code>merge_facts</code>, <code>record_event</code></td><td><code>supports</code>, <code>updates</code></td></tr>
+        <tr><td><code>part_of</code></td><td><code>attach_story_part_of</code>, <code>record_event</code></td><td><code>part_of</code></td></tr>
+        <tr><td><code>conflict</code></td><td><code>record_conflicts</code>, <code>record_event</code>, optional <code>merge_facts</code> after accepted correction</td><td><code>contradicts</code></td></tr>
+        <tr><td><code>no_op</code></td><td><code>attach_input</code>, <code>record_event</code></td><td><code>duplicates</code> or <code>supports</code></td></tr>
+        <tr><td><code>color</code></td><td><code>append_colors</code>, <code>record_event</code></td><td><code>adds_color</code></td></tr>
+        <tr><td><code>stale</code></td><td><code>merge_background</code> or <code>mark_state</code>, <code>record_event</code></td><td><code>supports</code> when input-backed; none required for maintenance-only state mark</td></tr>
+      </tbody>
+    </table>
+
+    <h3>9.2 Arbitration Gates</h3>
+    <ul>
+      <li>Reject any proposal or op without per-op evidence refs and confidence.</li>
+      <li>Reject any proposal whose actor cannot read the admitted input or candidate story evidence.</li>
+      <li>Reject <code>attach</code> when identity evidence is only topic overlap.</li>
+      <li>Reject <code>split</code> when it creates a story key collision without a collision rationale.</li>
+      <li>Reject <code>conflict</code> when fact scope is missing or incompatible.</li>
+      <li>Reject any attempt to mutate committed graph rows outside <code>Arbitration.commit/2</code> and <code>graph_commits</code>.</li>
+      <li>Reject <code>related</code>, <code>adjacent_to</code>, <code>reframes</code>, or <code>mentions</code> edge commits in this slice because the validated storage schema does not allow them yet.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>10. Fixture-to-Real Transition Plan</h2>
+    <table>
+      <thead>
+        <tr><th>Harness assumption</th><th>Disposition</th><th>Required replacement</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>fixture_id</code> identifies inputs and proposals.</td><td><span class="bad">Remove from real path</span></td><td>Use <code>input_id</code>, <code>external_id</code>, <code>content_sha256</code>, and evidence refs. Keep <code>fixture_id</code> only in fixture import tests.</td></tr>
+        <tr><td>Manifest file order defines ingestion order.</td><td><span class="bad">Remove from real path</span></td><td>Order by <code>observed_at</code>, then <code>retrieved_at</code>, then insertion ID for deterministic tests.</td></tr>
+        <tr><td>Title-token story key generation.</td><td><span class="bad">Replace</span></td><td>Generate from identity anchors and require collision handling.</td></tr>
+        <tr><td>Keyword normalizer extracts known ferry/roof/sensor facts.</td><td><span class="bad">Isolate</span></td><td>Keep as fixture normalizer only. Real normalizer must emit generic claims/entities/fact keys with spans.</td></tr>
+        <tr><td>Correction word gates conflict detection.</td><td><span class="bad">Replace</span></td><td>Use bounded fact-key/value/scope contradiction checks.</td></tr>
+        <tr><td>Expected artifacts exist beside inputs.</td><td><span class="warn">Keep as assertions</span></td><td>Real eval fixtures may include expected outputs, but production code cannot read them during ingestion.</td></tr>
+        <tr><td>Proposal, arbitration, graph commit, evidence, ACL, conflict, and seen-state invariants.</td><td><span class="ok">Keep</span></td><td>Use the storage-hardened context paths unchanged.</td></tr>
+        <tr><td>Golden corpus category coverage.</td><td><span class="ok">Keep</span></td><td>Re-run as regression plus new real-style input packs.</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>11. Tests and Evals</h2>
+    <p>The acceptance suite must prove the new path is not fixture-shaped demo code.</p>
+
+    <h3>11.1 Required Test Packs</h3>
+    <ul>
+      <li><strong>Real-style public pack:</strong> 8 to 12 admitted public items with source URLs or raw object refs, no fixture IDs, no story hints, mixed source posture, and at least one attach, split, part_of, conflict, no_op, color, and stale/background case.</li>
+      <li><strong>Real-style private pack:</strong> 5 to 8 private messages/emails/user notes with participants, thread continuity, an unresolved question, a later material update, and one ACL rejection case.</li>
+      <li><strong>Collision pack:</strong> two stories that produce the same initial slug but are structurally distinct, plus a later item that correctly attaches to one of them.</li>
+      <li><strong>Conflict scope pack:</strong> one true contradiction, one update-over-time that is not conflict, one opinion/framing item that is not fact conflict, and one low-confidence abstention.</li>
+    </ul>
+
+    <h3>11.2 Acceptance Checks</h3>
+    <ol class="tight">
+      <li>Real admission rejects <code>fixture_id</code>, <code>story_hint</code>, <code>expected_role</code>, and equivalent trusted labels.</li>
+      <li>All admitted inputs persist with required provenance and ACL.</li>
+      <li>Candidate retrieval returns visible candidate stories and evidence without ranking/headliner fields.</li>
+      <li>Each required decision type appears at least once: <code>attach</code>, <code>split</code>, <code>part_of</code>, <code>conflict</code>, <code>no_op</code>, <code>color</code>, <code>stale</code>.</li>
+      <li>No decision is based solely on title overlap or source filename.</li>
+      <li>Story key collisions are deterministic and non-destructive.</li>
+      <li>Conflict detection catches incompatible fact values without correction wording.</li>
+      <li>Change-over-time is not misclassified as conflict when time scope differs.</li>
+      <li>Every graph mutation passes through proposals, proposal ops, accepted decisions, graph commits, evidence refs, and confidence.</li>
+      <li>No committed edge has type <code>related</code>.</li>
+      <li>Private evidence is unavailable to unauthorized actors in retrieval, proposals, arbitration, authoring, and seen-state.</li>
+      <li>Golden fixture tests still pass with fixture-only assumptions isolated.</li>
+      <li>Storage harness and live Postgres schema validation still pass.</li>
+    </ol>
+
+    <h3>11.3 Forbidden Pass Conditions</h3>
+    <ul>
+      <li>A test can pass by matching a fixture ID, filename, manifest order, expected artifact, or hard-coded title phrase.</li>
+      <li>A conflict test passes only because the title contains "correct" or "contradiction."</li>
+      <li>A near-collision test creates a destructive merge or rewrites an existing story key.</li>
+      <li>A no-op duplicate advances <code>last_material_at</code> or appears as a material user delta.</li>
+      <li>Proposal payloads contain evidence-free rationales that arbitration accepts.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>12. Exact Next Implementation Slice</h2>
+    <ol>
+      <li>Add a real-admission module in the storage harness or next Phoenix context boundary: <code>Primeradiant.Ingestion.Admission.admit_source_item/2</code>. It validates the real item shape, rejects fixture labels, computes hashes, and persists/returns an <code>inputs</code> row.</li>
+      <li>Add <code>Primeradiant.Ingestion.RealNormalizer.normalize/1</code> with generic claim/entity/event/color/question output and span-backed provenance. Initial extraction can be deterministic/rule-based, but it must not contain corpus-specific ferry/roof/sensor shortcuts.</li>
+      <li>Add <code>Primeradiant.StoryIdentity.Candidates.retrieve/2</code> using exact dedupe, visible token/entity/fact overlap, and time windows. It must return candidate evidence packets, not rankings.</li>
+      <li>Add <code>Primeradiant.StoryIdentity.Decider.decide/3</code> implementing the seven decision types and bounded conflict checks.</li>
+      <li>Map decisions to existing proposal ops and storage commit paths. Do not add tables unless a failing test proves the current schema cannot represent the behavior.</li>
+      <li>Add the four real-style test packs and keep the existing proof/storage harness tests green.</li>
+      <li>Run proof harness tests, storage harness tests, and live Postgres schema validation before reporting readiness.</li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>13. Explicit Non-Goals</h2>
+    <ul>
+      <li>No RSS, email, message, web-search, or social connector implementation.</li>
+      <li>No broad UI, story dashboard, proposal review UI, or authored briefing UI.</li>
+      <li>No ranking, headliner selection, popularity scoring, feed placement, or alert threshold system.</li>
+      <li>No swarm scaling, Oban production lanes, autonomous acquisition loop, or production daemon.</li>
+      <li>No deployment, Docker release, persistent service operation, or production secrets/configuration.</li>
+      <li>No new first-class graph source of truth outside Postgres.</li>
+      <li>No broad semantic contradiction engine beyond bounded fact-key/value/scope checks.</li>
+      <li>No story-key rename or destructive story merge flow.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>14. Internal Adversarial Review</h2>
+    <table>
+      <thead>
+        <tr><th>Review question</th><th>Result</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Does this preserve product truth: story state over item summaries?</td><td><span class="ok">Pass.</span> Inputs remain evidence. The maintained object is story state through proposals, graph commits, events, facts, and conflicts.</td></tr>
+        <tr><td>Does it violate the validated storage schema?</td><td><span class="ok">Pass.</span> The decision outputs map to existing tables and op types. The spec explicitly rejects edge types not currently allowed by storage.</td></tr>
+        <tr><td>Does it sneak in connectors or ranking/headliners?</td><td><span class="ok">Pass.</span> Admission is manual and retrieval is recall-only. Ranking/headliners remain explicit non-goals.</td></tr>
+        <tr><td>Does it remove fixture-shaped shortcuts?</td><td><span class="ok">Pass with test burden.</span> It forbids fixture IDs, story hints, expected artifacts, title-only keys, and keyword-only conflict detection in the real path.</td></tr>
+        <tr><td>Does it overreach into broad AI extraction?</td><td><span class="warn">Bounded.</span> Generic claim/fact extraction is required, but the first implementation may be deterministic and limited to fact-key/value/scope cases.</td></tr>
+        <tr><td>Does it create honest blockers?</td><td><span class="ok">Pass.</span> Residual risks below identify the unresolved extraction and schema-mapping risks.</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>15. Blockers and Residual Risks</h2>
+    <div class="callout risk">
+      <p><strong>Extraction quality risk:</strong> Real source items require generic claim/entity/fact extraction. A deterministic first pass can prove the boundary, but it may under-detect conflicts until model-assisted structured extraction is added and evaluated.</p>
+    </div>
+    <div class="callout risk">
+      <p><strong>Schema fit risk:</strong> The validated schema can represent this slice, but it does not have first-class raw source rows or source artifacts. This spec uses the existing <code>inputs.object_uri</code>, <code>normalized</code>, and provenance payloads until a future raw-source schema is explicitly specified.</p>
+    </div>
+    <div class="callout risk">
+      <p><strong>Edge vocabulary risk:</strong> Architecture docs mention <code>mentions</code>, <code>reframes</code>, and <code>adjacent_to</code>, but storage validation currently allows only <code>supports</code>, <code>updates</code>, <code>duplicates</code>, <code>contradicts</code>, <code>adds_color</code>, <code>part_of</code>, and <code>watch_applies_to</code>. This slice follows storage until a separate edge expansion spec exists.</p>
+    </div>
+    <div class="callout blocker">
+      <p><strong>Implementation blocker if encountered:</strong> If the storage harness cannot persist real admitted inputs without fixture IDs, implementation must stop and patch the admission/storage path first. Do not compensate by filling fake fixture IDs.</p>
+    </div>
+  </section>
+</main>
+</body>
+</html>

@@ -1,0 +1,12 @@
+_build/
+deps/
+.elixir_ls/
+.DS_Store
+erl_crash.dump
+*.ez
+*.beam
+*.dump
+cover/
+tmp/
+log/
+scratch/*.log

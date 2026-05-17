@@ -1,0 +1,9 @@
+{
+  "required_cases": [
+    "near_duplicate_overlap_attaches",
+    "adjacent_distinct_story_splits",
+    "correction_records_conflicts",
+    "framing_adds_color_without_structural_update",
+    "low_global_rank_personal_watch_surfaces"
+  ]
+}

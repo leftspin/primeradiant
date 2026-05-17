@@ -1,0 +1,9 @@
+{
+  "fixture_id": "public_story_002_followup_update",
+  "source_type": "news_article",
+  "external_id": "fixture:public:002",
+  "observed_at": "2026-05-02T09:30:00-07:00",
+  "title": "Harbor ferry strike expands into second day",
+  "acl": {"privacy": "public"},
+  "body_text": "The harbor ferry strike remains active into the second day. Crossings are limited to morning service only, and negotiations are scheduled for 17:00. City officials said tourists should use the tunnel."
+}

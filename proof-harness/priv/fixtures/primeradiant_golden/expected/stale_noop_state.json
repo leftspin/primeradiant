@@ -1,0 +1,6 @@
+{
+  "story_key": "harbor-ferry-strike",
+  "input_id": "stale_case_001_related_no_material_change",
+  "expected_state": "background",
+  "expected_edge_type": "adds_color"
+}

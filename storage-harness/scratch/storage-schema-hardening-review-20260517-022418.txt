@@ -1,0 +1,4 @@
+WARNING: proceeding, even though we could not update PATH: No locks available (os error 77)
+Reading additional input from stdin...
+2026-05-17T09:24:35.958154Z ERROR codex_core::session: Failed to create session: No locks available (os error 77)
+Error: thread/start: thread/start failed: error creating thread: Fatal error: Failed to initialize session: No locks available (os error 77)

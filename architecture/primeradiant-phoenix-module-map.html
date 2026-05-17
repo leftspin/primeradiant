@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>primeradiant — Phoenix Module Map</title>
+  <style>
+    :root { color-scheme: dark light; --fg: var(--clawline-fg, #f4ead7); --muted: color-mix(in srgb, var(--fg) 68%, transparent); --line: color-mix(in srgb, var(--fg) 18%, transparent); --card: color-mix(in srgb, var(--fg) 7%, transparent); --card2: color-mix(in srgb, var(--fg) 11%, transparent); --accent: #d39b48; --accent2: #9bc7ff; --good: #9fd39b; --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+    html, body { margin: 0; background: transparent; color: var(--fg); font: 16px/1.55 -apple-system, BlinkMacSystemFont, "SF Pro Text", Inter, sans-serif; }
+    body { padding: 28px 18px 52px; }
+    main { max-width: 1120px; margin: 0 auto; }
+    .eyebrow { color: var(--accent); text-transform: uppercase; letter-spacing: .13em; font-size: 12px; font-weight: 800; }
+    h1 { margin: 8px 0 12px; font-size: clamp(34px, 6vw, 64px); line-height: .96; letter-spacing: -.045em; }
+    h2 { margin: 0 0 12px; font-size: 24px; }
+    h3 { margin: 0 0 8px; font-size: 18px; }
+    p { margin: 0 0 10px; }
+    .lede { color: var(--muted); font-size: clamp(18px, 2.5vw, 23px); max-width: 900px; }
+    section { border: 1px solid var(--line); background: var(--card); border-radius: 24px; padding: 18px; margin: 16px 0; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(265px, 1fr)); gap: 12px; }
+    .widegrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 12px; }
+    .card { border: 1px solid var(--line); background: var(--card2); border-radius: 18px; padding: 14px; }
+    .label { color: var(--accent); text-transform: uppercase; letter-spacing: .09em; font-size: 11px; font-weight: 800; }
+    .callout { border-left: 4px solid var(--accent); padding: 12px 14px; background: color-mix(in srgb, var(--accent) 10%, transparent); border-radius: 14px; margin: 12px 0; }
+    code, pre { font-family: var(--mono); color: var(--accent2); }
+    pre { white-space: pre-wrap; overflow-wrap: anywhere; border: 1px solid var(--line); border-radius: 14px; padding: 12px; background: color-mix(in srgb, #000 18%, transparent); font-size: 13px; line-height: 1.45; }
+    ul, ol { margin: 0; padding-left: 22px; }
+    li { margin: 7px 0; }
+    .ok { color: var(--good); font-weight: 700; }
+  </style>
+</head>
+<body>
+<main>
+  <div class="eyebrow">Phoenix module map</div>
+  <h1>primeradiant application shape</h1>
+  <p class="lede">A concrete Elixir/Phoenix module and ownership map for implementation agents. This stops before code, but removes ambiguity about where product rules should live.</p>
+
+  <section>
+    <h2>1. Rule of placement</h2>
+    <div class="callout"><p><strong>Contexts own product truth.</strong> Controllers, LiveViews, MCP tools, Oban workers, and agents call contexts. They do not smuggle graph mutations or authoring rules around them.</p></div>
+    <div class="grid">
+      <div class="card"><h3>Schemas validate shape</h3><p>Ecto schemas and changesets reject invalid node/edge/proposal state.</p></div>
+      <div class="card"><h3>Contexts validate meaning</h3><p>Contexts enforce story-state invariants, proposal lifecycle, ACLs, and seen-state semantics.</p></div>
+      <div class="card"><h3>Workers orchestrate only</h3><p>Oban workers run jobs and call contexts; they should not contain product logic.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>2. Top-level module tree</h2>
+    <pre>lib/primeradiant/
+├── application.ex
+├── repo.ex
+├── accounts/                  # users/tenants/actors if needed
+├── ingestion/                 # source adapters and canonical inputs
+├── soup/                      # graph nodes, edges, story state, provenance
+├── proposals/                 # agent proposals and typed graph operations
+├── agents/                    # prompt registry, model calls, agent runs
+├── arbitration/               # proposal decisions and commits
+├── projections/               # derived story state, gravity, freshness, deltas
+├── user_context/              # watches, priorities, seen-state
+├── authoring/                 # evidence packets and authored outputs
+├── mcp/                       # MCP tool adapter layer
+└── observability/             # traces, costs, eval records</pre>
+  </section>
+
+  <section>
+    <h2>3. Context ownership</h2>
+    <div class="widegrid">
+      <div class="card"><span class="label">Primeradiant.Ingestion</span><h3>Input truth</h3><p>Owns RawSource, Input, Artifact, SourceSpan. It normalizes outside-world items but must not decide final story meaning.</p><pre>create_raw_source/2
+canonicalize/1
+find_duplicate_input/1
+attach_artifact/2</pre></div>
+      <div class="card"><span class="label">Primeradiant.Soup</span><h3>Committed graph truth</h3><p>Owns SoupNode, SoupEdge, StoryStateSnapshot, GraphCommit, provenance. It is the only context that exposes committed graph reads.</p><pre>search/3
+expand/3
+state/2
+delta/3
+provenance/2</pre></div>
+      <div class="card"><span class="label">Primeradiant.Proposals</span><h3>Proposed change truth</h3><p>Owns Proposal, ProposedOp, EvidenceRef. It validates operation shape but does not decide product acceptance.</p><pre>submit/3
+validate_ops/2
+reviewable/2
+mark_decided/3</pre></div>
+      <div class="card"><span class="label">Primeradiant.Arbitration</span><h3>Commit authority</h3><p>Owns proposal decisions and graph commits. It is the controlled seam between agent creativity and trusted soup state.</p><pre>decide/3
+commit/2
+commit_weak/2
+reject/3</pre></div>
+      <div class="card"><span class="label">Primeradiant.UserContext</span><h3>User-relative truth</h3><p>Owns watches, `/preferences/priorities`, `/stories/concepts`, and seen-state. It prevents global rank from burying personal importance.</p><pre>create_watch/3
+update_priority/3
+seen_state/2
+mark_seen/3</pre></div>
+      <div class="card"><span class="label">Primeradiant.Authoring</span><h3>User-facing truth</h3><p>Owns evidence packets, authored outputs, verification state, and seen-state handoff. It writes only from bounded evidence.</p><pre>plan/2
+evidence_packet/2
+record_output/4
+verify_output/2</pre></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>4. Web and MCP adapters</h2>
+    <div class="widegrid">
+      <div class="card"><span class="label">PrimeradiantWeb</span><h3>LiveView screens</h3><ul><li><code>StoryDashboardLive</code></li><li><code>StoryDetailLive</code></li><li><code>ProposalReviewLive</code></li><li><code>WatchFormLive</code></li><li><code>AuthoredPreviewLive</code></li></ul><p>LiveViews subscribe to PubSub and call contexts. They do not compute story truth.</p></div>
+      <div class="card"><span class="label">PrimeradiantWeb.API</span><h3>JSON endpoints</h3><ul><li><code>SoupController</code></li><li><code>StoryController</code></li><li><code>ProposalController</code></li><li><code>WatchController</code></li><li><code>AuthoringController</code></li></ul><p>Controllers are thin wrappers around contexts.</p></div>
+      <div class="card"><span class="label">Primeradiant.MCP</span><h3>Agent tools</h3><ul><li><code>soup.search</code></li><li><code>soup.expand</code></li><li><code>story.state</code></li><li><code>story.delta</code></li><li><code>soup.provenance</code></li><li><code>soup.propose</code></li><li><code>watch.create</code></li><li><code>author.evidencePacket</code></li></ul><p>MCP tools apply actor/ACL context before calling domain contexts.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>5. Oban worker lanes</h2>
+    <div class="grid">
+      <div class="card"><h3>Ingestion workers</h3><p>Fetch/import/canonicalize source items. Calls <code>Ingestion</code>.</p></div>
+      <div class="card"><h3>Extraction workers</h3><p>Run Claim & Entity Extractor. Calls <code>Agents</code> then <code>Proposals</code>.</p></div>
+      <div class="card"><h3>Swarm workers</h3><p>Run Story Seeker, Connection Weaver, Development Detector, Staleness Keeper, and other proposal agents.</p></div>
+      <div class="card"><h3>Arbitration workers</h3><p>Evaluate proposals and call <code>Arbitration</code>. Human review can be a branch, not a separate truth path.</p></div>
+      <div class="card"><h3>Projection workers</h3><p>Rebuild story state, gravity, freshness, unresolved counts, and user deltas from committed graph.</p></div>
+      <div class="card"><h3>Authoring workers</h3><p>Create evidence packets, draft/verify output, record authored output, and trigger seen-state updates.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>6. Test module map</h2>
+    <pre>test/primeradiant/
+├── ingestion/canonicalization_test.exs
+├── soup/graph_query_test.exs
+├── soup/story_delta_test.exs
+├── proposals/operation_validation_test.exs
+├── arbitration/commit_gate_test.exs
+├── projections/story_state_rebuild_test.exs
+├── user_context/seen_state_test.exs
+├── authoring/evidence_packet_test.exs
+├── mcp/tool_contract_test.exs
+└── golden_corpus/end_to_end_test.exs</pre>
+    <p>The golden corpus end-to-end test is the product guardrail. If it passes only through shortcuts or seeded trusted state, the implementation is cheating.</p>
+  </section>
+
+  <section>
+    <h2>7. Boundaries that should stay hard</h2>
+    <ul>
+      <li><span class="ok">Hard:</span> agents cannot call Soup commit functions directly.</li>
+      <li><span class="ok">Hard:</span> seen-state is updated only from verified authored outputs.</li>
+      <li><span class="ok">Hard:</span> graph analytics are projections, not source of truth.</li>
+      <li><span class="ok">Hard:</span> private ACL checks happen before prompt construction and before authoring.</li>
+      <li><span class="ok">Hard:</span> no destructive story merge/split in v1; create better story nodes and named edges.</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

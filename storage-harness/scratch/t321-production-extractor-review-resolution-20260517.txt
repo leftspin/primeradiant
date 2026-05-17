@@ -1,0 +1,87 @@
+T321 production extractor quality review resolution - 2026-05-17
+
+Source spec:
+- /Users/mike/shared-workspace/primeradiant/specs/primeradiant-production-extractor-quality.html
+
+Review inputs:
+- External/self review capture:
+  /Users/mike/shared-workspace/primeradiant/storage-harness/scratch/t321-production-extractor-review-final-20260517.txt
+- Earlier implementation review capture:
+  /Users/mike/shared-workspace/primeradiant/storage-harness/scratch/t321-production-extractor-review-20260517.txt
+
+Review finding status:
+1. Critical: extractor/eval remained too copula-grammar shaped.
+   Status: resolved for this bounded harness slice.
+   Resolution:
+   - Added non-copula extraction paths for compact and verb-object source text such as
+     "service normal", "route east", "halted service", "deadline moved to monday",
+     "owner registrar", and private-note fragments like "battery low; location lab".
+   - Rewrote part of the extractor eval corpus away from the old
+     "predicate is value" shape while preserving assertion-only expected behavior.
+   - Added bad-value filtering for auxiliary/opinion constructions so framing text
+     such as "triage story" and "triage disruption" does not become structural fact.
+   Remaining risk:
+   - This is still a deterministic first extractor inside the harness, not a broad
+     production NLP/model extractor. The product meaning is bounded proof of the
+     contract, validation, refusal, provenance, and downstream story-semantics path.
+
+2. High: downstream evidence rows dropped span details.
+   Status: resolved.
+   Resolution:
+   - Real ingestion evidence writes now resolve extractor evidence IDs against the
+     persisted production_extractor_v1 evidence_index and store span_start/span_end
+     plus the source text hash on EvidenceRef rows.
+   - Proposal validation now rejects map evidence refs whose evidence_id is not in
+     the committed input's extractor evidence_index.
+
+3. High: envelope adapter synthesized events from input external_id/title.
+   Status: resolved.
+   Resolution:
+   - Adapter events now derive only from extractor structural claims and use the
+     claim's text, time scope, and span-backed evidence refs.
+   - Source stance evidence refs are adapted into input_ref/evidence_id maps so
+     stale/background decisions still have extractor-backed evidence without
+     external-id event synthesis.
+
+4. Fixture/story hint/demo shortcut check.
+   Status: satisfied for T321 scope.
+   Evidence:
+   - Real admission still rejects trusted story_hint/fixture labels.
+   - The production extractor receives Input content/provenance and does not read
+     eval expected outputs, story IDs, fixture IDs, filenames, or expected labels.
+   - The focused eval checks misleading external IDs/titles do not steer extraction.
+
+5. Low-confidence/refusal check.
+   Status: satisfied.
+   Evidence:
+   - Contract validation rejects low_confidence/refused results containing material
+     extraction items, including evidence_index entries.
+   - Low-confidence/refusal inputs map to downstream abstain/needs_more_evidence
+     and do not synthesize structural facts.
+
+6. Downstream adapter/provenance check.
+   Status: satisfied for storage-harness real-ingestion path.
+   Evidence:
+   - Real ingestion now persists production_extractor_v1 output on input.normalized,
+     maps extractor atoms into the real envelope, and commits graph-changing rows
+     with proposal/op/commit provenance plus extractor evidence IDs/spans.
+
+Gates run after fixes:
+- cd /Users/mike/shared-workspace/primeradiant/storage-harness &&
+  /opt/homebrew/bin/mix clean && /opt/homebrew/bin/mix test
+  Result: 27 tests, 0 failures.
+- cd /Users/mike/shared-workspace/primeradiant/storage-harness &&
+  /opt/homebrew/bin/mix test test/primeradiant/production_extractor_quality_test.exs
+  Result: 4 tests, 0 failures.
+- cd /Users/mike/shared-workspace/primeradiant/proof-harness &&
+  /opt/homebrew/bin/mix test
+  Result: 11 tests, 0 failures.
+- cd /Users/mike/shared-workspace/primeradiant/storage-harness &&
+  scripts/validate_postgres_schema.sh
+  Result: postgres_schema_validation_ok; validated primeradiant_storage_validation_92396 on host /tmp.
+
+Verdict:
+- No unresolved blocker remains for the bounded T321 storage-harness implementation.
+- Residual product risk: broad, production NLP extraction quality is still not
+  proven beyond this harness/eval corpus; the slice is ready for Flynn verification
+  as a contract, validation, provenance, refusal, and downstream integration proof.
