@@ -13,3 +13,11 @@ The default test gate uses production-shaped Ecto schemas and a migration-equiva
 When local Postgres tooling is already available, run `scripts/validate_postgres_schema.sh` to create an isolated temporary database, apply `priv/repo/migrations/20260517000000_create_storage_schema.sql`, run targeted trigger/constraint checks, and drop the database.
 
 The real-ingestion slice starts at `Primeradiant.StorageHarness.RealIngestion.ingest_items/2`. It admits manual real source items without fixture IDs or trusted story hints, normalizes generic span-backed facts/entities/questions/colors, retrieves visible candidate stories, makes bounded story-identity decisions, and maps accepted decisions through proposal/decision/graph-commit storage rows.
+
+Replay already-stored daemon news rows without mutating the source SQLite database:
+
+```sh
+mix primeradiant.daemon_news_replay --db /Volumes/BlipsAndChitz/news-storage/news.db --tenant 00000000-0000-0000-0000-000000000001
+```
+
+The command reads `messages` with SQLite read-only mode, maps supported `swarm.channel.news.report.v0` envelopes into the real-ingestion path, writes only in-memory Primeradiant-owned harness state, and prints a changed-stories-with-evidence JSON report.
