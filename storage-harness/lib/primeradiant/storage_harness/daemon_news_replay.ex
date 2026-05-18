@@ -1,7 +1,7 @@
 defmodule Primeradiant.StorageHarness.DaemonNewsReplay do
   @moduledoc false
 
-  alias Primeradiant.StorageHarness.RealIngestion
+  alias Primeradiant.StorageHarness.{DurableSoupDb, RealIngestion}
 
   @default_db_path "/Volumes/BlipsAndChitz/news-storage/news.db"
   @message_type "swarm.channel.news.report.v0"
@@ -16,13 +16,35 @@ defmodule Primeradiant.StorageHarness.DaemonNewsReplay do
     tenant_id = Keyword.fetch!(opts, :tenant_id)
     actor_id = Keyword.get(opts, :actor_id, "flynn")
     limit = Keyword.get(opts, :limit)
+    soup_db_path = Keyword.get(opts, :soup_db_path, default_soup_db_path())
 
     with :ok <- validate_source_db(db_path),
          {:ok, rows} <- read_rows(db_path, limit),
          {:ok, items} <- rows_to_items(rows, tenant_id, raw_root),
          {:ok, state, ingestion_report} <- RealIngestion.ingest_items(items, actor_id) do
-      {:ok, state, build_report(db_path, rows, state, ingestion_report)}
+      source_summary = source_summary(db_path, rows)
+
+      DurableSoupDb.persist!(soup_db_path, state, %{
+        source_kind: "daemon_news_sqlite",
+        source_db_path: db_path,
+        source_row_count: length(rows)
+      })
+
+      report =
+        DurableSoupDb.changed_stories_report(
+          soup_db_path,
+          tenant_id,
+          source_summary,
+          ingestion_report
+        )
+
+      {:ok, state, report}
     end
+  end
+
+  def default_soup_db_path do
+    System.get_env("PRIMERADIANT_SOUP_DB") ||
+      Path.join(System.tmp_dir!(), "primeradiant-daemon-news-soup.sqlite3")
   end
 
   def validate_source_db(db_path) do
@@ -190,82 +212,15 @@ defmodule Primeradiant.StorageHarness.DaemonNewsReplay do
     "#{row["raw_archive_path"]}#offset=#{row["raw_archive_offset"]}&length=#{row["raw_archive_length"]}"
   end
 
-  defp build_report(db_path, source_rows, state, ingestion_report) do
-    changed_story_ids =
-      state.story_events
-      |> Enum.reject(&(&1.classification == "no_op"))
-      |> Enum.map(& &1.story_id)
-      |> MapSet.new()
-
-    changed_stories =
-      state.stories
-      |> Enum.filter(&MapSet.member?(changed_story_ids, &1.id))
-      |> Enum.map(&story_report(&1, state))
-
+  defp source_summary(db_path, source_rows) do
     %{
-      source: %{
-        kind: "daemon_news_sqlite",
-        db_path: db_path,
-        mode: "read_only",
-        message_type: @message_type,
-        source_row_count: length(source_rows)
-      },
-      primeradiant_writes: %{
-        owned_state_only: true,
-        inputs: length(state.inputs),
-        stories: length(state.stories),
-        proposals: length(state.proposals),
-        proposal_ops: length(state.proposal_ops),
-        graph_commits: length(state.graph_commits),
-        evidence_refs: length(state.evidence_refs)
-      },
-      ingestion: ingestion_report,
-      changed_stories: changed_stories
+      kind: "daemon_news_sqlite",
+      db_path: db_path,
+      mode: "read_only",
+      message_type: @message_type,
+      source_row_count: length(source_rows)
     }
   end
-
-  defp story_report(story, state) do
-    events = Enum.filter(state.story_events, &(&1.story_id == story.id))
-    facts = Enum.filter(state.story_fact_versions, &(&1.story_id == story.id))
-
-    %{
-      story_id: story.id,
-      story_key: story.story_key,
-      title: story.title,
-      state: story.state,
-      version: story.version,
-      changed_event_count: length(events),
-      current_facts: story.structural_facts,
-      evidence: Enum.map(events ++ facts, &evidence_for_subject(&1, state))
-    }
-  end
-
-  defp evidence_for_subject(row, state) do
-    refs =
-      Enum.filter(state.evidence_refs, fn ref ->
-        ref.subject_id == row.id
-      end)
-
-    %{
-      subject_type: schema_subject(row),
-      subject_id: row.id,
-      evidence_refs:
-        Enum.map(refs, fn ref ->
-          input = Enum.find(state.inputs, &(&1.id == ref.input_id))
-
-          %{
-            input_id: ref.input_id,
-            external_id: input && input.external_id,
-            label: ref.evidence_label,
-            span_start: ref.span_start,
-            span_end: ref.span_end
-          }
-        end)
-    }
-  end
-
-  defp schema_subject(%Primeradiant.StorageHarness.StoryEvent{}), do: "story_event"
-  defp schema_subject(%Primeradiant.StorageHarness.StoryFactVersion{}), do: "story_fact_version"
 
   defp sqlite_readonly(db_path, sql) do
     case System.cmd("sqlite3", ["-readonly", db_path, sql], stderr_to_stdout: true) do

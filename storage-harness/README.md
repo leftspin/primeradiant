@@ -17,7 +17,7 @@ The real-ingestion slice starts at `Primeradiant.StorageHarness.RealIngestion.in
 Replay already-stored daemon news rows without mutating the source SQLite database:
 
 ```sh
-mix primeradiant.daemon_news_replay --db /Volumes/BlipsAndChitz/news-storage/news.db --tenant 00000000-0000-0000-0000-000000000001
+mix primeradiant.daemon_news_replay --db /Volumes/BlipsAndChitz/news-storage/news.db --soup-db /tmp/primeradiant-soup.sqlite3 --tenant 00000000-0000-0000-0000-000000000001
 ```
 
-The command reads `messages` with SQLite read-only mode, maps supported `swarm.channel.news.report.v0` envelopes into the real-ingestion path, writes only in-memory Primeradiant-owned harness state, and prints a changed-stories-with-evidence JSON report.
+The command reads `messages` with SQLite read-only mode, maps supported `swarm.channel.news.report.v0` envelopes into the real-ingestion path, writes Primeradiant-owned soup tables to `--soup-db`, and prints a changed-stories-with-evidence JSON report generated back from that persisted soup database.

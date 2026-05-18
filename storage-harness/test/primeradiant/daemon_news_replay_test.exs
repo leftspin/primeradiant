@@ -2,6 +2,7 @@ defmodule Primeradiant.DaemonNewsReplayTest do
   use ExUnit.Case, async: false
 
   alias Primeradiant.StorageHarness.DaemonNewsReplay
+  alias Primeradiant.StorageHarness.DurableSoupDb
 
   @tenant Ecto.UUID.generate()
 
@@ -16,6 +17,7 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     on_exit(fn -> File.rm_rf!(tmp) end)
 
     db_path = Path.join(tmp, "news.db")
+    soup_db_path = Path.join(tmp, "primeradiant-soup.sqlite3")
     raw_path = Path.join(tmp, "archive.jsonl")
 
     rows = [
@@ -34,7 +36,12 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     before_stat = File.stat!(db_path)
 
     {:ok, state, report} =
-      DaemonNewsReplay.replay(db_path: db_path, tenant_id: @tenant, actor_id: "flynn")
+      DaemonNewsReplay.replay(
+        db_path: db_path,
+        soup_db_path: soup_db_path,
+        tenant_id: @tenant,
+        actor_id: "flynn"
+      )
 
     after_stat = File.stat!(db_path)
     assert before_stat.mtime == after_stat.mtime
@@ -43,8 +50,20 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert report.source.mode == "read_only"
     assert report.source.source_row_count == 2
     assert report.primeradiant_writes.owned_state_only
+    assert report.primeradiant_writes.durable
+    assert report.primeradiant_writes.soup_db_path == soup_db_path
     assert report.primeradiant_writes.inputs == 2
     assert report.primeradiant_writes.graph_commits > 0
+    assert File.regular?(soup_db_path)
+
+    assert DurableSoupDb.table_count(soup_db_path, "inputs", @tenant) == 2
+    assert DurableSoupDb.table_count(soup_db_path, "stories", @tenant) >= 1
+    assert DurableSoupDb.table_count(soup_db_path, "story_events", @tenant) >= 2
+    assert DurableSoupDb.table_count(soup_db_path, "story_fact_versions", @tenant) >= 1
+    assert DurableSoupDb.table_count(soup_db_path, "proposals", @tenant) >= 2
+    assert DurableSoupDb.table_count(soup_db_path, "proposal_decisions", @tenant) >= 2
+    assert DurableSoupDb.table_count(soup_db_path, "graph_commits", @tenant) > 0
+    assert DurableSoupDb.table_count(soup_db_path, "evidence_refs", @tenant) > 0
 
     assert Enum.all?(state.inputs, &is_nil(&1.fixture_id))
     assert Enum.all?(state.inputs, &(&1.source_type == "news_article"))
@@ -54,7 +73,7 @@ defmodule Primeradiant.DaemonNewsReplayTest do
              &(get_in(&1.normalized, ["source_mode"]) == "manual_real_ingest_v1")
            )
 
-    assert [%{evidence: evidence} | _] = report.changed_stories
+    assert [%{"evidence" => evidence} | _] = report.changed_stories
     assert evidence != []
 
     labels =
@@ -63,6 +82,54 @@ defmodule Primeradiant.DaemonNewsReplayTest do
       |> Enum.map(& &1.label)
 
     assert Enum.any?(labels, &String.contains?(&1, "news-1"))
+  end
+
+  test "changed stories report is regenerated from persisted soup database" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-daemon-news-report-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    db_path = Path.join(tmp, "news.db")
+    soup_db_path = Path.join(tmp, "primeradiant-soup.sqlite3")
+    raw_path = Path.join(tmp, "archive.jsonl")
+
+    rows = [
+      envelope(
+        "Harbor ferry halted",
+        "Harbor ferry service_state is halted venue is pier speaker is operator."
+      ),
+      envelope(
+        "Harbor ferry restored",
+        "Harbor ferry service_state is restored venue is pier speaker is operator."
+      )
+    ]
+
+    offsets = write_archive!(raw_path, rows)
+    create_source_db!(db_path, raw_path, offsets)
+
+    {:ok, _state, first_report} =
+      DaemonNewsReplay.replay(
+        db_path: db_path,
+        soup_db_path: soup_db_path,
+        tenant_id: @tenant,
+        actor_id: "flynn"
+      )
+
+    persisted_report =
+      DurableSoupDb.changed_stories_report(
+        soup_db_path,
+        @tenant,
+        first_report.source,
+        first_report.ingestion
+      )
+
+    assert persisted_report.changed_stories == first_report.changed_stories
+    assert persisted_report.primeradiant_writes.soup_db_path == soup_db_path
   end
 
   test "validates daemon source schema before replaying" do

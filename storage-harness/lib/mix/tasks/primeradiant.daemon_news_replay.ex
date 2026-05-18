@@ -17,6 +17,7 @@ defmodule Mix.Tasks.Primeradiant.DaemonNewsReplay do
           raw_root: :string,
           tenant: :string,
           actor: :string,
+          soup_db: :string,
           limit: :integer
         ]
       )
@@ -28,6 +29,7 @@ defmodule Mix.Tasks.Primeradiant.DaemonNewsReplay do
       raw_root: Keyword.get(opts, :raw_root),
       tenant_id: tenant_id,
       actor_id: Keyword.get(opts, :actor, "flynn"),
+      soup_db_path: Keyword.get(opts, :soup_db, DaemonNewsReplay.default_soup_db_path()),
       limit: Keyword.get(opts, :limit)
     ]
 
