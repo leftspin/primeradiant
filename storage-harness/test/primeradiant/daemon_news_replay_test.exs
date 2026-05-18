@@ -54,6 +54,7 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert report.primeradiant_writes.soup_db_path == soup_db_path
     assert report.primeradiant_writes.inputs == 2
     assert report.primeradiant_writes.graph_commits > 0
+    assert report.extraction_quality.counts != []
     assert File.regular?(soup_db_path)
 
     assert DurableSoupDb.table_count(soup_db_path, "inputs", @tenant) == 2
@@ -153,6 +154,63 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert "raw_archive_path" in missing
   end
 
+  test "unsupported live extraction shapes are refused inspectably without mutating source" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-daemon-news-refusal-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    db_path = Path.join(tmp, "news.db")
+    soup_db_path = Path.join(tmp, "primeradiant-soup.sqlite3")
+    raw_path = Path.join(tmp, "archive.jsonl")
+
+    rows = [
+      envelope(
+        "Planet discovery update",
+        "Planet Nine mass is debated and discovery is preliminary according to sources."
+      )
+    ]
+
+    offsets = write_archive!(raw_path, rows)
+    create_source_db!(db_path, raw_path, offsets, ["news-planet"])
+    before_stat = File.stat!(db_path)
+
+    {:ok, _state, report} =
+      DaemonNewsReplay.replay(
+        db_path: db_path,
+        soup_db_path: soup_db_path,
+        tenant_id: @tenant,
+        actor_id: "flynn"
+      )
+
+    after_stat = File.stat!(db_path)
+    assert before_stat.mtime == after_stat.mtime
+    assert before_stat.size == after_stat.size
+
+    decision = List.first(report.ingestion.decisions)
+    assert decision.decision_type == :abstain
+    assert decision.status == :needs_more_evidence
+    assert report.primeradiant_writes.inputs == 1
+    assert report.primeradiant_writes.proposals == 1
+    assert report.primeradiant_writes.graph_commits == 0
+
+    assert [%{"status" => "usable", "count" => 1}] = report.extraction_quality.counts
+    assert [] = report.extraction_quality.refused_or_low_confidence_sample
+
+    normalized =
+      sqlite_json!(
+        soup_db_path,
+        "SELECT normalized FROM inputs WHERE external_id = 'news-planet';"
+      )
+
+    facts = Jason.decode!(normalized)["production_extractor_v1"]["claims"]
+    refute Enum.any?(facts, &(&1["structural_candidate"] == true))
+  end
+
   defp envelope(title, summary) do
     %{
       "type" => "swarm.channel.news.report.v0",
@@ -180,7 +238,12 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     chunks
   end
 
-  defp create_source_db!(db_path, raw_path, [{offset1, length1}, {offset2, length2}]) do
+  defp create_source_db!(db_path, raw_path, offsets, ids \\ ["news-1", "news-2"])
+
+  defp create_source_db!(db_path, raw_path, [{offset1, length1}, {offset2, length2}], [
+         id1,
+         id2
+       ]) do
     sql = """
     CREATE TABLE schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
     CREATE TABLE messages (
@@ -197,10 +260,38 @@ defmodule Primeradiant.DaemonNewsReplayTest do
       raw_sha256 TEXT NOT NULL
     );
     INSERT INTO messages VALUES
-      ('news-1', 'swarm.channel.news', 'receptor', 'sender', 'swarm.channel.news.report.v0', '2026-05-17T10:00:00Z', '2026-05-17T10:00:01Z', '#{raw_path}', #{offset1}, #{length1}, 'sha-1'),
-      ('news-2', 'swarm.channel.news', 'receptor', 'sender', 'swarm.channel.news.report.v0', '2026-05-17T10:05:00Z', '2026-05-17T10:05:01Z', '#{raw_path}', #{offset2}, #{length2}, 'sha-2');
+      ('#{id1}', 'swarm.channel.news', 'receptor', 'sender', 'swarm.channel.news.report.v0', '2026-05-17T10:00:00Z', '2026-05-17T10:00:01Z', '#{raw_path}', #{offset1}, #{length1}, 'sha-1'),
+      ('#{id2}', 'swarm.channel.news', 'receptor', 'sender', 'swarm.channel.news.report.v0', '2026-05-17T10:05:00Z', '2026-05-17T10:05:01Z', '#{raw_path}', #{offset2}, #{length2}, 'sha-2');
     """
 
     {_out, 0} = System.cmd("sqlite3", [db_path, sql])
+  end
+
+  defp create_source_db!(db_path, raw_path, [{offset, length}], [id]) do
+    sql = """
+    CREATE TABLE schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+    CREATE TABLE messages (
+      message_id TEXT PRIMARY KEY,
+      source_space TEXT,
+      receptor_id TEXT,
+      sender_id TEXT,
+      message_type TEXT,
+      created_at TEXT,
+      received_at TEXT NOT NULL,
+      raw_archive_path TEXT NOT NULL,
+      raw_archive_offset INTEGER NOT NULL,
+      raw_archive_length INTEGER NOT NULL,
+      raw_sha256 TEXT NOT NULL
+    );
+    INSERT INTO messages VALUES
+      ('#{id}', 'swarm.channel.news', 'receptor', 'sender', 'swarm.channel.news.report.v0', '2026-05-17T10:00:00Z', '2026-05-17T10:00:01Z', '#{raw_path}', #{offset}, #{length}, 'sha-1');
+    """
+
+    {_out, 0} = System.cmd("sqlite3", [db_path, sql])
+  end
+
+  defp sqlite_json!(db_path, sql) do
+    {output, 0} = System.cmd("sqlite3", [db_path, sql])
+    String.trim(output)
   end
 end

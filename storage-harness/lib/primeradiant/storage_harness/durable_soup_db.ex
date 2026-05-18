@@ -81,12 +81,54 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
         graph_commits: count(db_path, "graph_commits", tenant_id),
         evidence_refs: count(db_path, "evidence_refs", tenant_id)
       },
+      extraction_quality: extraction_quality_report(db_path, tenant_id),
       ingestion: ingestion_report,
       changed_stories: changed_stories
     }
   end
 
   def table_count(db_path, table, tenant_id), do: count(db_path, table, tenant_id)
+
+  defp extraction_quality_report(db_path, tenant_id) do
+    counts =
+      query_json(db_path, """
+      SELECT json_object(
+        'status', COALESCE(json_extract(normalized, '$.production_extractor_v1.quality.status'), 'unknown'),
+        'count', COUNT(*)
+      )
+      FROM inputs
+      WHERE tenant_id = #{sql_quote(tenant_id)}
+      GROUP BY COALESCE(json_extract(normalized, '$.production_extractor_v1.quality.status'), 'unknown')
+      ORDER BY COALESCE(json_extract(normalized, '$.production_extractor_v1.quality.status'), 'unknown');
+      """)
+
+    refused_inputs =
+      query_json(db_path, """
+      SELECT json_object(
+        'input_id', id,
+        'external_id', external_id,
+        'title', title,
+        'status', json_extract(normalized, '$.production_extractor_v1.quality.status'),
+        'reasons', json_extract(normalized, '$.production_extractor_v1.quality.reasons'),
+        'warnings', json_extract(normalized, '$.production_extractor_v1.quality.warnings')
+      )
+      FROM inputs
+      WHERE tenant_id = #{sql_quote(tenant_id)}
+        AND json_extract(normalized, '$.production_extractor_v1.quality.status') IN ('refused', 'low_confidence')
+      ORDER BY observed_at, external_id
+      LIMIT 25;
+      """)
+      |> Enum.map(fn row ->
+        row
+        |> Map.update("reasons", [], &decode_json(&1, []))
+        |> Map.update("warnings", [], &decode_json(&1, []))
+      end)
+
+    %{
+      counts: counts,
+      refused_or_low_confidence_sample: refused_inputs
+    }
+  end
 
   defp put_story_evidence(story, db_path, tenant_id) do
     story_id = story["story_id"]
@@ -320,7 +362,16 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
 
   defp decode_json(nil, default), do: default
   defp decode_json("", default), do: default
-  defp decode_json(value, _default), do: Jason.decode!(value)
+
+  defp decode_json(value, _default) when is_binary(value) do
+    case Jason.decode(value) do
+      {:ok, decoded} -> decoded
+      {:error, _error} -> [value]
+    end
+  end
+
+  defp decode_json(value, _default) when is_list(value) or is_map(value), do: value
+  defp decode_json(_value, default), do: default
 
   defp now, do: DateTime.utc_now() |> DateTime.truncate(:microsecond) |> DateTime.to_iso8601()
 

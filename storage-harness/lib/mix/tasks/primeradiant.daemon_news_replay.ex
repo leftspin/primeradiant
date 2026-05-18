@@ -22,7 +22,7 @@ defmodule Mix.Tasks.Primeradiant.DaemonNewsReplay do
         ]
       )
 
-    tenant_id = Keyword.get(opts, :tenant) || Ecto.UUID.generate()
+    tenant_id = opts |> Keyword.get(:tenant) |> tenant_id()
 
     replay_opts = [
       db_path: Keyword.get(opts, :db, DaemonNewsReplay.default_db_path()),
@@ -40,5 +40,23 @@ defmodule Mix.Tasks.Primeradiant.DaemonNewsReplay do
       {:error, reason} ->
         Mix.raise("daemon news replay failed: #{inspect(reason)}")
     end
+  end
+
+  defp tenant_id(nil), do: Ecto.UUID.generate()
+
+  defp tenant_id(value) do
+    case Ecto.UUID.cast(value) do
+      {:ok, uuid} -> uuid
+      :error -> deterministic_tenant_id(value)
+    end
+  end
+
+  defp deterministic_tenant_id(value) do
+    <<a::binary-size(8), b::binary-size(4), c::binary-size(4), d::binary-size(4),
+      e::binary-size(12), _rest::binary>> =
+      :crypto.hash(:sha256, "primeradiant-tenant:" <> value)
+      |> Base.encode16(case: :lower)
+
+    Enum.join([a, b, c, d, e], "-")
   end
 end

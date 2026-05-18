@@ -7,12 +7,25 @@ defmodule Primeradiant.Extraction.ProductionExtractor do
 
   @extractor_version "production_extractor_v1_deterministic_20260517"
   @copulas ~w(is are was were remains remain stayed stays became becomes set)
+  @structural_fact_keys ~w(service_state route crossings terminal_staffing venue hours deadline owner amount quoted_amount status battery location triage decision task assignee speaker availability ownership responsibility affected_group group date actor)
+  @entity_kinds ~w(person org place product project account agency event document unknown)
   @boilerplate ~r/\b(subscribe|advertisement|share this|related articles|recommended|privacy policy|terms of service|unsubscribe|copyright|all rights reserved|cookie settings|sign up)\b/i
   @unsupported_language ~r/[^\x00-\x7F]/
 
   def extract(%Input{} = input, opts \\ []) do
     result = build_result(input, opts)
-    Contract.validate(input, result)
+
+    case Contract.validate(input, result) do
+      {:ok, result} ->
+        {:ok, result}
+
+      {:error, changeset} ->
+        fallback =
+          input
+          |> invalid_extraction_result(now_iso(), "extractor_error", inspect(changeset.errors))
+
+        Contract.validate(input, fallback)
+    end
   end
 
   defp build_result(input, opts) do
@@ -72,6 +85,12 @@ defmodule Primeradiant.Extraction.ProductionExtractor do
 
   defp low_confidence_result(input, evidence, started_at, reason) do
     empty_result(input, evidence, started_at, "low_confidence", 0.24, [reason])
+  end
+
+  defp invalid_extraction_result(input, started_at, reason, warning) do
+    input
+    |> empty_result(EvidenceBuilder.new(input), started_at, "refused", 0.0, [reason])
+    |> put_in(["quality", "warnings"], [warning])
   end
 
   defp empty_result(input, evidence, started_at, status, confidence, reasons) do
@@ -257,7 +276,7 @@ defmodule Primeradiant.Extraction.ProductionExtractor do
   end
 
   defp structural_claim?(stance, key, value) do
-    key not in [nil, "opinion", "analysis"] and value not in [nil, ""] and
+    key in @structural_fact_keys and value not in [nil, ""] and
       stance.modality in ["asserted", "reported", "corrected", "planned"] and
       stance.polarity == "positive"
   end
@@ -493,7 +512,7 @@ defmodule Primeradiant.Extraction.ProductionExtractor do
         "entity_id" => "entity:source_actor",
         "name" => source_actor["name"],
         "canonical_key" => source_actor["stable_id"] || slug(source_actor["name"]),
-        "kind" => source_actor["kind"] || "unknown",
+        "kind" => contract_entity_kind(source_actor["kind"]),
         "aliases" => [],
         "role_in_source" =>
           if(input.source_type in ["email", "message", "user_note"],
@@ -628,6 +647,9 @@ defmodule Primeradiant.Extraction.ProductionExtractor do
       true -> "state"
     end
   end
+
+  defp contract_entity_kind(kind) when kind in @entity_kinds, do: kind
+  defp contract_entity_kind(_kind), do: "unknown"
 
   defp uncertainty(stance, time_scope) do
     reasons =
