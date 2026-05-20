@@ -46,13 +46,47 @@ mkdir -p "$OUT_DIR"
 
 SOUP_DB="$OUT_DIR/soup.sqlite3"
 REPORT="$OUT_DIR/changed-stories-report.json"
+RAW_REPORT="$OUT_DIR/changed-stories-report.raw"
 
-/opt/homebrew/bin/mix primeradiant.daemon_news_replay \
+find_mix() {
+  if [[ -n "${MIX_BIN:-}" ]]; then
+    printf '%s\n' "$MIX_BIN"
+    return
+  fi
+
+  if command -v mix >/dev/null 2>&1; then
+    command -v mix
+    return
+  fi
+
+  for candidate in \
+    /opt/homebrew/bin/mix \
+    /home/linuxbrew/.linuxbrew/bin/mix \
+    /home/clu/.local/share/mise/installs/elixir/1.19.5-otp-28/bin/mix \
+    /home/clu/.asdf/shims/mix \
+    /home/clu/.asdf/installs/elixir/1.16.3-otp-26/bin/mix
+  do
+    if [[ -x "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return
+    fi
+  done
+}
+
+MIX="$(find_mix || true)"
+if [[ -z "$MIX" ]]; then
+  echo "mix not found; set MIX_BIN or install/activate the existing Elixir toolchain" >&2
+  exit 127
+fi
+
+"$MIX" primeradiant.daemon_news_replay \
   --db "$SNAPSHOT_DB" \
   --raw-root "$HANDOFF_DIR" \
   --soup-db "$SOUP_DB" \
   --tenant "$TENANT" \
-  --actor "$ACTOR" > "$REPORT"
+  --actor "$ACTOR" > "$RAW_REPORT"
+
+awk 'BEGIN { emit = 0 } /^\{/ { emit = 1 } emit { print }' "$RAW_REPORT" > "$REPORT"
 
 jq '. + {r1_handoff: {handoff_dir: $handoff, manifest_path: $manifest, run_output_dir: $out, persistent_service_installed: false}}' \
   --arg handoff "$HANDOFF_DIR" \
