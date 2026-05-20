@@ -211,6 +211,80 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     refute Enum.any?(facts, &(&1["structural_candidate"] == true))
   end
 
+  test "R1 push and consume handoff keeps source read-only and writes primeradiant output" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-r1-handoff-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    source_db = Path.join(tmp, "source-news.db")
+    raw_path = Path.join(tmp, "archive.jsonl")
+    handoff_root = Path.join(tmp, "handoffs")
+    run_root = Path.join(tmp, "runs")
+
+    rows = [
+      envelope("R1 Harbor halt", "R1 Harbor service is halted for current route is harbor"),
+      envelope("R1 Harbor crews", "R1 Harbor service is halted for current crossings are evening")
+    ]
+
+    offsets = write_archive!(raw_path, rows)
+    create_source_db!(source_db, raw_path, offsets)
+    before_stat = File.stat!(source_db)
+
+    push_script = Path.expand("scripts/r1/push_snapshot.sh")
+    consume_script = Path.expand("scripts/r1/consume_handoff.sh")
+
+    {handoff_dir, 0} =
+      System.cmd(push_script, [
+        "--source-db",
+        source_db,
+        "--handoff-root",
+        handoff_root,
+        "--run-id",
+        "r1-test"
+      ])
+
+    handoff_dir = String.trim(handoff_dir)
+    assert File.regular?(Path.join(handoff_dir, "manifest.json"))
+    assert File.regular?(Path.join(handoff_dir, "news.db"))
+    assert File.exists?(Path.join(handoff_dir, "raw"))
+
+    after_push_stat = File.stat!(source_db)
+    assert before_stat.mtime == after_push_stat.mtime
+    assert before_stat.size == after_push_stat.size
+
+    {out_dir, 0} =
+      System.cmd(consume_script, [
+        "--handoff-dir",
+        handoff_dir,
+        "--run-root",
+        run_root,
+        "--tenant",
+        @tenant,
+        "--actor",
+        "flynn"
+      ])
+
+    out_dir = String.trim(out_dir)
+    soup_db = Path.join(out_dir, "soup.sqlite3")
+    report = Path.join(out_dir, "changed-stories-report.json")
+    assert File.regular?(soup_db)
+    assert File.regular?(report)
+
+    report_json = report |> File.read!() |> Jason.decode!()
+    assert get_in(report_json, ["r1_handoff", "persistent_service_installed"]) == false
+    assert get_in(report_json, ["primeradiant_writes", "soup_db_path"]) == soup_db
+    assert DurableSoupDb.table_count(soup_db, "inputs", @tenant) == 2
+
+    after_consume_stat = File.stat!(source_db)
+    assert before_stat.mtime == after_consume_stat.mtime
+    assert before_stat.size == after_consume_stat.size
+  end
+
   defp envelope(title, summary) do
     %{
       "type" => "swarm.channel.news.report.v0",

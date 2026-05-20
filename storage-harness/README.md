@@ -21,3 +21,22 @@ mix primeradiant.daemon_news_replay --db /Volumes/BlipsAndChitz/news-storage/new
 ```
 
 The command reads `messages` with SQLite read-only mode, maps supported `swarm.channel.news.report.v0` envelopes into the real-ingestion path, writes Primeradiant-owned soup tables to `--soup-db`, and prints a changed-stories-with-evidence JSON report generated back from that persisted soup database.
+
+Manual R1 TARS -> EURISKO handoff, still without any persistent service:
+
+```sh
+scripts/r1/tars_to_eurisko_handoff.sh \
+  --source-db /Volumes/BlipsAndChitz/news-storage/news.db \
+  --eurisko-handoff-root /home/clu/primeradiant-r1-handoffs
+```
+
+Then consume it on EURISKO from the staged checkout:
+
+```sh
+scripts/r1/consume_handoff.sh \
+  --handoff-dir /home/clu/primeradiant-r1-handoffs/<run-id> \
+  --run-root /home/clu/primeradiant-r1-runs \
+  --tenant 00000000-0000-0000-0000-00000000t328
+```
+
+This is a manual/test-scoped R1 path. Any persistent publisher, watcher, queue, cron, launchd, systemd, or autostart step remains a separate Flynn approval gate.
