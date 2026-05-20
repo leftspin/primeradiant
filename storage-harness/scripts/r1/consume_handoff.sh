@@ -78,6 +78,7 @@ if [[ -z "$MIX" ]]; then
   echo "mix not found; set MIX_BIN or install/activate the existing Elixir toolchain" >&2
   exit 127
 fi
+export PATH="$(dirname "$MIX"):/home/clu/.local/share/mise/installs/erlang/28.5/bin:/home/clu/.asdf/installs/erlang/26.2.5/bin:$PATH"
 
 "$MIX" primeradiant.daemon_news_replay \
   --db "$SNAPSHOT_DB" \
