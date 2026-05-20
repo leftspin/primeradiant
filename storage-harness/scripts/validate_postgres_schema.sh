@@ -32,8 +32,8 @@ trap cleanup EXIT
 "$PSQL" -h "$PGHOST" -d "$PGDATABASE_TEMPLATE" -Atc "select version();" >/dev/null
 "$CREATEDB" -h "$PGHOST" "$DB_NAME"
 "$PSQL" -h "$PGHOST" -v ON_ERROR_STOP=1 -d "$DB_NAME" \
-  -f "$ROOT/priv/repo/migrations/20260517000000_create_storage_schema.sql" >/dev/null
+  < "$ROOT/priv/repo/migrations/20260517000000_create_storage_schema.sql" >/dev/null
 "$PSQL" -h "$PGHOST" -v ON_ERROR_STOP=1 -d "$DB_NAME" \
-  -f "$ROOT/priv/repo/validation/postgres_schema_checks.sql"
+  < "$ROOT/priv/repo/validation/postgres_schema_checks.sql"
 
 echo "validated $DB_NAME on host $PGHOST"
