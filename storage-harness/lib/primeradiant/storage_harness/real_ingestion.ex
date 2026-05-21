@@ -25,10 +25,13 @@ defmodule Primeradiant.StorageHarness.RealIngestion do
   def ingest_items(items, actor_id \\ "flynn") when is_list(items) do
     tenant_id = tenant_id_for_items!(items)
 
+    source_mode = source_mode(List.first(items))
+    agent_run_key = agent_run_key(source_mode)
+
     state =
       State.new(user_id: actor_id, tenant_id: tenant_id)
-      |> insert_agent_run("agent-run:manual-real-ingest-v1", %{
-        "source_mode" => "manual_real_ingest_v1"
+      |> insert_agent_run(agent_run_key, %{
+        "source_mode" => source_mode
       })
 
     {state, decisions} =
@@ -45,7 +48,7 @@ defmodule Primeradiant.StorageHarness.RealIngestion do
 
     {:ok, %{state | decisions: decisions},
      %{
-       source_behavior: :manual_real_ingest_v1,
+       source_behavior: String.to_atom(source_mode),
        decisions: decisions,
        inputs: length(state.inputs),
        proposals: length(state.proposals),
@@ -64,6 +67,18 @@ defmodule Primeradiant.StorageHarness.RealIngestion do
       [nil] -> raise ArgumentError, "real source item requires tenant_id"
       _ -> raise ArgumentError, "real ingestion batch must use one tenant_id"
     end
+  end
+
+  defp source_mode(item),
+    do: to_string(item[:source_mode] || item["source_mode"] || "manual_real_ingest_v1")
+
+  defp agent_run_key(source_mode) when is_binary(source_mode),
+    do: "agent-run:#{String.replace(source_mode, "_", "-")}"
+
+  defp current_agent_run_key(state) do
+    state.agent_runs
+    |> List.first()
+    |> Map.fetch!(:agent_run_key)
   end
 
   def ingest_item(%State{} = state, item, actor_id \\ "flynn") do
@@ -107,7 +122,7 @@ defmodule Primeradiant.StorageHarness.RealIngestion do
       ChangesetStore.insert!(AgentRun, %{
         tenant_id: state.tenant_id,
         agent_run_key: key,
-        agent_type: "manual_real_ingest_v1",
+        agent_type: scope["source_mode"],
         scope: scope,
         status: "succeeded"
       })
@@ -122,7 +137,7 @@ defmodule Primeradiant.StorageHarness.RealIngestion do
       ChangesetStore.insert!(Proposal, %{
         tenant_id: state.tenant_id,
         proposal_key: proposal_key(decision),
-        agent_run_id: State.source_id!(state, :agent_run, "agent-run:manual-real-ingest-v1"),
+        agent_run_id: State.source_id!(state, :agent_run, current_agent_run_key(state)),
         actor_id: actor_id,
         classification: Atom.to_string(decision.decision_type),
         confidence: ChangesetStore.decimal(decision.confidence),
@@ -376,7 +391,7 @@ defmodule Primeradiant.StorageHarness.RealIngestion do
       ChangesetStore.insert!(Proposal, %{
         tenant_id: state.tenant_id,
         proposal_key: proposal.key,
-        agent_run_id: State.source_id!(state, :agent_run, "agent-run:manual-real-ingest-v1"),
+        agent_run_id: State.source_id!(state, :agent_run, current_agent_run_key(state)),
         actor_id: proposal.actor_id,
         story_id: proposal.story_id,
         fixture_id: nil,
@@ -655,7 +670,7 @@ defmodule Primeradiant.StorageHarness.RealIngestion do
           proposal_id: proposal.id,
           proposal_op_id: op.id,
           graph_commit_id: commit.id,
-          agent_run_id: State.source_id!(acc, :agent_run, "agent-run:manual-real-ingest-v1"),
+          agent_run_id: State.source_id!(acc, :agent_run, current_agent_run_key(acc)),
           confidence: op.confidence
         })
 

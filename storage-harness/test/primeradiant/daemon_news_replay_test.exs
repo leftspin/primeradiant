@@ -2,6 +2,7 @@ defmodule Primeradiant.DaemonNewsReplayTest do
   use ExUnit.Case, async: false
 
   alias Primeradiant.StorageHarness.DaemonNewsReplay
+  alias Primeradiant.StorageHarness.DaemonNewsEvent
   alias Primeradiant.StorageHarness.DurableSoupDb
 
   @tenant Ecto.UUID.generate()
@@ -211,6 +212,77 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     refute Enum.any?(facts, &(&1["structural_candidate"] == true))
   end
 
+  test "event envelope drives R1 admission and output without cadence" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-daemon-news-event-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    soup_db_path = Path.join(tmp, "primeradiant-event-soup.sqlite3")
+    raw_path = Path.join(tmp, "archive.jsonl")
+
+    [row] = [
+      envelope(
+        "Event Civic Clinic triage open",
+        "Event Civic Clinic triage is open venue is north speaker is desk."
+      )
+    ]
+
+    [{offset, length}] = write_archive!(raw_path, [row])
+    event = committed_source_item_event("event-news-1", raw_path, offset, length, row)
+
+    {:ok, state, report} =
+      DaemonNewsEvent.consume_event(event,
+        soup_db_path: soup_db_path,
+        tenant_id: @tenant,
+        actor_id: "flynn"
+      )
+
+    assert report.source.mode == "event_envelope"
+    assert report.source.event_id == "evt-event-news-1"
+    assert report.event_driven_r1.persistent_service_installed == false
+    assert report.event_driven_r1.production_source_event_emitter_present == false
+    assert report.primeradiant_writes.owned_state_only
+    assert report.primeradiant_writes.inputs == 1
+    assert report.primeradiant_writes.graph_commits > 0
+    assert report.changed_stories != []
+
+    assert [%{external_id: "event-news-1"}] = state.inputs
+    assert get_in(List.first(state.inputs).normalized, ["metadata", "event_driven_r1"])
+    assert File.regular?(soup_db_path)
+    assert DurableSoupDb.table_count(soup_db_path, "inputs", @tenant) == 1
+  end
+
+  test "event envelope refuses raw digest mismatch before admission" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-daemon-news-event-bad-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    raw_path = Path.join(tmp, "archive.jsonl")
+    row = envelope("Event digest mismatch", "Digest mismatch service is halted.")
+    [{offset, length}] = write_archive!(raw_path, [row])
+
+    event =
+      committed_source_item_event("event-news-bad", raw_path, offset, length, row)
+      |> put_in(["raw_ref", "sha256"], String.duplicate("0", 64))
+
+    assert {:error, {:raw_digest_mismatch, "event-news-bad"}} =
+             DaemonNewsEvent.consume_event(event,
+               soup_db_path: Path.join(tmp, "soup.sqlite3"),
+               tenant_id: @tenant,
+               actor_id: "flynn"
+             )
+  end
+
   test "R1 push and consume handoff keeps source read-only and writes primeradiant output" do
     tmp =
       Path.join(
@@ -367,5 +439,32 @@ defmodule Primeradiant.DaemonNewsReplayTest do
   defp sqlite_json!(db_path, sql) do
     {output, 0} = System.cmd("sqlite3", [db_path, sql])
     String.trim(output)
+  end
+
+  defp committed_source_item_event(id, raw_path, offset, length, envelope) do
+    %{
+      "event_type" => "primeradiant.source.committed_item.v1",
+      "event_id" => "evt-#{id}",
+      "cursor" => "messages:#{id}",
+      "emitted_at" => "2026-05-17T10:00:02Z",
+      "source" => %{
+        "adapter" => "daemon-news",
+        "tenant_id" => @tenant,
+        "item_id" => id,
+        "message_type" => "swarm.channel.news.report.v0",
+        "source_space" => "swarm.channel.news",
+        "receptor_id" => "receptor",
+        "sender_id" => "sender",
+        "created_at" => "2026-05-17T10:00:00Z",
+        "committed_at" => "2026-05-17T10:00:01Z"
+      },
+      "raw_ref" => %{
+        "path" => raw_path,
+        "offset" => offset,
+        "length" => length,
+        "sha256" => :crypto.hash(:sha256, Jason.encode!(envelope)) |> Base.encode16(case: :lower)
+      },
+      "acl" => %{"privacy" => "public"}
+    }
   end
 end
