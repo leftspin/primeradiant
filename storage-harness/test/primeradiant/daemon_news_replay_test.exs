@@ -283,6 +283,67 @@ defmodule Primeradiant.DaemonNewsReplayTest do
              )
   end
 
+  test "source-side no-install emitter produces event envelope consumed by R1 path" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-daemon-news-emitter-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    source_db = Path.join(tmp, "source-news.db")
+    soup_db_path = Path.join(tmp, "primeradiant-emitter-soup.sqlite3")
+    raw_path = Path.join(tmp, "archive.jsonl")
+
+    row =
+      envelope(
+        "Emitter Civic Clinic triage open",
+        "Emitter Civic Clinic triage is open venue is north speaker is desk."
+      )
+
+    [{offset, length}] = write_archive!(raw_path, [row])
+    sha = :crypto.hash(:sha256, Jason.encode!(row)) |> Base.encode16(case: :lower)
+    create_source_db_with_hash!(source_db, raw_path, offset, length, "emitter-news-1", sha)
+    before_stat = File.stat!(source_db)
+
+    emitter_script = Path.expand("scripts/r1/emit_committed_event.sh")
+
+    {event_json, 0} =
+      System.cmd(emitter_script, [
+        "--source-db",
+        source_db,
+        "--message-id",
+        "emitter-news-1",
+        "--tenant",
+        @tenant,
+        "--event-id",
+        "evt-emitter-news-1"
+      ])
+
+    event = Jason.decode!(event_json)
+    assert event["event_type"] == "primeradiant.source.committed_item.v1"
+    assert get_in(event, ["source", "adapter"]) == "daemon-news"
+    assert get_in(event, ["raw_ref", "sha256"]) == sha
+
+    {:ok, _state, report} =
+      DaemonNewsEvent.consume_event(event,
+        soup_db_path: soup_db_path,
+        tenant_id: @tenant,
+        actor_id: "flynn"
+      )
+
+    assert report.source.mode == "event_envelope"
+    assert report.source.event_id == "evt-emitter-news-1"
+    assert report.primeradiant_writes.inputs == 1
+    assert report.primeradiant_writes.graph_commits > 0
+
+    after_stat = File.stat!(source_db)
+    assert before_stat.mtime == after_stat.mtime
+    assert before_stat.size == after_stat.size
+  end
+
   test "R1 push and consume handoff keeps source read-only and writes primeradiant output" do
     tmp =
       Path.join(
@@ -431,6 +492,29 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     );
     INSERT INTO messages VALUES
       ('#{id}', 'swarm.channel.news', 'receptor', 'sender', 'swarm.channel.news.report.v0', '2026-05-17T10:00:00Z', '2026-05-17T10:00:01Z', '#{raw_path}', #{offset}, #{length}, 'sha-1');
+    """
+
+    {_out, 0} = System.cmd("sqlite3", [db_path, sql])
+  end
+
+  defp create_source_db_with_hash!(db_path, raw_path, offset, length, id, sha) do
+    sql = """
+    CREATE TABLE schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+    CREATE TABLE messages (
+      message_id TEXT PRIMARY KEY,
+      source_space TEXT,
+      receptor_id TEXT,
+      sender_id TEXT,
+      message_type TEXT,
+      created_at TEXT,
+      received_at TEXT NOT NULL,
+      raw_archive_path TEXT NOT NULL,
+      raw_archive_offset INTEGER NOT NULL,
+      raw_archive_length INTEGER NOT NULL,
+      raw_sha256 TEXT NOT NULL
+    );
+    INSERT INTO messages VALUES
+      ('#{id}', 'swarm.channel.news', 'receptor', 'sender', 'swarm.channel.news.report.v0', '2026-05-17T10:00:00Z', '2026-05-17T10:00:01Z', '#{raw_path}', #{offset}, #{length}, '#{sha}');
     """
 
     {_out, 0} = System.cmd("sqlite3", [db_path, sql])

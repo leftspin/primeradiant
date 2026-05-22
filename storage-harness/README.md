@@ -18,8 +18,14 @@ Consume a daemon-news committed-source-item event envelope without mutating sour
 storage:
 
 ```sh
+scripts/r1/emit_committed_event.sh \
+  --source-db /Volumes/BlipsAndChitz/news-storage/news.db \
+  --message-id <message-id> \
+  --tenant 00000000-0000-0000-0000-000000000001 \
+  > /tmp/daemon-news-event.json
+
 mix primeradiant.daemon_news_event \
-  --event /path/to/committed-source-item.json \
+  --event /tmp/daemon-news-event.json \
   --soup-db /tmp/primeradiant-event-soup.sqlite3 \
   --tenant 00000000-0000-0000-0000-000000000001
 ```
@@ -27,6 +33,8 @@ mix primeradiant.daemon_news_event \
 The event must carry source identity, cursor, raw archive reference, raw digest,
 and ACL. Primeradiant resolves the scoped source bytes through the adapter,
 admits the item immediately, and writes only primeradiant-owned soup/output rows.
+The emitter script is a read-only, one-shot proof helper. It does not install,
+register, or enable a persistent source publisher.
 
 Replay already-stored daemon news rows without mutating the source SQLite
 database:
