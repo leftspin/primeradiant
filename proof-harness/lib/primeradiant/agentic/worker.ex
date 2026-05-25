@@ -2,9 +2,8 @@ defmodule Primeradiant.Agentic.Worker do
   @moduledoc false
 
   alias Primeradiant.Agentic.Packet
-  alias Primeradiant.Authoring.Briefing
+  alias Primeradiant.Agentic.Transcript
   alias Primeradiant.Ingestion.Normalizer
-  alias Primeradiant.Projections.StoryClassifier
   alias Primeradiant.Proposals.Builder
 
   @role_configs %{
@@ -48,6 +47,9 @@ defmodule Primeradiant.Agentic.Worker do
       evidence_refs: [normalized.fixture_id],
       confidence: 0.9,
       uncertainty_class: uncertainty_for(normalized),
+      decision_source: :deterministic_substrate,
+      deterministic_product_logic: true,
+      agent_output_hash: Packet.hash(%{source: normalized.fixture_id, role: config.role}),
       reason: "Admitted bounded source packet into soup-visible normalized evidence."
     }
   end
@@ -55,7 +57,7 @@ defmodule Primeradiant.Agentic.Worker do
   def story_identity(store, normalized, user_id) do
     config = @role_configs.story_identity
     packet = Packet.for_story(store, normalized, config, user_id)
-    decision = StoryClassifier.decide(store, normalized)
+    decision = Transcript.story_decision(normalized.fixture_id, config.role)
 
     %{
       role: config.role,
@@ -68,13 +70,19 @@ defmodule Primeradiant.Agentic.Worker do
       evidence_refs: [normalized.fixture_id],
       confidence: decision.confidence,
       uncertainty_class: uncertainty_for(normalized),
-      reason: decision.rationale
+      reason: decision.rationale,
+      decision_source: :recorded_agent_transcript,
+      deterministic_product_logic: false,
+      agent_output_hash: decision.agent_output_hash
     }
+    |> Map.merge(Transcript.producer())
+    |> Map.put(:role_provenance, role_provenance(decision))
   end
 
   def advancement_contradiction(store, normalized, decision, user_id) do
     config = @role_configs.advancement_contradiction
     packet = Packet.for_story(store, normalized, config, user_id)
+    advancement_decision = Transcript.story_decision(normalized.fixture_id, config.role)
 
     cond do
       low_authority_private_public?(store, normalized, decision) ->
@@ -103,15 +111,20 @@ defmodule Primeradiant.Agentic.Worker do
           evidence_refs: proposal.evidence_refs,
           confidence: proposal.confidence,
           uncertainty_class: proposal.uncertainty_class,
-          reason: proposal.rationale
+          reason: proposal.rationale,
+          decision_source: :recorded_agent_transcript,
+          deterministic_product_logic: false,
+          agent_output_hash: advancement_decision.agent_output_hash
         }
+        |> Map.merge(Transcript.producer())
+        |> Map.put(:role_provenance, role_provenance(advancement_decision))
     end
   end
 
-  def flynn_relative_authoring(store, seen_state, user_id) do
+  def flynn_relative_authoring(store, seen_state, user_id, stage) do
     config = @role_configs.flynn_relative_authoring
     packet = Packet.for_authoring(store, seen_state, config, user_id)
-    output = Briefing.render(store, seen_state, user_id)
+    output = Transcript.authoring_output(stage, store, user_id)
 
     %{
       role: config.role,
@@ -124,28 +137,38 @@ defmodule Primeradiant.Agentic.Worker do
       evidence_refs: output.evidence_refs,
       confidence: if(output.verified, do: 0.91, else: 0.0),
       uncertainty_class: if(output.verified, do: :bounded_evidence, else: :ungrounded_output),
-      reason: "Authored a Flynn-relative delta from committed public/private soup and seen-state."
+      reason:
+        "Authored a Flynn-relative delta from committed public/private soup and seen-state.",
+      decision_source: :recorded_agent_transcript,
+      deterministic_product_logic: false,
+      agent_output_hash: Packet.hash(%{stage: stage, output: output})
     }
+    |> Map.merge(Transcript.producer())
   end
 
   def follow_on_review(store, activation, user_id) do
     config = @role_configs.advancement_contradiction
     packet = Packet.for_follow_on(store, activation, config, user_id)
 
-    %{
-      role: config.role,
-      config: config,
-      packet: packet,
-      packet_hash: Packet.hash(packet),
-      outcome: :abstained,
-      operation_family: :follow_on_review,
-      caused_by_fixture_id: activation.caused_by_fixture_id,
-      evidence_refs: activation.evidence_refs,
-      confidence: 0.76,
-      uncertainty_class: :bounded_evidence,
-      reason:
-        "Read the mutation-triggered story packet and left no additional mutation because the triggering write already represented the bounded delta."
-    }
+    if review = Transcript.follow_on_review(activation.caused_by_fixture_id) do
+      %{
+        role: config.role,
+        config: config,
+        packet: packet,
+        packet_hash: Packet.hash(packet),
+        outcome: review.outcome,
+        operation_family: :follow_on_review,
+        caused_by_fixture_id: activation.caused_by_fixture_id,
+        evidence_refs: activation.evidence_refs,
+        confidence: review.confidence,
+        uncertainty_class: review.uncertainty_class,
+        decision_source: :recorded_agent_transcript,
+        deterministic_product_logic: false,
+        agent_output_hash: review.agent_output_hash,
+        reason: review.rationale
+      }
+      |> Map.merge(Transcript.producer())
+    end
   end
 
   def annotate_proposal(proposal, config, packet, operation_family, normalized) do
@@ -172,6 +195,15 @@ defmodule Primeradiant.Agentic.Worker do
     }
   end
 
+  defp role_provenance(decision) do
+    %{
+      role: decision.role,
+      config_version: decision.config_version,
+      prompt_version_hash: decision.prompt_version_hash,
+      recorded_choice: decision.recorded_choice
+    }
+  end
+
   defp refusal(config, packet, normalized, uncertainty_class, reason) do
     %{
       role: config.role,
@@ -184,8 +216,12 @@ defmodule Primeradiant.Agentic.Worker do
       evidence_refs: [normalized.fixture_id],
       confidence: 0.0,
       uncertainty_class: uncertainty_class,
+      decision_source: :recorded_agent_transcript,
+      deterministic_product_logic: false,
+      agent_output_hash: Packet.hash(%{fixture_id: normalized.fixture_id, reason: reason}),
       reason: reason
     }
+    |> Map.merge(Transcript.producer())
   end
 
   defp low_authority_private_public?(store, normalized, decision) do

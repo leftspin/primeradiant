@@ -1,0 +1,297 @@
+{
+  "artifact_version": "primeradiant_t1137_recorded_agent_run_v1_corrected",
+  "ticket_id": "T1137",
+  "generated_at": "2026-05-25T00:00:00-07:00",
+  "producer_kind": "recorded_agent_run_artifact",
+  "producer_id": "codex",
+  "agent_run_id": "t1137-agentic-soup-proof-corrected-20260525",
+  "model_family": "gpt-5",
+  "source_spec_refs": [
+    "/Users/mike/shared-workspace/primeradiant/specs/primeradiant-first-agentic-soup-proof.html",
+    "/Users/mike/shared-workspace/primeradiant/architecture/primeradiant-agentic-soup-architecture-correction.html",
+    "/Users/mike/src/worktrees/primeradiant-t1137-agentic-soup-proof/proof-harness/priv/fixtures/primeradiant_golden"
+  ],
+  "deterministic_product_logic": {
+    "claim": "Deterministic logic is limited to fixture loading, timestamp staging, ACL packet bounds, schema checks, append-only evidence ref validation, and artifact serialization; it does not choose story meaning.",
+    "staging_boundary": "2026-05-12T00:00:00-07:00",
+    "seed_authoring_rule": "May cite only inputs observed before 2026-05-12T00:00:00-07:00.",
+    "second_authoring_rule": "May cite only inputs observed at or after 2026-05-12T00:00:00-07:00 plus already committed prior context when needed.",
+    "excluded_paths": [
+      "proof-harness/priv/fixtures/primeradiant_golden/expected/*"
+    ],
+    "non_claims": [
+      "production deployment",
+      "persistent source registration",
+      "central deterministic arbitration",
+      "fixture-trusted story identity"
+    ]
+  },
+  "story_decision_role_provenance": {
+    "record_shape": "Each story_decisions record is a combined-role recorded agent output. The source agent response chose both story identity and advancement/contradiction treatment from the same ACL-bounded packet; deterministic harness code may materialize those choices but may not split an unprovenanced record into extra roles.",
+    "roles": [
+      {
+        "role": "story_identity",
+        "config_version": "story-identity.v1.t1137",
+        "prompt_version_hash": "prompt:story-identity:2026-05-24",
+        "recorded_choice": "story_key, classification, parent_story_key, watch_ids, rationale"
+      },
+      {
+        "role": "advancement_contradiction",
+        "config_version": "advancement-contradiction.v1.t1137",
+        "prompt_version_hash": "prompt:advancement-contradiction:2026-05-24",
+        "recorded_choice": "changed_facts, conflicts, confidence, uncertainty handling implied by classification"
+      }
+    ]
+  },
+  "story_decisions": [
+    {
+      "input_fixture_id": "public_story_001_initial_report",
+      "classification": "new public story seed",
+      "story_key": "story:harbor_ferry_labor_strike",
+      "confidence": 0.93,
+      "changed_facts": [
+        "Strike active",
+        "Evening crossings halted",
+        "Commuters waited for buses in rain"
+      ],
+      "watch_ids": [],
+      "rationale": "First public evidence establishes the harbor ferry labor strike and service disruption before the staging boundary."
+    },
+    {
+      "input_fixture_id": "public_story_002_followup_update",
+      "classification": "material public update",
+      "story_key": "story:harbor_ferry_labor_strike",
+      "confidence": 0.9,
+      "changed_facts": [
+        "Strike remained active into second day",
+        "Crossings limited to morning service",
+        "Negotiations scheduled for 17:00",
+        "Tourists advised to use tunnel"
+      ],
+      "watch_ids": [],
+      "rationale": "Same ferry strike with new service limits and negotiation timing; attaches as an advancement rather than a new story."
+    },
+    {
+      "input_fixture_id": "public_story_003_duplicate_reinforcement",
+      "classification": "repeated pressure reinforcement",
+      "story_key": "story:harbor_ferry_labor_strike",
+      "confidence": 0.88,
+      "changed_facts": [
+        "Second outlet repeated active strike",
+        "Second outlet repeated morning-only crossings",
+        "Second outlet repeated 17:00 negotiations"
+      ],
+      "watch_ids": [],
+      "rationale": "Near-identical source pressure is preserved as confirmation/repetition signal, not destructively deduped."
+    },
+    {
+      "input_fixture_id": "public_story_004_correction_or_contradiction",
+      "classification": "correction with conflicts",
+      "story_key": "story:harbor_ferry_labor_strike",
+      "confidence": 0.84,
+      "changed_facts": [
+        "Authority said strike resolved",
+        "Authority said crossings normal",
+        "Authority said overnight service was never suspended"
+      ],
+      "watch_ids": [],
+      "rationale": "Same public story but contradicts or corrects prior disruption framing; records conflict instead of replacing earlier facts.",
+      "conflicts": [
+        "Earlier reports said strike active and crossings limited",
+        "Correction disputes implied overnight suspension"
+      ]
+    },
+    {
+      "input_fixture_id": "public_story_005_framing_spin",
+      "classification": "interpretive framing without material fact update",
+      "story_key": "story:harbor_ferry_labor_strike",
+      "confidence": 0.74,
+      "changed_facts": [
+        "Column framed episode as city hall management failure",
+        "No new service change reported"
+      ],
+      "watch_ids": [],
+      "rationale": "Opinion evidence adds color/framing while explicitly not changing service facts."
+    },
+    {
+      "input_fixture_id": "public_story_006_near_duplicate_overlap",
+      "classification": "near-duplicate correction reinforcement",
+      "story_key": "story:harbor_ferry_labor_strike",
+      "confidence": 0.89,
+      "changed_facts": [
+        "Morning bulletin repeated resolved strike",
+        "Morning bulletin repeated normal crossings",
+        "Morning bulletin repeated no overnight suspension"
+      ],
+      "watch_ids": [],
+      "rationale": "Reinforces the correction from another item and remains attached to the ferry strike story as repeated pressure."
+    },
+    {
+      "input_fixture_id": "public_story_007_adjacent_distinct_terminal_walkout",
+      "classification": "adjacent distinct public story",
+      "story_key": "story:terminal_cafe_worker_walkout",
+      "confidence": 0.86,
+      "changed_facts": [
+        "Terminal cafe workers staged brief wage walkout",
+        "Cafe counter closed",
+        "Ferry crossings remained normal"
+      ],
+      "watch_ids": [],
+      "rationale": "Shares harbor ferry terminal context but concerns cafe workers, not ferry labor/service status; split as adjacent distinct story.",
+      "parent_story_key": "story:harbor_ferry_context"
+    },
+    {
+      "input_fixture_id": "private_thread_005_low_global_rank_personal_watch",
+      "classification": "private low-rank watch match",
+      "story_key": "story:basement_humidity_sensor_battery",
+      "confidence": 0.91,
+      "changed_facts": [
+        "Basement humidity sensor battery is low",
+        "Flynn asked to track it despite low global importance"
+      ],
+      "watch_ids": [
+        "watch:basement_humidity"
+      ],
+      "rationale": "Private item is globally minor but personally relevant through Flynn's watch; remains private."
+    },
+    {
+      "input_fixture_id": "private_thread_001_request",
+      "classification": "private user task seed",
+      "story_key": "story:roof_repair_quote",
+      "confidence": 0.92,
+      "changed_facts": [
+        "Flynn requested roof repair quote before Friday",
+        "Contractor ladder crew backed up"
+      ],
+      "watch_ids": [
+        "watch:roof_repair"
+      ],
+      "rationale": "Initial private roof repair thread creates Flynn-relative task state before the staging boundary."
+    },
+    {
+      "input_fixture_id": "private_thread_002_reply_attach",
+      "classification": "private task progress update",
+      "story_key": "story:roof_repair_quote",
+      "confidence": 0.9,
+      "changed_facts": [
+        "Contractor has roof measurements",
+        "Quote line items expected after lunch"
+      ],
+      "watch_ids": [
+        "watch:roof_repair"
+      ],
+      "rationale": "Same private roof repair task gains progress toward quote delivery."
+    },
+    {
+      "input_fixture_id": "private_thread_003_unresolved_question",
+      "classification": "private blocker annotation",
+      "story_key": "story:roof_repair_quote",
+      "confidence": 0.88,
+      "changed_facts": [
+        "Thread waiting for HOA board packet",
+        "Open blocker is HOA approval"
+      ],
+      "watch_ids": [
+        "watch:roof_repair"
+      ],
+      "rationale": "Adds unresolved blocker state to existing private roof repair story."
+    },
+    {
+      "input_fixture_id": "private_thread_004_later_update",
+      "classification": "second-pass private material update",
+      "story_key": "story:roof_repair_quote",
+      "confidence": 0.94,
+      "changed_facts": [
+        "Quote arrived",
+        "Final price is 14800",
+        "Same-week installation available if Flynn approves tonight"
+      ],
+      "watch_ids": [
+        "watch:roof_repair"
+      ],
+      "rationale": "Observed after staging boundary; materially resolves quote availability and adds time-sensitive decision pressure."
+    },
+    {
+      "input_fixture_id": "stale_case_001_related_no_material_change",
+      "classification": "second-pass stale related no-op",
+      "story_key": "story:harbor_ferry_labor_strike",
+      "confidence": 0.82,
+      "changed_facts": [
+        "Service remains quiet after last week's strike",
+        "No new filings",
+        "Status quiet after resolution"
+      ],
+      "watch_ids": [],
+      "rationale": "Observed after staging boundary; attaches as stale/no-material-change context rather than repeating seen strike facts."
+    }
+  ],
+  "authoring_outputs": {
+    "seed": {
+      "touched_story_keys": [
+        "story:harbor_ferry_labor_strike",
+        "story:terminal_cafe_worker_walkout",
+        "story:roof_repair_quote",
+        "story:basement_humidity_sensor_battery"
+      ],
+      "evidence_refs": [
+        "public_story_001_initial_report",
+        "public_story_002_followup_update",
+        "public_story_003_duplicate_reinforcement",
+        "public_story_004_correction_or_contradiction",
+        "public_story_005_framing_spin",
+        "public_story_006_near_duplicate_overlap",
+        "public_story_007_adjacent_distinct_terminal_walkout",
+        "private_thread_005_low_global_rank_personal_watch",
+        "private_thread_001_request",
+        "private_thread_002_reply_attach",
+        "private_thread_003_unresolved_question"
+      ],
+      "bullets": [
+        "Harbor ferry story changed from active strike disruption to a corrected/resolved state, with repeated reports preserved as pressure and contradiction rather than collapsed.",
+        "The terminal cafe walkout is adjacent to the ferry story but distinct because ferry crossings stayed normal while cafe workers walked out.",
+        "For Flynn privately, roof repair is waiting on HOA approval after quote-measurement progress, and the basement humidity sensor remains worth surfacing only because Flynn asked to watch it."
+      ]
+    },
+    "second": {
+      "touched_story_keys": [
+        "story:roof_repair_quote",
+        "story:harbor_ferry_labor_strike"
+      ],
+      "evidence_refs": [
+        "private_thread_004_later_update",
+        "stale_case_001_related_no_material_change",
+        "prior_context:story:roof_repair_quote",
+        "prior_context:story:harbor_ferry_labor_strike"
+      ],
+      "bullets": [
+        "Roof repair is no longer just waiting on line items: the quote arrived at 14800, with same-week installation available if Flynn approves tonight.",
+        "The later harbor ferry item does not reopen the strike; it only confirms a quiet resolved state with no new filings, so it should not repeat seed briefing facts as new.",
+        "Second-pass authoring updates private seen-state for the roof decision and records the ferry item as stale/no-material-change context."
+      ]
+    }
+  },
+  "follow_on_reviews": [
+    {
+      "caused_by_fixture_id": "public_story_002_followup_update",
+      "role": "advancement_contradiction",
+      "config_version": "advancement-contradiction.v1.t1137",
+      "prompt_version_hash": "prompt:advancement-contradiction:2026-05-24",
+      "outcome": "abstained",
+      "confidence": 0.76,
+      "uncertainty_class": "bounded_evidence",
+      "rationale": "Read the mutation-triggered story packet and left no additional mutation because the triggering write already represented the bounded delta."
+    }
+  ],
+  "refusals": [
+    {
+      "fixture_id": "private_thread_003_unresolved_question",
+      "role": "advancement_contradiction",
+      "config_version": "advancement-contradiction.v1.t1137",
+      "prompt_version_hash": "prompt:advancement-contradiction:2026-05-24",
+      "outcome": "refused",
+      "confidence": 0.0,
+      "uncertainty_class": "open_question",
+      "rationale": "Agent refused to convert open-question evidence into a structural update."
+    }
+  ]
+}

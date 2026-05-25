@@ -1,6 +1,7 @@
 defmodule Primeradiant.Agentic.Proof do
   @moduledoc false
 
+  alias Primeradiant.Agentic.Transcript
   alias Primeradiant.Agentic.Worker
   alias Primeradiant.Arbitration.Engine
   alias Primeradiant.Authoring.Briefing
@@ -26,7 +27,9 @@ defmodule Primeradiant.Agentic.Proof do
         seed.invocations
       )
 
-    second_authoring = Worker.flynn_relative_authoring(second_pass.store, seen_state, "flynn")
+    second_authoring =
+      Worker.flynn_relative_authoring(second_pass.store, seen_state, "flynn", :second)
+
     second_briefing = second_authoring.output
     final_store = Briefing.record_output(second_pass.store, second_briefing)
     final_seen_state = Briefing.mark_seen(seen_state, final_store, second_briefing)
@@ -43,7 +46,13 @@ defmodule Primeradiant.Agentic.Proof do
       stale_story_keys:
         StoryClassifier.stale_story_keys(final_store, corpus.manifest["reference_now"]),
       proof_audit:
-        audit(corpus, final_store, second_pass.invocations ++ [second_authoring], seen_state)
+        audit(
+          corpus,
+          final_store,
+          second_pass.invocations ++ [second_authoring],
+          seen_state,
+          seed.first_briefing
+        )
     }
   end
 
@@ -51,7 +60,7 @@ defmodule Primeradiant.Agentic.Proof do
     seeded = swim_inputs(base_store, first_pass_inputs, [], [])
 
     seed_authoring =
-      Worker.flynn_relative_authoring(seeded.store, SeenState.new("flynn"), "flynn")
+      Worker.flynn_relative_authoring(seeded.store, SeenState.new("flynn"), "flynn", :seed)
 
     seed_output = seed_authoring.output
     seed_store = Briefing.record_output(seeded.store, seed_output)
@@ -89,15 +98,20 @@ defmodule Primeradiant.Agentic.Proof do
             follow_on_agent = Worker.follow_on_review(committed, follow_on, "flynn")
 
             committed =
-              Store.append_activation(
-                committed,
-                Map.put(follow_on, :consumed_by, follow_on_agent.role)
-              )
+              if follow_on_agent do
+                Store.append_activation(
+                  committed,
+                  Map.put(follow_on, :consumed_by, follow_on_agent.role)
+                )
+              else
+                committed
+              end
 
             committed =
               maybe_append_uncertainty_refusal(committed, advancement, admission.normalized)
 
-            {committed, decision_record(raw, identity.decision, proposal), [follow_on_agent]}
+            {committed, decision_record(raw, identity.decision, proposal),
+             Enum.reject([follow_on_agent], &is_nil/1)}
 
           %{outcome: :refused} ->
             refusal = refusal_record(raw, identity.decision, advancement)
@@ -208,19 +222,25 @@ defmodule Primeradiant.Agentic.Proof do
   end
 
   defp uncertainty_refusal(advancement, normalized) do
+    refusal = Transcript.refusal(normalized.fixture_id)
+
     %{
       role: :advancement_contradiction,
       config: advancement.config,
       packet: advancement.packet,
       packet_hash: advancement.packet_hash,
-      outcome: :refused,
+      outcome: refusal.outcome,
       operation_family: :uncertainty_review,
       fixture_id: normalized.fixture_id,
       evidence_refs: [normalized.fixture_id],
-      confidence: 0.0,
-      uncertainty_class: :open_question,
-      reason: "Agent refused to convert open-question evidence into a structural update."
+      confidence: refusal.confidence,
+      uncertainty_class: refusal.uncertainty_class,
+      decision_source: :recorded_agent_transcript,
+      deterministic_product_logic: false,
+      agent_output_hash: refusal.agent_output_hash,
+      reason: refusal.rationale
     }
+    |> Map.merge(Transcript.producer())
   end
 
   defp uncertainty_refusal_invocations(store, normalized) do
@@ -230,7 +250,7 @@ defmodule Primeradiant.Agentic.Proof do
     )
   end
 
-  defp audit(corpus, store, invocations, seed_seen_state) do
+  defp audit(corpus, store, invocations, seed_seen_state, first_briefing) do
     %{
       corpus: corpus_audit(corpus, seed_seen_state),
       agents: agent_audit(store, invocations),
@@ -238,7 +258,8 @@ defmodule Primeradiant.Agentic.Proof do
       membrane: membrane_audit(store),
       output: output_audit(store, invocations),
       anti_cheat: anti_cheat_audit(invocations),
-      correction_matrix: correction_matrix(store, invocations)
+      soul: soul_audit(store, invocations, first_briefing),
+      correction_matrix: correction_matrix(store, invocations, first_briefing)
     }
   end
 
@@ -264,7 +285,7 @@ defmodule Primeradiant.Agentic.Proof do
         version = get_in(invocation, [:config, :config_version])
 
         is_binary(version) and String.ends_with?(version, ".t1137") and
-          invocation.operation_family != :source_packet_offer
+          invocation.operation_family not in [:source_packet_offer, :source_admission]
       end)
 
     roles = configured_agent_invocations |> Enum.map(& &1.role) |> MapSet.new()
@@ -278,17 +299,12 @@ defmodule Primeradiant.Agentic.Proof do
           configured_agent_invocations,
           &(get_in(&1, [:packet, :raw_database_access]) == false)
         ),
-      overlapping_regions:
-        Enum.any?(
+      agent_mediated_outputs:
+        Enum.all?(
           configured_agent_invocations,
-          &(&1.role == :story_identity and
-              "harbor-ferry-strike" in Map.get(&1.packet, :visible_story_refs, []))
-        ) and
-          Enum.any?(
-            configured_agent_invocations,
-            &(&1.role == :advancement_contradiction and
-                "harbor-ferry-strike" in Map.get(&1.packet, :visible_story_refs, []))
-          ),
+          &agentic_meaning_invocation?/1
+        ),
+      overlapping_regions: overlapping_agent_regions?(configured_agent_invocations),
       abstention_or_refusal:
         Enum.any?(configured_agent_invocations, &(&1.outcome in [:abstained, :refused])),
       mutation_triggered_follow_on:
@@ -300,13 +316,16 @@ defmodule Primeradiant.Agentic.Proof do
       required_roles_present:
         MapSet.subset?(
           MapSet.new([
-            :source_admission,
             :story_identity,
             :advancement_contradiction,
             :flynn_relative_authoring
           ]),
           roles
-        )
+        ),
+      source_admission_is_substrate:
+        invocations
+        |> Enum.filter(&(&1.operation_family == :source_admission))
+        |> Enum.all?(&(&1.decision_source == :deterministic_substrate))
     }
   end
 
@@ -366,11 +385,63 @@ defmodule Primeradiant.Agentic.Proof do
       no_demo_product_claim:
         not Enum.any?(invocations, &String.contains?(to_string(&1.reason), "product ready")),
       harness_labels_excluded_from_product_claims:
-        Enum.all?(invocations, &(get_in(&1, [:config, :prompt_version_hash]) != nil))
+        Enum.all?(invocations, &(get_in(&1, [:config, :prompt_version_hash]) != nil)),
+      rejects_deterministic_standins:
+        invocations
+        |> Enum.filter(&(&1.operation_family in meaning_operation_families()))
+        |> Enum.all?(&agentic_meaning_invocation?/1),
+      rejects_unprovenanced_role_split:
+        not agentic_meaning_invocation?(%{
+          operation_family: :advancement_or_story_transformation,
+          decision_source: :recorded_agent_transcript,
+          deterministic_product_logic: false,
+          producer_kind: :actual_agent,
+          producer_id: "codex",
+          artifact_ref: "artifact-without-role-provenance",
+          agent_output_hash: "same-story-decision-hash"
+        }),
+      deterministic_standin_probe_rejected:
+        not agentic_meaning_invocation?(%{
+          operation_family: :story_identity,
+          decision_source: :deterministic_product_function,
+          deterministic_product_logic: true,
+          agent_output_hash: "fixture-oracle"
+        })
     }
   end
 
-  defp correction_matrix(store, invocations) do
+  defp soul_audit(store, invocations, first_briefing) do
+    %{
+      not_etl_or_pipeline_shape:
+        Enum.any?(invocations, &(&1.operation_family == :follow_on_review)) and
+          Enum.any?(invocations, &(&1.outcome in [:abstained, :refused])),
+      not_passive_summary:
+        store.commits != [] and
+          Enum.any?(invocations, &(&1.operation_family == :flynn_relative_delta)),
+      preserves_repair_over_time:
+        Enum.any?(
+          store.proposals,
+          &(&1.classification in [:conflict_correction, :stale_background_state])
+        ) and
+          Enum.any?(store.stories, fn {_key, story} -> story.state == :background end),
+      excludes_deterministic_product_meaning:
+        invocations
+        |> Enum.filter(&(&1.operation_family in meaning_operation_families()))
+        |> Enum.all?(&agentic_meaning_invocation?/1),
+      excludes_raw_archive_clone:
+        Enum.any?(store.stories, fn {_key, story} -> story.history != [] end) and
+          Enum.any?(
+            store.edges,
+            &(&1.edge_type in [:updates, :contradicts, :duplicates, :adds_color])
+          ),
+      first_output_is_private_seen_state:
+        first_briefing.verified == true and first_briefing.touched_story_keys != []
+    }
+  end
+
+  defp correction_matrix(store, invocations, first_briefing) do
+    soul = soul_audit(store, invocations, first_briefing)
+
     %{
       "A1132-01":
         Enum.any?(invocations, &(&1.role in [:story_identity, :advancement_contradiction])),
@@ -380,8 +451,68 @@ defmodule Primeradiant.Agentic.Proof do
       "A1132-03": store.commits != [] and store.proposal_decisions != [],
       "A1132-04": membrane_audit(store).no_private_to_public_leak,
       "A1132-05": Enum.any?(store.edges, &(&1.edge_type == :duplicates)),
-      "A1132-06": Enum.any?(invocations, &(get_in(&1, [:config, :config_version]) =~ ".t1137"))
+      "A1132-06": Enum.any?(invocations, &(get_in(&1, [:config, :config_version]) =~ ".t1137")),
+      "A1132-07": soul.preserves_repair_over_time,
+      "A1132-08": Enum.all?(Map.values(soul))
     }
+  end
+
+  defp meaning_operation_families do
+    [
+      :story_identity,
+      :advancement_or_story_transformation,
+      :follow_on_review,
+      :flynn_relative_delta,
+      :uncertainty_review
+    ]
+  end
+
+  defp agentic_meaning_invocation?(invocation) do
+    invocation.decision_source == :recorded_agent_transcript and
+      invocation.deterministic_product_logic == false and
+      invocation.producer_kind == :actual_agent and
+      is_binary(invocation.producer_id) and
+      is_binary(invocation.artifact_ref) and
+      is_binary(invocation.agent_output_hash) and
+      role_provenance_matches?(invocation)
+  end
+
+  defp role_provenance_matches?(%{operation_family: :story_identity} = invocation) do
+    role_provenance_matches?(invocation, :story_identity)
+  end
+
+  defp role_provenance_matches?(
+         %{operation_family: :advancement_or_story_transformation} = invocation
+       ) do
+    role_provenance_matches?(invocation, :advancement_contradiction)
+  end
+
+  defp role_provenance_matches?(_invocation), do: true
+
+  defp role_provenance_matches?(invocation, role) do
+    Map.get(invocation, :role) == role and
+      get_in(invocation, [:role_provenance, :role]) == role and
+      get_in(invocation, [:role_provenance, :config_version]) ==
+        get_in(invocation, [:config, :config_version]) and
+      get_in(invocation, [:role_provenance, :prompt_version_hash]) ==
+        get_in(invocation, [:config, :prompt_version_hash]) and
+      is_binary(get_in(invocation, [:role_provenance, :recorded_choice]))
+  end
+
+  defp overlapping_agent_regions?(configured_agent_invocations) do
+    story_regions =
+      configured_agent_invocations
+      |> Enum.filter(&(&1.role == :story_identity))
+      |> Enum.flat_map(&Map.get(&1.packet, :visible_story_refs, []))
+      |> MapSet.new()
+
+    advancement_regions =
+      configured_agent_invocations
+      |> Enum.filter(&(&1.role == :advancement_contradiction))
+      |> Enum.flat_map(&Map.get(&1.packet, :visible_story_refs, []))
+      |> MapSet.new()
+
+    story_regions |> MapSet.intersection(advancement_regions) |> MapSet.size() > 0
   end
 
   defp first_pass_input?(raw) do
