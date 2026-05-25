@@ -1,0 +1,134 @@
+diff --git a/proof-harness/lib/primeradiant/arbitration/engine.ex b/proof-harness/lib/primeradiant/arbitration/engine.ex
+index e079174..fa680c7 100644
+--- a/proof-harness/lib/primeradiant/arbitration/engine.ex
++++ b/proof-harness/lib/primeradiant/arbitration/engine.ex
+@@ -21,7 +21,16 @@ defmodule Primeradiant.Arbitration.Engine do
+                 actor: :arbiter,
+                 actor_id: proposal.actor_id,
+                 evidence_refs: proposal.evidence_refs,
+-                confidence: proposal.confidence
++                confidence: proposal.confidence,
++                agent_role: proposal.agent_role,
++                agent_config_version: proposal.agent_config_version,
++                prompt_version_hash: proposal.prompt_version_hash,
++                input_packet_hash: proposal.input_packet_hash,
++                operation_family: proposal.classification,
++                visibility: proposal.visibility,
++                uncertainty_class: proposal.uncertainty_class,
++                timestamp: timestamp(),
++                prior_element_refs: prior_element_refs(proposal)
+               }
+             ]
+     }
+@@ -330,12 +339,34 @@ defmodule Primeradiant.Arbitration.Engine do
+                 status: :committed,
+                 actor_id: proposal.actor_id,
+                 evidence_refs: proposal.evidence_refs,
+-                confidence: proposal.confidence
++                confidence: proposal.confidence,
++                agent_role: proposal.agent_role,
++                agent_config_version: proposal.agent_config_version,
++                prompt_version_hash: proposal.prompt_version_hash,
++                input_packet_hash: proposal.input_packet_hash,
++                operation_family: Map.get(proposal, :classification),
++                visibility: proposal.visibility,
++                uncertainty_class: proposal.uncertainty_class,
++                timestamp: timestamp(),
++                prior_element_refs: prior_element_refs(proposal)
+               }
+             ]
+     }
+   end
+ 
++  defp timestamp do
++    DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
++  end
++
++  defp prior_element_refs(proposal) do
++    proposal.ops
++    |> Enum.flat_map(fn op ->
++      [Map.get(op, :story_key), Map.get(op, :parent_story_key), Map.get(op, :child_story_key)]
++    end)
++    |> Enum.reject(&is_nil/1)
++    |> Enum.uniq()
++  end
++
+   defp add_edge(store, edge) do
+     %{store | edges: store.edges ++ [edge]}
+   end
+diff --git a/proof-harness/lib/primeradiant/proposals/builder.ex b/proof-harness/lib/primeradiant/proposals/builder.ex
+index 82cb4c2..e878923 100644
+--- a/proof-harness/lib/primeradiant/proposals/builder.ex
++++ b/proof-harness/lib/primeradiant/proposals/builder.ex
+@@ -15,6 +15,12 @@ defmodule Primeradiant.Proposals.Builder do
+       rationale: decision.rationale,
+       evidence_refs: [normalized.fixture_id],
+       status: :pending,
++      agent_role: :fixture_story_seeker,
++      agent_config_version: "fixture-story-seeker.legacy",
++      prompt_version_hash: "prompt:fixture-story-seeker:legacy",
++      input_packet_hash: "legacy-packet:" <> normalized.fixture_id,
++      visibility: normalized.acl["privacy"] || "public",
++      uncertainty_class: :bounded_evidence,
+       ops:
+         ops_for(normalized, decision)
+         |> add_op_provenance([normalized.fixture_id], decision.confidence)
+diff --git a/proof-harness/lib/primeradiant/proposals/proposal.ex b/proof-harness/lib/primeradiant/proposals/proposal.ex
+index d97c14f..760adbb 100644
+--- a/proof-harness/lib/primeradiant/proposals/proposal.ex
++++ b/proof-harness/lib/primeradiant/proposals/proposal.ex
+@@ -12,7 +12,13 @@ defmodule Primeradiant.Proposals.Proposal do
+     :evidence_refs,
+     :confidence,
+     :rationale,
+-    :status
++    :status,
++    :agent_role,
++    :agent_config_version,
++    :prompt_version_hash,
++    :input_packet_hash,
++    :visibility,
++    :uncertainty_class
+   ]
+   defstruct [
+     :id,
+@@ -25,6 +31,12 @@ defmodule Primeradiant.Proposals.Proposal do
+     :evidence_refs,
+     :confidence,
+     :rationale,
+-    :status
++    :status,
++    :agent_role,
++    :agent_config_version,
++    :prompt_version_hash,
++    :input_packet_hash,
++    :visibility,
++    :uncertainty_class
+   ]
+ end
+diff --git a/proof-harness/lib/primeradiant/soup/store.ex b/proof-harness/lib/primeradiant/soup/store.ex
+index 2788570..ed4e450 100644
+--- a/proof-harness/lib/primeradiant/soup/store.ex
++++ b/proof-harness/lib/primeradiant/soup/store.ex
+@@ -9,6 +9,8 @@ defmodule Primeradiant.Soup.Store do
+       proposals: [],
+       proposal_decisions: [],
+       commits: [],
++      refusals: [],
++      activations: [],
+       indexed_fingerprints: MapSet.new(),
+       watch_index: %{}
+     }
+@@ -35,4 +37,12 @@ defmodule Primeradiant.Soup.Store do
+   def put_node(store, node_id, node) do
+     put_in(store, [:nodes, node_id], Map.put(node, :id, node_id))
+   end
++
++  def append_refusal(store, refusal) do
++    %{store | refusals: store.refusals ++ [refusal]}
++  end
++
++  def append_activation(store, activation) do
++    %{store | activations: store.activations ++ [activation]}
++  end
+ end
