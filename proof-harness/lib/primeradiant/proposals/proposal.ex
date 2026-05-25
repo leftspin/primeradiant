@@ -12,7 +12,13 @@ defmodule Primeradiant.Proposals.Proposal do
     :evidence_refs,
     :confidence,
     :rationale,
-    :status
+    :status,
+    :agent_role,
+    :agent_config_version,
+    :prompt_version_hash,
+    :input_packet_hash,
+    :visibility,
+    :uncertainty_class
   ]
   defstruct [
     :id,
@@ -25,6 +31,12 @@ defmodule Primeradiant.Proposals.Proposal do
     :evidence_refs,
     :confidence,
     :rationale,
-    :status
+    :status,
+    :agent_role,
+    :agent_config_version,
+    :prompt_version_hash,
+    :input_packet_hash,
+    :visibility,
+    :uncertainty_class
   ]
 end

@@ -9,6 +9,8 @@ defmodule Primeradiant.Soup.Store do
       proposals: [],
       proposal_decisions: [],
       commits: [],
+      refusals: [],
+      activations: [],
       indexed_fingerprints: MapSet.new(),
       watch_index: %{}
     }
@@ -34,5 +36,13 @@ defmodule Primeradiant.Soup.Store do
 
   def put_node(store, node_id, node) do
     put_in(store, [:nodes, node_id], Map.put(node, :id, node_id))
+  end
+
+  def append_refusal(store, refusal) do
+    %{store | refusals: store.refusals ++ [refusal]}
+  end
+
+  def append_activation(store, activation) do
+    %{store | activations: store.activations ++ [activation]}
   end
 end

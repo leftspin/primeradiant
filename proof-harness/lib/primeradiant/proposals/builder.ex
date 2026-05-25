@@ -15,6 +15,12 @@ defmodule Primeradiant.Proposals.Builder do
       rationale: decision.rationale,
       evidence_refs: [normalized.fixture_id],
       status: :pending,
+      agent_role: :fixture_story_seeker,
+      agent_config_version: "fixture-story-seeker.legacy",
+      prompt_version_hash: "prompt:fixture-story-seeker:legacy",
+      input_packet_hash: "legacy-packet:" <> normalized.fixture_id,
+      visibility: normalized.acl["privacy"] || "public",
+      uncertainty_class: :bounded_evidence,
       ops:
         ops_for(normalized, decision)
         |> add_op_provenance([normalized.fixture_id], decision.confidence)

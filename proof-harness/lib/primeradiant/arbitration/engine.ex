@@ -21,7 +21,16 @@ defmodule Primeradiant.Arbitration.Engine do
                 actor: :arbiter,
                 actor_id: proposal.actor_id,
                 evidence_refs: proposal.evidence_refs,
-                confidence: proposal.confidence
+                confidence: proposal.confidence,
+                agent_role: proposal.agent_role,
+                agent_config_version: proposal.agent_config_version,
+                prompt_version_hash: proposal.prompt_version_hash,
+                input_packet_hash: proposal.input_packet_hash,
+                operation_family: proposal.classification,
+                visibility: proposal.visibility,
+                uncertainty_class: proposal.uncertainty_class,
+                timestamp: timestamp(),
+                prior_element_refs: prior_element_refs(proposal)
               }
             ]
     }
@@ -330,10 +339,32 @@ defmodule Primeradiant.Arbitration.Engine do
                 status: :committed,
                 actor_id: proposal.actor_id,
                 evidence_refs: proposal.evidence_refs,
-                confidence: proposal.confidence
+                confidence: proposal.confidence,
+                agent_role: proposal.agent_role,
+                agent_config_version: proposal.agent_config_version,
+                prompt_version_hash: proposal.prompt_version_hash,
+                input_packet_hash: proposal.input_packet_hash,
+                operation_family: Map.get(proposal, :classification),
+                visibility: proposal.visibility,
+                uncertainty_class: proposal.uncertainty_class,
+                timestamp: timestamp(),
+                prior_element_refs: prior_element_refs(proposal)
               }
             ]
     }
+  end
+
+  defp timestamp do
+    DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
+  end
+
+  defp prior_element_refs(proposal) do
+    proposal.ops
+    |> Enum.flat_map(fn op ->
+      [Map.get(op, :story_key), Map.get(op, :parent_story_key), Map.get(op, :child_story_key)]
+    end)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
   end
 
   defp add_edge(store, edge) do
