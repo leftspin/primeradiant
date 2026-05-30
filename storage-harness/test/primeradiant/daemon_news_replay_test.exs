@@ -344,6 +344,92 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert before_stat.size == after_stat.size
   end
 
+  test "event package handoff carries bounded source bytes and drives persisted output" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-daemon-news-event-package-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    source_db = Path.join(tmp, "source-news.db")
+    raw_root = Path.join(tmp, "source")
+    File.mkdir_p!(raw_root)
+    raw_path = Path.join(raw_root, "archive.jsonl")
+    package_dir = Path.join([tmp, "handoff", "evt-package-news-1"])
+    run_root = Path.join(tmp, "runs")
+
+    row =
+      envelope(
+        "Package Civic Clinic triage open",
+        "Package Civic Clinic triage is open venue is north speaker is desk."
+      )
+
+    [{offset, length}] = write_archive!(raw_path, [row])
+    sha = :crypto.hash(:sha256, Jason.encode!(row)) |> Base.encode16(case: :lower)
+    create_source_db_with_hash!(source_db, raw_path, offset, length, "package-news-1", sha)
+    before_stat = File.stat!(source_db)
+
+    package_script = Path.expand("scripts/r1/emit_committed_event_package.sh")
+    consume_script = Path.expand("scripts/r1/consume_event_package.sh")
+
+    {package_out, 0} =
+      System.cmd(package_script, [
+        "--source-db",
+        source_db,
+        "--message-id",
+        "package-news-1",
+        "--tenant",
+        @tenant,
+        "--event-id",
+        "evt-package-news-1",
+        "--package-dir",
+        package_dir
+      ])
+
+    assert String.trim(package_out) == package_dir
+    assert File.regular?(Path.join(package_dir, "event.json"))
+    assert File.regular?(Path.join(package_dir, "raw/source-envelope.json"))
+    refute File.exists?(Path.join(package_dir, "news.db"))
+
+    event = package_dir |> Path.join("event.json") |> File.read!() |> Jason.decode!()
+    assert get_in(event, ["raw_ref", "path"]) == "raw/source-envelope.json"
+    assert get_in(event, ["raw_ref", "offset"]) == 0
+    assert get_in(event, ["raw_ref", "length"]) == length
+    assert get_in(event, ["raw_ref", "sha256"]) == sha
+
+    {out_dir, 0} =
+      System.cmd(consume_script, [
+        "--package-dir",
+        package_dir,
+        "--run-root",
+        run_root,
+        "--tenant",
+        @tenant,
+        "--actor",
+        "flynn"
+      ])
+
+    out_dir = String.trim(out_dir)
+    soup_db = Path.join(out_dir, "soup.sqlite3")
+    report_path = Path.join(out_dir, "changed-stories-report.json")
+    assert File.regular?(soup_db)
+    assert File.regular?(report_path)
+
+    report = report_path |> File.read!() |> Jason.decode!()
+    assert get_in(report, ["source", "mode"]) == "event_envelope"
+    assert get_in(report, ["source", "event_id"]) == "evt-package-news-1"
+    assert get_in(report, ["event_driven_r1", "persistent_service_installed"]) == false
+    assert get_in(report, ["primeradiant_writes", "soup_db_path"]) == soup_db
+    assert DurableSoupDb.table_count(soup_db, "inputs", @tenant) == 1
+
+    after_stat = File.stat!(source_db)
+    assert before_stat.mtime == after_stat.mtime
+    assert before_stat.size == after_stat.size
+  end
+
   test "R1 push and consume handoff keeps source read-only and writes primeradiant output" do
     tmp =
       Path.join(
