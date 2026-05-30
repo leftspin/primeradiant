@@ -48,6 +48,7 @@ fi
 OUT_DIR="$RUN_ROOT/$EVENT_ID"
 SOUP_DB="$OUT_DIR/soup.sqlite3"
 REPORT="$OUT_DIR/changed-stories-report.json"
+MIX_OUTPUT="$OUT_DIR/mix-output.log"
 mkdir -p "$OUT_DIR"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -60,7 +61,9 @@ mix primeradiant.daemon_news_event \
   --tenant "$TENANT" \
   --actor "$ACTOR" \
   --soup-db "$SOUP_DB" \
-  > "$REPORT"
+  > "$MIX_OUTPUT"
 popd >/dev/null
+
+awk 'found || /^\{/ {found=1; print}' "$MIX_OUTPUT" > "$REPORT"
 
 printf "%s\n" "$OUT_DIR"
