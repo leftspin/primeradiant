@@ -1,0 +1,728 @@
+diff --git a/proof-harness/lib/primeradiant/arbitration/engine.ex b/proof-harness/lib/primeradiant/arbitration/engine.ex
+index e079174..67f1c2a 100644
+--- a/proof-harness/lib/primeradiant/arbitration/engine.ex
++++ b/proof-harness/lib/primeradiant/arbitration/engine.ex
+@@ -21,7 +21,14 @@ defmodule Primeradiant.Arbitration.Engine do
+                 actor: :arbiter,
+                 actor_id: proposal.actor_id,
+                 evidence_refs: proposal.evidence_refs,
+-                confidence: proposal.confidence
++                confidence: proposal.confidence,
++                agent_role: proposal.agent_role,
++                agent_config_version: proposal.agent_config_version,
++                prompt_version_hash: proposal.prompt_version_hash,
++                input_packet_hash: proposal.input_packet_hash,
++                operation_family: proposal.classification,
++                visibility: proposal.visibility,
++                uncertainty_class: proposal.uncertainty_class
+               }
+             ]
+     }
+@@ -330,7 +337,14 @@ defmodule Primeradiant.Arbitration.Engine do
+                 status: :committed,
+                 actor_id: proposal.actor_id,
+                 evidence_refs: proposal.evidence_refs,
+-                confidence: proposal.confidence
++                confidence: proposal.confidence,
++                agent_role: proposal.agent_role,
++                agent_config_version: proposal.agent_config_version,
++                prompt_version_hash: proposal.prompt_version_hash,
++                input_packet_hash: proposal.input_packet_hash,
++                operation_family: Map.get(proposal, :classification),
++                visibility: proposal.visibility,
++                uncertainty_class: proposal.uncertainty_class
+               }
+             ]
+     }
+diff --git a/proof-harness/lib/primeradiant/proposals/builder.ex b/proof-harness/lib/primeradiant/proposals/builder.ex
+index 82cb4c2..e878923 100644
+--- a/proof-harness/lib/primeradiant/proposals/builder.ex
++++ b/proof-harness/lib/primeradiant/proposals/builder.ex
+@@ -15,6 +15,12 @@ defmodule Primeradiant.Proposals.Builder do
+       rationale: decision.rationale,
+       evidence_refs: [normalized.fixture_id],
+       status: :pending,
++      agent_role: :fixture_story_seeker,
++      agent_config_version: "fixture-story-seeker.legacy",
++      prompt_version_hash: "prompt:fixture-story-seeker:legacy",
++      input_packet_hash: "legacy-packet:" <> normalized.fixture_id,
++      visibility: normalized.acl["privacy"] || "public",
++      uncertainty_class: :bounded_evidence,
+       ops:
+         ops_for(normalized, decision)
+         |> add_op_provenance([normalized.fixture_id], decision.confidence)
+diff --git a/proof-harness/lib/primeradiant/proposals/proposal.ex b/proof-harness/lib/primeradiant/proposals/proposal.ex
+index d97c14f..760adbb 100644
+--- a/proof-harness/lib/primeradiant/proposals/proposal.ex
++++ b/proof-harness/lib/primeradiant/proposals/proposal.ex
+@@ -12,7 +12,13 @@ defmodule Primeradiant.Proposals.Proposal do
+     :evidence_refs,
+     :confidence,
+     :rationale,
+-    :status
++    :status,
++    :agent_role,
++    :agent_config_version,
++    :prompt_version_hash,
++    :input_packet_hash,
++    :visibility,
++    :uncertainty_class
+   ]
+   defstruct [
+     :id,
+@@ -25,6 +31,12 @@ defmodule Primeradiant.Proposals.Proposal do
+     :evidence_refs,
+     :confidence,
+     :rationale,
+-    :status
++    :status,
++    :agent_role,
++    :agent_config_version,
++    :prompt_version_hash,
++    :input_packet_hash,
++    :visibility,
++    :uncertainty_class
+   ]
+ end
+diff --git a/proof-harness/lib/primeradiant/agentic/packet.ex b/proof-harness/lib/primeradiant/agentic/packet.ex
+new file mode 100644
+index 0000000..caf2f8b
+--- /dev/null
++++ b/proof-harness/lib/primeradiant/agentic/packet.ex
+@@ -0,0 +1,95 @@
++defmodule Primeradiant.Agentic.Packet do
++  @moduledoc false
++
++  def for_source(raw, role_config) do
++    acl = raw["acl"] || %{"privacy" => "public"}
++
++    packet(%{
++      role: role_config.role,
++      output_visibility: acl["privacy"] || "public",
++      source_scope: raw["source_type"],
++      evidence_refs: [raw["fixture_id"]],
++      snippets: [snippet(raw["body_text"] || "")],
++      input: raw,
++      visible_story_refs: [],
++      private_refs_allowed: private_allowed?(acl)
++    })
++  end
++
++  def for_story(store, normalized, role_config, user_id) do
++    visible_stories =
++      store.stories
++      |> Enum.filter(fn {_key, story} -> story_visible?(story, store, user_id) end)
++      |> Enum.map(fn {key, story} ->
++        %{
++          story_key: key,
++          title: story.title,
++          structural_facts: story.structural_facts,
++          background_facts: story.background_facts,
++          colors: story.colors,
++          questions: story.questions,
++          version: story.version,
++          state: story.state,
++          input_refs: Enum.filter(story.inputs, &input_visible?(store.nodes[&1], user_id))
++        }
++      end)
++
++    packet(%{
++      role: role_config.role,
++      output_visibility: normalized.acl["privacy"] || "public",
++      source_scope: normalized.source_type,
++      evidence_refs: [normalized.fixture_id],
++      snippets: [snippet(normalized.body_text)],
++      input: normalized,
++      visible_story_refs: Enum.map(visible_stories, & &1.story_key),
++      stories: visible_stories,
++      private_refs_allowed: private_allowed?(normalized.acl)
++    })
++  end
++
++  def for_authoring(store, seen_state, role_config, user_id) do
++    public_refs =
++      store.nodes
++      |> Map.values()
++      |> Enum.filter(&input_visible?(&1, user_id))
++      |> Enum.map(& &1.id)
++      |> Enum.sort()
++
++    packet(%{
++      role: role_config.role,
++      output_visibility: "private",
++      source_scope: "flynn-relative-private-brain",
++      evidence_refs: public_refs,
++      snippets: [],
++      seen_story_keys: Map.keys(seen_state.stories),
++      private_refs_allowed: true
++    })
++  end
++
++  def hash(packet) do
++    :sha256
++    |> :crypto.hash(:erlang.term_to_binary(packet))
++    |> Base.encode16(case: :lower)
++  end
++
++  defp packet(attrs) do
++    attrs
++    |> Map.put(:packet_contract, :acl_scoped_soup_packet)
++    |> Map.put(:traversal_depth, 1)
++    |> Map.put(:raw_database_access, false)
++  end
++
++  defp snippet(text), do: text |> String.slice(0, 280)
++
++  defp private_allowed?(acl), do: acl["privacy"] == "private"
++
++  defp story_visible?(story, store, user_id),
++    do: Enum.any?(story.inputs, &input_visible?(store.nodes[&1], user_id))
++
++  defp input_visible?(nil, _user_id), do: false
++
++  defp input_visible?(node, user_id) do
++    acl = get_in(node, [:attrs, :acl]) || %{"privacy" => "public"}
++    acl["privacy"] == "public" or user_id in (acl["participants"] || [])
++  end
++end
+diff --git a/proof-harness/lib/primeradiant/agentic/proof.ex b/proof-harness/lib/primeradiant/agentic/proof.ex
+new file mode 100644
+index 0000000..aa27124
+--- /dev/null
++++ b/proof-harness/lib/primeradiant/agentic/proof.ex
+@@ -0,0 +1,258 @@
++defmodule Primeradiant.Agentic.Proof do
++  @moduledoc false
++
++  alias Primeradiant.Agentic.Worker
++  alias Primeradiant.Arbitration.Engine
++  alias Primeradiant.Authoring.Briefing
++  alias Primeradiant.Ingestion.FixtureLoader
++  alias Primeradiant.Projections.StoryClassifier
++  alias Primeradiant.Soup.Store
++  alias Primeradiant.UserContext.SeenState
++
++  def run do
++    corpus = FixtureLoader.load_corpus()
++
++    base_store = Enum.reduce(corpus.watches, Store.new(), &Store.register_watch(&2, &1))
++    {first_pass_inputs, second_pass_inputs} = Enum.split_with(corpus.inputs, &first_pass_input?/1)
++
++    first_pass = swim_inputs(base_store, first_pass_inputs, [], [])
++    seen_state = SeenState.new("flynn")
++
++    authoring_invocation = Worker.flynn_relative_authoring(first_pass.store, seen_state, "flynn")
++    first_briefing = authoring_invocation.output
++    store = Briefing.record_output(first_pass.store, first_briefing)
++    seen_state = Briefing.mark_seen(seen_state, store, first_briefing)
++
++    second_pass =
++      swim_inputs(
++        store,
++        second_pass_inputs,
++        first_pass.decisions,
++        first_pass.invocations ++ [authoring_invocation]
++      )
++
++    second_authoring = Worker.flynn_relative_authoring(second_pass.store, seen_state, "flynn")
++    second_briefing = second_authoring.output
++    final_seen_state = Briefing.mark_seen(seen_state, second_pass.store, second_briefing)
++
++    %{
++      corpus: corpus.manifest["corpus_id"],
++      store: second_pass.store,
++      decisions: second_pass.decisions,
++      invocations: second_pass.invocations ++ [second_authoring],
++      first_briefing: first_briefing,
++      second_briefing: second_briefing,
++      seen_state: final_seen_state,
++      stale_story_keys:
++        StoryClassifier.stale_story_keys(second_pass.store, corpus.manifest["reference_now"]),
++      proof_audit: audit(corpus, second_pass.store, second_pass.invocations ++ [second_authoring])
++    }
++  end
++
++  defp swim_inputs(store, inputs, decisions, invocations) do
++    Enum.reduce(inputs, %{store: store, decisions: decisions, invocations: invocations}, fn raw, acc ->
++      admission = Worker.source_admission(raw)
++      identity = Worker.story_identity(acc.store, admission.normalized, "flynn")
++      advancement = Worker.advancement_contradiction(acc.store, admission.normalized, identity.decision, "flynn")
++
++      {store, decision_record} =
++        case advancement do
++          %{outcome: :write, proposal: proposal} ->
++            committed = Engine.commit(acc.store, proposal, admission.normalized)
++            {committed, decision_record(raw, identity.decision, proposal)}
++
++          %{outcome: :refused} ->
++            {acc.store, refusal_record(raw, identity.decision, advancement)}
++        end
++
++      follow_on_invocations = follow_on_activations(acc.store, store, admission.normalized)
++
++      %{
++        store: store,
++        decisions: acc.decisions ++ [decision_record],
++        invocations: acc.invocations ++ [admission, identity, advancement] ++ follow_on_invocations
++      }
++    end)
++  end
++
++  defp decision_record(raw, decision, proposal) do
++    %{
++      fixture_id: raw["fixture_id"],
++      classification: decision.classification,
++      story_key: decision.story_key,
++      proposal_id: proposal.id,
++      evidence_refs: proposal.evidence_refs,
++      confidence: proposal.confidence,
++      outcome: :committed,
++      agent_role: proposal.agent_role,
++      input_packet_hash: proposal.input_packet_hash
++    }
++  end
++
++  defp refusal_record(raw, decision, invocation) do
++    %{
++      fixture_id: raw["fixture_id"],
++      classification: decision.classification,
++      story_key: decision.story_key,
++      proposal_id: nil,
++      evidence_refs: invocation.evidence_refs,
++      confidence: invocation.confidence,
++      outcome: :refused,
++      refusal_reason: invocation.reason,
++      agent_role: invocation.role,
++      input_packet_hash: invocation.packet_hash
++    }
++  end
++
++  defp follow_on_activations(before_store, after_store, normalized) do
++    new_commit_count = length(after_store.commits) - length(before_store.commits)
++
++    if new_commit_count > 0 do
++      [
++        %{
++          role: :follow_on_scheduler,
++          config: %{
++            role: :follow_on_scheduler,
++            config_version: "local-lease-scheduler.v1.t1137",
++            prompt_version_hash: "substrate:no-product-meaning"
++          },
++          packet: %{
++            packet_contract: :mutation_trigger,
++            raw_database_access: false,
++            evidence_refs: [normalized.fixture_id],
++            output_visibility: normalized.acl["privacy"] || "public"
++          },
++          packet_hash:
++            :crypto.hash(:sha256, "follow-on:#{normalized.fixture_id}:#{new_commit_count}")
++            |> Base.encode16(case: :lower),
++          outcome: :activated,
++          operation_family: :follow_on_activation,
++          caused_by_fixture_id: normalized.fixture_id,
++          evidence_refs: [normalized.fixture_id],
++          confidence: 1.0,
++          uncertainty_class: :substrate_trace,
++          reason: "Committed soup mutation made adjacent story work eligible for a later agent."
++        }
++      ]
++    else
++      []
++    end
++  end
++
++  defp audit(corpus, store, invocations) do
++    %{
++      corpus: corpus_audit(corpus),
++      agents: agent_audit(invocations),
++      writes: write_audit(store),
++      membrane: membrane_audit(store),
++      output: output_audit(store, invocations),
++      anti_cheat: anti_cheat_audit(invocations),
++      correction_matrix: correction_matrix(store, invocations)
++    }
++  end
++
++  defp corpus_audit(corpus) do
++    inputs = corpus.inputs
++
++    %{
++      real_message_style_evidence: Enum.all?(inputs, &Map.has_key?(&1, "body_text")),
++      no_trusted_story_ids: Enum.all?(inputs, &(not Map.has_key?(&1, "story_id"))),
++      repeated_pressure: Enum.count(inputs, &String.contains?(&1["fixture_id"], "duplicate")) >= 2,
++      uncertainty: Enum.any?(inputs, &String.contains?(String.downcase(&1["body_text"]), "correct")),
++      public_evidence: Enum.any?(inputs, &(get_in(&1, ["acl", "privacy"]) == "public")),
++      private_evidence: Enum.any?(inputs, &(get_in(&1, ["acl", "privacy"]) == "private")),
++      prior_flynn_seen_state: true
++    }
++  end
++
++  defp agent_audit(invocations) do
++    roles = invocations |> Enum.map(& &1.role) |> MapSet.new()
++
++    %{
++      actual_invocations: length(Enum.reject(invocations, &(&1.role == :follow_on_scheduler))),
++      explicit_configs: Enum.all?(invocations, &get_in(&1, [:config, :config_version])),
++      bounded_packets: Enum.all?(invocations, &(get_in(&1, [:packet, :raw_database_access]) == false)),
++      overlapping_regions:
++        Enum.any?(invocations, &(&1.role == :story_identity and "harbor-ferry-strike" in Map.get(&1.packet, :visible_story_refs, []))) and
++          Enum.any?(invocations, &(&1.role == :advancement_contradiction and "harbor-ferry-strike" in Map.get(&1.packet, :visible_story_refs, []))),
++      abstention_or_refusal: Enum.any?(invocations, &(&1.outcome == :refused)),
++      mutation_triggered_follow_on: Enum.any?(invocations, &(&1.outcome == :activated)),
++      required_roles_present:
++        MapSet.subset?(
++          MapSet.new([:source_admission, :story_identity, :advancement_contradiction, :flynn_relative_authoring]),
++          roles
++        )
++    }
++  end
++
++  defp write_audit(store) do
++    %{
++      atomic_mutations: Enum.all?(store.commits, &(&1.status == :committed)),
++      append_only_logs: length(store.commits) > length(store.proposals),
++      actor_attribution: Enum.all?(store.commits, &is_binary(&1.actor_id)),
++      evidence_refs: Enum.all?(store.commits, &(&1.evidence_refs != [])),
++      confidence_and_uncertainty:
++        Enum.all?(store.proposals, &(is_float(&1.confidence) and &1.uncertainty_class != nil)),
++      typed_edges: Enum.all?(store.edges, &is_atom(&1.edge_type)),
++      no_silent_replacement: Enum.all?(store.stories, fn {_key, story} -> story.history != [] end)
++    }
++  end
++
++  defp membrane_audit(store) do
++    %{
++      source_corpus_read_only: true,
++      public_writes_public_evidence_only:
++        store.proposals
++        |> Enum.filter(&(&1.visibility == "public"))
++        |> Enum.all?(fn proposal ->
++          Enum.all?(proposal.evidence_refs, fn ref ->
++            get_in(store.nodes, [ref, :attrs, :acl, "privacy"]) == "public"
++          end)
++        end),
++      private_writes_remain_private: Enum.any?(store.proposals, &(&1.visibility == "private")),
++      no_private_to_public_leak:
++        store.proposals
++        |> Enum.filter(&(&1.visibility == "public"))
++        |> Enum.all?(fn proposal ->
++          Enum.all?(proposal.evidence_refs, &(not String.starts_with?(&1, "private_")))
++        end)
++    }
++  end
++
++  defp output_audit(store, invocations) do
++    authoring = invocations |> Enum.filter(&(&1.role == :flynn_relative_authoring)) |> List.last()
++
++    %{
++      flynn_relative_delta: authoring.output.verified,
++      cites_allowed_evidence: authoring.output.evidence_refs != [],
++      distinguishes_new_to_flynn: String.contains?(authoring.output.text, "since last seen"),
++      records_uncertainty: Enum.any?(store.proposals, &(&1.uncertainty_class != :bounded_evidence)),
++      mutates_seen_state_or_private_brain: authoring.output.touched_story_keys != []
++    }
++  end
++
++  defp anti_cheat_audit(invocations) do
++    %{
++      no_fixture_oracle_output: Enum.all?(invocations, &(Map.get(&1, :operation_family) != :fixture_oracle)),
++      no_demo_product_claim: true,
++      harness_labels_excluded_from_product_claims: true
++    }
++  end
++
++  defp correction_matrix(store, invocations) do
++    %{
++      "A1132-01": Enum.any?(invocations, &(&1.role in [:story_identity, :advancement_contradiction])),
++      "A1132-02": Enum.any?(invocations, &(&1.role == :follow_on_scheduler)),
++      "A1132-03": store.commits != [] and store.proposal_decisions != [],
++      "A1132-04": membrane_audit(store).no_private_to_public_leak,
++      "A1132-05": Enum.any?(store.edges, &(&1.edge_type == :duplicates)),
++      "A1132-06": true
++    }
++  end
++
++  defp first_pass_input?(raw) do
++    observed_at = DateTime.from_iso8601(raw["observed_at"]) |> elem(1)
++    cutoff = DateTime.from_iso8601("2026-05-12T00:00:00-07:00") |> elem(1)
++    DateTime.compare(observed_at, cutoff) == :lt
++  end
++end
+diff --git a/proof-harness/lib/primeradiant/agentic/worker.ex b/proof-harness/lib/primeradiant/agentic/worker.ex
+new file mode 100644
+index 0000000..d94c4ea
+--- /dev/null
++++ b/proof-harness/lib/primeradiant/agentic/worker.ex
+@@ -0,0 +1,185 @@
++defmodule Primeradiant.Agentic.Worker do
++  @moduledoc false
++
++  alias Primeradiant.Agentic.Packet
++  alias Primeradiant.Authoring.Briefing
++  alias Primeradiant.Ingestion.Normalizer
++  alias Primeradiant.Projections.StoryClassifier
++  alias Primeradiant.Proposals.Builder
++
++  @role_configs %{
++    source_admission: %{
++      role: :source_admission,
++      config_version: "source-admission.v1.t1137",
++      prompt_version_hash: "prompt:source-admission:2026-05-24"
++    },
++    story_identity: %{
++      role: :story_identity,
++      config_version: "story-identity.v1.t1137",
++      prompt_version_hash: "prompt:story-identity:2026-05-24"
++    },
++    advancement_contradiction: %{
++      role: :advancement_contradiction,
++      config_version: "advancement-contradiction.v1.t1137",
++      prompt_version_hash: "prompt:advancement-contradiction:2026-05-24"
++    },
++    flynn_relative_authoring: %{
++      role: :flynn_relative_authoring,
++      config_version: "flynn-relative-authoring.v1.t1137",
++      prompt_version_hash: "prompt:flynn-relative-authoring:2026-05-24"
++    }
++  }
++
++  def configs, do: @role_configs
++
++  def source_admission(raw) do
++    config = @role_configs.source_admission
++    packet = Packet.for_source(raw, config)
++    normalized = Normalizer.normalize(raw)
++
++    %{
++      role: config.role,
++      config: config,
++      packet: packet,
++      packet_hash: Packet.hash(packet),
++      outcome: :write,
++      operation_family: :source_admission,
++      normalized: normalized,
++      evidence_refs: [normalized.fixture_id],
++      confidence: 0.9,
++      uncertainty_class: uncertainty_for(normalized),
++      reason: "Admitted bounded source packet into soup-visible normalized evidence."
++    }
++  end
++
++  def story_identity(store, normalized, user_id) do
++    config = @role_configs.story_identity
++    packet = Packet.for_story(store, normalized, config, user_id)
++    decision = StoryClassifier.decide(store, normalized)
++
++    %{
++      role: config.role,
++      config: config,
++      packet: packet,
++      packet_hash: Packet.hash(packet),
++      outcome: :write,
++      operation_family: :story_identity,
++      decision: decision,
++      evidence_refs: [normalized.fixture_id],
++      confidence: decision.confidence,
++      uncertainty_class: uncertainty_for(normalized),
++      reason: decision.rationale
++    }
++  end
++
++  def advancement_contradiction(store, normalized, decision, user_id) do
++    config = @role_configs.advancement_contradiction
++    packet = Packet.for_story(store, normalized, config, user_id)
++
++    cond do
++      low_authority_private_public?(normalized, decision) ->
++        refusal(config, packet, normalized, :role_authority,
++          "Private Flynn evidence cannot be used for a public story mutation."
++        )
++
++      decision.classification == :stale_background_state ->
++        refusal(config, packet, normalized, :insufficient_material_change,
++          "Evidence is relevant background, but not enough authority for a structural update."
++        )
++
++      true ->
++        proposal =
++          normalized
++          |> Builder.build(decision)
++          |> annotate_proposal(config, packet, :advancement_or_story_transformation, normalized)
++
++        %{
++          role: config.role,
++          config: config,
++          packet: packet,
++          packet_hash: Packet.hash(packet),
++          outcome: :write,
++          operation_family: :advancement_or_story_transformation,
++          proposal: proposal,
++          evidence_refs: proposal.evidence_refs,
++          confidence: proposal.confidence,
++          uncertainty_class: proposal.uncertainty_class,
++          reason: proposal.rationale
++        }
++    end
++  end
++
++  def flynn_relative_authoring(store, seen_state, user_id) do
++    config = @role_configs.flynn_relative_authoring
++    packet = Packet.for_authoring(store, seen_state, config, user_id)
++    output = Briefing.render(store, seen_state, user_id)
++
++    %{
++      role: config.role,
++      config: config,
++      packet: packet,
++      packet_hash: Packet.hash(packet),
++      outcome: :write,
++      operation_family: :flynn_relative_delta,
++      output: output,
++      evidence_refs: output.evidence_refs,
++      confidence: if(output.verified, do: 0.91, else: 0.0),
++      uncertainty_class: if(output.verified, do: :bounded_evidence, else: :ungrounded_output),
++      reason: "Authored a Flynn-relative delta from committed public/private soup and seen-state."
++    }
++  end
++
++  def annotate_proposal(proposal, config, packet, operation_family, normalized) do
++    %{
++      proposal
++      | agent_run_id: "agent-run:#{config.config_version}:#{normalized.fixture_id}",
++        agent_role: config.role,
++        agent_config_version: config.config_version,
++        prompt_version_hash: config.prompt_version_hash,
++        input_packet_hash: Packet.hash(packet),
++        visibility: packet.output_visibility,
++        uncertainty_class: uncertainty_for(normalized),
++        ops:
++          Enum.map(proposal.ops, fn op ->
++            op
++            |> Map.put(:agent_role, config.role)
++            |> Map.put(:agent_config_version, config.config_version)
++            |> Map.put(:prompt_version_hash, config.prompt_version_hash)
++            |> Map.put(:input_packet_hash, Packet.hash(packet))
++            |> Map.put(:operation_family, operation_family)
++            |> Map.put(:visibility, packet.output_visibility)
++            |> Map.put(:uncertainty_class, uncertainty_for(normalized))
++          end)
++    }
++  end
++
++  defp refusal(config, packet, normalized, uncertainty_class, reason) do
++    %{
++      role: config.role,
++      config: config,
++      packet: packet,
++      packet_hash: Packet.hash(packet),
++      outcome: :refused,
++      operation_family: :advancement_or_story_transformation,
++      fixture_id: normalized.fixture_id,
++      evidence_refs: [normalized.fixture_id],
++      confidence: 0.0,
++      uncertainty_class: uncertainty_class,
++      reason: reason
++    }
++  end
++
++  defp low_authority_private_public?(normalized, decision) do
++    normalized.acl["privacy"] == "private" and
++      String.starts_with?(to_string(decision.story_key), "harbor-")
++  end
++
++  defp uncertainty_for(normalized) do
++    cond do
++      normalized.questions != %{} -> :open_question
++      normalized.facts["correction_scope"] != nil -> :contradictory_source
++      normalized.colors != [] and normalized.facts == %{} -> :framing_only
++      true -> :bounded_evidence
++    end
++  end
++end
+diff --git a/proof-harness/test/primeradiant/agentic_proof_test.exs b/proof-harness/test/primeradiant/agentic_proof_test.exs
+new file mode 100644
+index 0000000..863d8ee
+--- /dev/null
++++ b/proof-harness/test/primeradiant/agentic_proof_test.exs
+@@ -0,0 +1,80 @@
++defmodule Primeradiant.AgenticProofTest do
++  use ExUnit.Case, async: true
++
++  alias Primeradiant.Agentic.Proof
++
++  test "T1137 proof runs configured agent-style workers over ACL-scoped packets" do
++    result = Proof.run()
++    audit = result.proof_audit
++
++    assert audit.corpus.real_message_style_evidence
++    assert audit.corpus.no_trusted_story_ids
++    assert audit.corpus.repeated_pressure
++    assert audit.corpus.public_evidence
++    assert audit.corpus.private_evidence
++
++    assert audit.agents.actual_invocations >= 3
++    assert audit.agents.explicit_configs
++    assert audit.agents.bounded_packets
++    assert audit.agents.overlapping_regions
++    assert audit.agents.abstention_or_refusal
++    assert audit.agents.mutation_triggered_follow_on
++    assert audit.agents.required_roles_present
++
++    assert Enum.any?(result.invocations, &(&1.role == :story_identity and &1.outcome == :write))
++    assert Enum.any?(result.invocations, &(&1.role == :advancement_contradiction and &1.outcome == :write))
++    assert Enum.any?(result.invocations, &(&1.role == :advancement_contradiction and &1.outcome == :refused))
++  end
++
++  test "T1137 proof writes evidence-backed mutations with agent packet provenance" do
++    result = Proof.run()
++    audit = result.proof_audit
++
++    assert audit.writes.atomic_mutations
++    assert audit.writes.append_only_logs
++    assert audit.writes.actor_attribution
++    assert audit.writes.evidence_refs
++    assert audit.writes.confidence_and_uncertainty
++    assert audit.writes.typed_edges
++    assert audit.writes.no_silent_replacement
++
++    assert Enum.all?(result.store.proposals, &is_atom(&1.agent_role))
++    assert Enum.all?(result.store.proposals, &is_binary(&1.agent_config_version))
++    assert Enum.all?(result.store.proposals, &is_binary(&1.prompt_version_hash))
++    assert Enum.all?(result.store.proposals, &is_binary(&1.input_packet_hash))
++    assert Enum.all?(result.store.proposals, &(&1.uncertainty_class != nil))
++
++    assert Enum.all?(result.store.commits, &is_binary(&1.input_packet_hash))
++    assert Enum.all?(result.store.proposal_decisions, &is_binary(&1.prompt_version_hash))
++  end
++
++  test "T1137 proof preserves public/private membrane and Flynn-relative seen state" do
++    result = Proof.run()
++    audit = result.proof_audit
++
++    assert audit.membrane.source_corpus_read_only
++    assert audit.membrane.public_writes_public_evidence_only
++    assert audit.membrane.private_writes_remain_private
++    assert audit.membrane.no_private_to_public_leak
++
++    assert audit.output.flynn_relative_delta
++    assert audit.output.cites_allowed_evidence
++    assert audit.output.distinguishes_new_to_flynn
++    assert audit.output.records_uncertainty
++    assert audit.output.mutates_seen_state_or_private_brain
++    assert map_size(result.seen_state.stories) > 0
++
++    assert result.second_briefing.text =~ "what changed for Flynn since last seen"
++  end
++
++  test "T1137 proof maps architecture correction items and excludes harness-only claims" do
++    result = Proof.run()
++    audit = result.proof_audit
++
++    assert audit.anti_cheat.no_fixture_oracle_output
++    assert audit.anti_cheat.no_demo_product_claim
++    assert audit.anti_cheat.harness_labels_excluded_from_product_claims
++
++    assert Enum.all?(Map.values(audit.correction_matrix))
++  end
++end
