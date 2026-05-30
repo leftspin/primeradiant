@@ -95,13 +95,22 @@ mkdir -p "$PACKAGE_DIR/raw"
 RAW_OUT="$PACKAGE_DIR/raw/source-envelope.json"
 EVENT_OUT="$PACKAGE_DIR/event.json"
 
-dd if="$RESOLVED_RAW_ARCHIVE" of="$RAW_OUT" bs=1 skip="$RAW_OFFSET" count="$RAW_LENGTH" status=none
+RAW_TMP="$PACKAGE_DIR/raw/source-envelope.raw"
+dd if="$RESOLVED_RAW_ARCHIVE" of="$RAW_TMP" bs=1 skip="$RAW_OFFSET" count="$RAW_LENGTH" status=none
 
+cp "$RAW_TMP" "$RAW_OUT"
 ACTUAL_SHA="$(shasum -a 256 "$RAW_OUT" | awk '{print $1}')"
+if [[ "$ACTUAL_SHA" != "$RAW_SHA" ]]; then
+  perl -0pi -e 's/\r?\n\z//' "$RAW_OUT"
+  ACTUAL_SHA="$(shasum -a 256 "$RAW_OUT" | awk '{print $1}')"
+fi
+
 if [[ "$ACTUAL_SHA" != "$RAW_SHA" ]]; then
   echo "raw digest mismatch for message_id $MESSAGE_ID: expected $RAW_SHA got $ACTUAL_SHA" >&2
   exit 1
 fi
+rm -f "$RAW_TMP"
+VERIFIED_LENGTH="$(wc -c < "$RAW_OUT" | tr -d ' ')"
 
 jq -n \
   --argjson row "$ROW_JSON" \
@@ -109,7 +118,7 @@ jq -n \
   --arg tenant "$TENANT" \
   --arg emitted_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   --arg raw_path "raw/source-envelope.json" \
-  --argjson raw_length "$RAW_LENGTH" \
+  --argjson raw_length "$VERIFIED_LENGTH" \
   '{
     event_type: "primeradiant.source.committed_item.v1",
     event_id: $event_id,
