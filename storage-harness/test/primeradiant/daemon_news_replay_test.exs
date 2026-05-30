@@ -369,7 +369,7 @@ defmodule Primeradiant.DaemonNewsReplayTest do
 
     [{offset, length}] = write_archive!(raw_path, [row])
     sha = :crypto.hash(:sha256, Jason.encode!(row)) |> Base.encode16(case: :lower)
-    create_source_db_with_hash!(source_db, raw_path, offset, length, "package-news-1", sha)
+    create_source_db_with_hash!(source_db, raw_path, offset, length + 1, "package-news-1", sha)
     before_stat = File.stat!(source_db)
 
     package_script = Path.expand("scripts/r1/emit_committed_event_package.sh")
