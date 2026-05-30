@@ -3,7 +3,7 @@ defmodule Primeradiant.Ingestion.Admission do
 
   alias Primeradiant.StorageHarness.{ChangesetStore, Input, State}
 
-  @source_mode "manual_real_ingest_v1"
+  @source_modes ~w(manual_real_ingest_v1 daemon_news_event_r1)
   @source_types ~w(news_article opinion_column email message document user_note web_page)
   @forbidden_keys ~w(fixture_id expected_role story_hint expected_story expected_classification edge_hints)
 
@@ -41,7 +41,7 @@ defmodule Primeradiant.Ingestion.Admission do
           content_sha256: content_sha,
           acl: item["acl"],
           normalized: %{
-            "source_mode" => @source_mode,
+            "source_mode" => item["source_mode"],
             "ingestion_run_key" => item["ingestion_run_key"],
             "retrieved_at" => item["retrieved_at"],
             "occurred_at" => item["occurred_at"],
@@ -74,8 +74,11 @@ defmodule Primeradiant.Ingestion.Admission do
   def validate_item!(item) do
     reject_forbidden_keys!(item)
 
-    unless item["source_mode"] == @source_mode,
-      do: raise(ArgumentError, "source_mode must be #{@source_mode}")
+    if blank?(item["source_mode"]),
+      do: raise(ArgumentError, "source_mode must be manual_real_ingest_v1")
+
+    unless item["source_mode"] in @source_modes,
+      do: raise(ArgumentError, "unsupported source_mode")
 
     required = ~w(tenant_id source_mode source_type external_id observed_at retrieved_at acl)
 
