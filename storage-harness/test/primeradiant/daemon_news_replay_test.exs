@@ -430,6 +430,95 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert before_stat.size == after_stat.size
   end
 
+  test "DB cursor reader emits bounded event packages after Primeradiant cursor" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-daemon-news-cursor-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    source_db = Path.join(tmp, "source-news.db")
+    raw_path = Path.join(tmp, "archive.jsonl")
+    package_root = Path.join(tmp, "cursor-packages")
+    run_root = Path.join(tmp, "runs")
+
+    rows = [
+      envelope("Cursor first", "Cursor first service is open venue is north speaker is desk."),
+      envelope("Cursor second", "Cursor second service is open venue is north speaker is desk."),
+      envelope("Cursor third", "Cursor third service is open venue is north speaker is desk.")
+    ]
+
+    offsets = write_archive!(raw_path, rows)
+    create_source_db_with_hashes!(
+      source_db,
+      raw_path,
+      offsets,
+      ["cursor-news-1", "cursor-news-2", "cursor-news-3"],
+      rows
+    )
+
+    before_stat = File.stat!(source_db)
+    cursor_script = Path.expand("scripts/r1/emit_cursor_event_packages.sh")
+    consume_script = Path.expand("scripts/r1/consume_event_package.sh")
+
+    {manifest_path, 0} =
+      System.cmd(cursor_script, [
+        "--source-db",
+        source_db,
+        "--tenant",
+        @tenant,
+        "--package-root",
+        package_root,
+        "--after-cursor",
+        "2026-05-17T10:00:01Z|cursor-news-1",
+        "--limit",
+        "10",
+        "--run-id",
+        "cursor-test"
+      ])
+
+    manifest_path = String.trim(manifest_path)
+    manifest = manifest_path |> File.read!() |> Jason.decode!()
+    assert manifest["source_mode"] == "read_only_db_cursor"
+    assert manifest["after_cursor"] == "2026-05-17T10:00:01Z|cursor-news-1"
+    assert manifest["next_cursor"] == "2026-05-17T10:10:01Z|cursor-news-3"
+    assert manifest["emitted_count"] == 2
+    assert manifest["persistent_service_installed"] == false
+    refute File.exists?(Path.join(package_root, "news.db"))
+
+    [first_package | _] = manifest["packages"]
+
+    {out_dir, 0} =
+      System.cmd(consume_script, [
+        "--package-dir",
+        first_package["package_dir"],
+        "--run-root",
+        run_root,
+        "--tenant",
+        @tenant,
+        "--actor",
+        "flynn"
+      ])
+
+    report =
+      out_dir
+      |> String.trim()
+      |> Path.join("changed-stories-report.json")
+      |> File.read!()
+      |> Jason.decode!()
+
+    assert get_in(report, ["source", "mode"]) == "event_envelope"
+    assert get_in(report, ["source", "event_id"]) == "cursor-test-1"
+    assert get_in(report, ["primeradiant_writes", "inputs"]) == 1
+
+    after_stat = File.stat!(source_db)
+    assert before_stat.mtime == after_stat.mtime
+    assert before_stat.size == after_stat.size
+  end
+
   test "R1 push and consume handoff keeps source read-only and writes primeradiant output" do
     tmp =
       Path.join(
@@ -605,6 +694,44 @@ defmodule Primeradiant.DaemonNewsReplayTest do
 
     {_out, 0} = System.cmd("sqlite3", [db_path, sql])
   end
+
+  defp create_source_db_with_hashes!(db_path, raw_path, offsets, ids, rows) do
+    inserts =
+      offsets
+      |> Enum.zip(ids)
+      |> Enum.zip(rows)
+      |> Enum.with_index()
+      |> Enum.map(fn {{{{offset, length}, id}, row}, index} ->
+        sha = :crypto.hash(:sha256, Jason.encode!(row)) |> Base.encode16(case: :lower)
+        minute = index * 5
+
+        "('#{id}', 'swarm.channel.news', 'receptor', 'sender', 'swarm.channel.news.report.v0', '2026-05-17T10:#{pad2(minute)}:00Z', '2026-05-17T10:#{pad2(minute)}:01Z', '#{raw_path}', #{offset}, #{length + 1}, '#{sha}')"
+      end)
+      |> Enum.join(",\n      ")
+
+    sql = """
+    CREATE TABLE schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+    CREATE TABLE messages (
+      message_id TEXT PRIMARY KEY,
+      source_space TEXT,
+      receptor_id TEXT,
+      sender_id TEXT,
+      message_type TEXT,
+      created_at TEXT,
+      received_at TEXT NOT NULL,
+      raw_archive_path TEXT NOT NULL,
+      raw_archive_offset INTEGER NOT NULL,
+      raw_archive_length INTEGER NOT NULL,
+      raw_sha256 TEXT NOT NULL
+    );
+    INSERT INTO messages VALUES
+      #{inserts};
+    """
+
+    {_out, 0} = System.cmd("sqlite3", [db_path, sql])
+  end
+
+  defp pad2(value), do: value |> Integer.to_string() |> String.pad_leading(2, "0")
 
   defp sqlite_json!(db_path, sql) do
     {output, 0} = System.cmd("sqlite3", [db_path, sql])
