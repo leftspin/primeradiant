@@ -519,6 +519,86 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert before_stat.size == after_stat.size
   end
 
+  test "SQLite file wakeup runs read-only cursor importer without trusting file event" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-daemon-news-watch-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    source_db = Path.join(tmp, "source-news.db")
+    raw_path = Path.join(tmp, "archive.jsonl")
+    cursor_file = Path.join(tmp, "primeradiant/cursor.txt")
+    package_root = Path.join(tmp, "packages")
+    run_root = Path.join(tmp, "runs")
+
+    first = envelope("Watch first", "Watch first service is open venue is north speaker is desk.")
+    second = envelope("Watch second", "Watch second service is open venue is north speaker is desk.")
+    [{offset1, length1}] = write_archive!(raw_path, [first])
+    sha1 = :crypto.hash(:sha256, Jason.encode!(first)) |> Base.encode16(case: :lower)
+    create_source_db_with_hash!(source_db, raw_path, offset1, length1 + 1, "watch-news-1", sha1)
+    File.mkdir_p!(Path.dirname(cursor_file))
+    File.write!(cursor_file, "2026-05-17T10:00:01Z|watch-news-1\n")
+
+    watcher_script = Path.expand("scripts/r1/watch_sqlite_wakeup.sh")
+
+    task =
+      Task.async(fn ->
+        System.cmd(watcher_script, [
+          "--source-db",
+          source_db,
+          "--tenant",
+          @tenant,
+          "--cursor-file",
+          cursor_file,
+          "--package-root",
+          package_root,
+          "--run-root",
+          run_root,
+          "--limit",
+          "10",
+          "--run-id",
+          "watch-test",
+          "--timeout-seconds",
+          "8",
+          "--poll-interval-seconds",
+          "1"
+        ])
+      end)
+
+    Process.sleep(1200)
+    {offset2, length2} = append_archive!(raw_path, second)
+    sha2 = :crypto.hash(:sha256, Jason.encode!(second)) |> Base.encode16(case: :lower)
+    insert_source_row!(source_db, raw_path, offset2, length2 + 1, "watch-news-2", sha2)
+
+    {report_path, 0} = Task.await(task, 10_000)
+    report = report_path |> String.trim() |> File.read!() |> Jason.decode!()
+
+    assert report["source_mode"] == "sqlite_file_wakeup_read_only_cursor"
+    assert report["wake_kind"] == "sqlite_file_change"
+    assert report["wake_payload_trusted_as_story_fact"] == false
+    assert report["source_db_mutated_by_primeradiant"] == false
+    assert report["persistent_service_installed"] == false
+    assert report["after_cursor"] == "2026-05-17T10:00:01Z|watch-news-1"
+    assert report["next_cursor"] == "2026-05-17T10:05:01Z|watch-news-2"
+    assert report["emitted_count"] == 1
+    assert File.read!(cursor_file) == "2026-05-17T10:05:01Z|watch-news-2\n"
+
+    manifest = report["manifest_path"] |> File.read!() |> Jason.decode!()
+    [package] = manifest["packages"]
+    output_report =
+      Path.join([run_root, package["event_id"], "changed-stories-report.json"])
+      |> File.read!()
+      |> Jason.decode!()
+
+    assert get_in(output_report, ["source", "event_id"]) == "watch-test-1"
+    assert get_in(output_report, ["primeradiant_writes", "inputs"]) == 1
+    refute File.exists?(Path.join(package_root, "news.db"))
+  end
+
   test "R1 push and consume handoff keeps source read-only and writes primeradiant output" do
     tmp =
       Path.join(
@@ -620,6 +700,13 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     chunks
   end
 
+  defp append_archive!(path, envelope) do
+    {:ok, stat} = File.stat(path)
+    bytes = Jason.encode!(envelope)
+    File.write!(path, bytes <> "\n", [:append])
+    {stat.size, byte_size(bytes)}
+  end
+
   defp create_source_db!(db_path, raw_path, offsets, ids \\ ["news-1", "news-2"])
 
   defp create_source_db!(db_path, raw_path, [{offset1, length1}, {offset2, length2}], [
@@ -690,6 +777,15 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     );
     INSERT INTO messages VALUES
       ('#{id}', 'swarm.channel.news', 'receptor', 'sender', 'swarm.channel.news.report.v0', '2026-05-17T10:00:00Z', '2026-05-17T10:00:01Z', '#{raw_path}', #{offset}, #{length}, '#{sha}');
+    """
+
+    {_out, 0} = System.cmd("sqlite3", [db_path, sql])
+  end
+
+  defp insert_source_row!(db_path, raw_path, offset, length, id, sha) do
+    sql = """
+    INSERT INTO messages VALUES
+      ('#{id}', 'swarm.channel.news', 'receptor', 'sender', 'swarm.channel.news.report.v0', '2026-05-17T10:05:00Z', '2026-05-17T10:05:01Z', '#{raw_path}', #{offset}, #{length}, '#{sha}');
     """
 
     {_out, 0} = System.cmd("sqlite3", [db_path, sql])
