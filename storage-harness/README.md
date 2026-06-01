@@ -62,6 +62,22 @@ scripts/r1/consume_handoff.sh \
   --tenant 00000000-0000-0000-0000-00000000t328
 ```
 
-The R1 product path is event-driven. Any persistent source-side publisher,
-watcher, queue, launchd, systemd, cron, or autostart step remains a separate
-Flynn approval gate.
+Watcher-driven importer proof, still without installing a service:
+
+```sh
+scripts/r1/watch_sqlite_wakeup.sh \
+  --source-db /Volumes/BlipsAndChitz/news-storage/news.db \
+  --tenant 00000000-0000-0000-0000-00000000t328 \
+  --cursor-file /tmp/primeradiant-t328-cursor.txt \
+  --package-root /tmp/primeradiant-t328-packages \
+  --run-root /tmp/primeradiant-t328-runs
+```
+
+The watcher treats `news.db`, `news.db-wal`, and `news.db-shm` file changes only
+as a wakeup bell. It then runs the normal read-only cursor importer; cursoring,
+dedupe, row reads, raw digest checks, and story decisions remain Primeradiant
+work. The file event is not a story payload and is not trusted as story fact.
+
+Any launchd, systemd, cron, autostart, or permanent service registration remains
+a separate deploy step unless a supported product deploy path explicitly owns
+that runtime shape.
