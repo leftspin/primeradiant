@@ -572,13 +572,16 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     Process.sleep(1200)
     {offset2, length2} = append_archive!(raw_path, second)
     sha2 = :crypto.hash(:sha256, Jason.encode!(second)) |> Base.encode16(case: :lower)
-    insert_source_row!(source_db, raw_path, offset2, length2 + 1, "watch-news-2", sha2)
+    insert_source_row!(source_db, raw_path, offset2, length2 + 1, "watch-news-2", sha2, 6)
 
     {report_path, 0} = Task.await(task, 10_000)
     report = report_path |> String.trim() |> File.read!() |> Jason.decode!()
 
     assert report["source_mode"] == "sqlite_file_wakeup_read_only_cursor"
     assert report["wake_kind"] == "sqlite_file_change"
+    assert report["wake_signal_debounced"] == true
+    assert report["importer_single_flight"] == true
+    assert report["importer_catch_up_until_empty"] == true
     assert report["wake_payload_trusted_as_story_fact"] == false
     assert report["source_db_mutated_by_primeradiant"] == false
     assert report["persistent_service_installed"] == false
@@ -587,15 +590,126 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert report["emitted_count"] == 1
     assert File.read!(cursor_file) == "2026-05-17T10:05:01Z|watch-news-2\n"
 
-    manifest = report["manifest_path"] |> File.read!() |> Jason.decode!()
+    [pass] = report["passes"]
+    manifest = pass["manifest_path"] |> File.read!() |> Jason.decode!()
     [package] = manifest["packages"]
     output_report =
       Path.join([run_root, package["event_id"], "changed-stories-report.json"])
       |> File.read!()
       |> Jason.decode!()
 
-    assert get_in(output_report, ["source", "event_id"]) == "watch-test-1"
+    assert get_in(output_report, ["source", "event_id"]) == "watch-test-pass-0001-1"
     assert get_in(output_report, ["primeradiant_writes", "inputs"]) == 1
+    refute File.exists?(Path.join(package_root, "news.db"))
+  end
+
+  test "SQLite wakeup coalesces WAL burst and drains cursor in serialized bounded passes" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-daemon-news-watch-burst-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    source_db = Path.join(tmp, "source-news.db")
+    raw_path = Path.join(tmp, "archive.jsonl")
+    cursor_file = Path.join(tmp, "primeradiant/cursor.txt")
+    package_root = Path.join(tmp, "packages")
+    run_root = Path.join(tmp, "runs")
+
+    rows =
+      Enum.map(1..6, fn index ->
+        envelope(
+          "Burst #{index}",
+          "Burst #{index} service is open venue is north speaker is desk."
+        )
+      end)
+
+    [first | burst_rows] = rows
+    [{offset1, length1}] = write_archive!(raw_path, [first])
+    sha1 = :crypto.hash(:sha256, Jason.encode!(first)) |> Base.encode16(case: :lower)
+    create_source_db_with_hash!(source_db, raw_path, offset1, length1 + 1, "burst-news-1", sha1)
+    File.mkdir_p!(Path.dirname(cursor_file))
+    File.write!(cursor_file, "2026-05-17T10:00:01Z|burst-news-1\n")
+
+    watcher_script = Path.expand("scripts/r1/watch_sqlite_wakeup.sh")
+
+    task =
+      Task.async(fn ->
+        System.cmd(watcher_script, [
+          "--source-db",
+          source_db,
+          "--tenant",
+          @tenant,
+          "--cursor-file",
+          cursor_file,
+          "--package-root",
+          package_root,
+          "--run-root",
+          run_root,
+          "--limit",
+          "2",
+          "--run-id",
+          "watch-burst-test",
+          "--timeout-seconds",
+          "8",
+          "--poll-interval-seconds",
+          "1",
+          "--debounce-seconds",
+          "1"
+        ])
+      end)
+
+    Process.sleep(1200)
+
+    Enum.with_index(burst_rows, 2)
+    |> Enum.each(fn {row, index} ->
+      {offset, length} = append_archive!(raw_path, row)
+      sha = :crypto.hash(:sha256, Jason.encode!(row)) |> Base.encode16(case: :lower)
+      insert_source_row!(source_db, raw_path, offset, length + 1, "burst-news-#{index}", sha, index)
+    end)
+
+    {report_path, 0} = Task.await(task, 15_000)
+    report = report_path |> String.trim() |> File.read!() |> Jason.decode!()
+
+    assert report["source_mode"] == "sqlite_file_wakeup_read_only_cursor"
+    assert report["wake_signal_debounced"] == true
+    assert report["importer_single_flight"] == true
+    assert report["importer_catch_up_until_empty"] == true
+    assert report["wake_payload_trusted_as_story_fact"] == false
+    assert report["source_db_mutated_by_primeradiant"] == false
+    assert report["persistent_service_installed"] == false
+    assert report["after_cursor"] == "2026-05-17T10:00:01Z|burst-news-1"
+    assert report["next_cursor"] == "2026-05-17T10:05:01Z|burst-news-6"
+    assert report["emitted_count"] == 5
+    assert report["pass_count"] == 3
+    assert Enum.map(report["passes"], & &1["emitted_count"]) == [2, 2, 1]
+    assert File.read!(cursor_file) == "2026-05-17T10:05:01Z|burst-news-6\n"
+
+    package_event_ids =
+      report["passes"]
+      |> Enum.flat_map(fn pass ->
+        pass["manifest_path"]
+        |> File.read!()
+        |> Jason.decode!()
+        |> Map.fetch!("packages")
+      end)
+      |> Enum.map(& &1["event_id"])
+
+    assert length(package_event_ids) == 5
+    assert Enum.uniq(package_event_ids) == package_event_ids
+
+    output_reports = Path.wildcard(Path.join([run_root, "*", "changed-stories-report.json"]))
+    assert length(output_reports) == 5
+
+    output_event_ids =
+      output_reports
+      |> Enum.map(fn path -> path |> File.read!() |> Jason.decode!() |> get_in(["source", "event_id"]) end)
+      |> Enum.sort()
+
+    assert output_event_ids == Enum.sort(package_event_ids)
     refute File.exists?(Path.join(package_root, "news.db"))
   end
 
@@ -782,10 +896,12 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     {_out, 0} = System.cmd("sqlite3", [db_path, sql])
   end
 
-  defp insert_source_row!(db_path, raw_path, offset, length, id, sha) do
+  defp insert_source_row!(db_path, raw_path, offset, length, id, sha, index) do
+    minute = (index - 1)
+
     sql = """
     INSERT INTO messages VALUES
-      ('#{id}', 'swarm.channel.news', 'receptor', 'sender', 'swarm.channel.news.report.v0', '2026-05-17T10:05:00Z', '2026-05-17T10:05:01Z', '#{raw_path}', #{offset}, #{length}, '#{sha}');
+      ('#{id}', 'swarm.channel.news', 'receptor', 'sender', 'swarm.channel.news.report.v0', '2026-05-17T10:#{pad2(minute)}:00Z', '2026-05-17T10:#{pad2(minute)}:01Z', '#{raw_path}', #{offset}, #{length}, '#{sha}');
     """
 
     {_out, 0} = System.cmd("sqlite3", [db_path, sql])
