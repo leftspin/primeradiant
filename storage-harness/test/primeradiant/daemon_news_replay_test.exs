@@ -452,6 +452,7 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     ]
 
     offsets = write_archive!(raw_path, rows)
+
     create_source_db_with_hashes!(
       source_db,
       raw_path,
@@ -536,7 +537,10 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     run_root = Path.join(tmp, "runs")
 
     first = envelope("Watch first", "Watch first service is open venue is north speaker is desk.")
-    second = envelope("Watch second", "Watch second service is open venue is north speaker is desk.")
+
+    second =
+      envelope("Watch second", "Watch second service is open venue is north speaker is desk.")
+
     [{offset1, length1}] = write_archive!(raw_path, [first])
     sha1 = :crypto.hash(:sha256, Jason.encode!(first)) |> Base.encode16(case: :lower)
     create_source_db_with_hash!(source_db, raw_path, offset1, length1 + 1, "watch-news-1", sha1)
@@ -593,6 +597,7 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     [pass] = report["passes"]
     manifest = pass["manifest_path"] |> File.read!() |> Jason.decode!()
     [package] = manifest["packages"]
+
     output_report =
       Path.join([run_root, package["event_id"], "changed-stories-report.json"])
       |> File.read!()
@@ -668,7 +673,16 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     |> Enum.each(fn {row, index} ->
       {offset, length} = append_archive!(raw_path, row)
       sha = :crypto.hash(:sha256, Jason.encode!(row)) |> Base.encode16(case: :lower)
-      insert_source_row!(source_db, raw_path, offset, length + 1, "burst-news-#{index}", sha, index)
+
+      insert_source_row!(
+        source_db,
+        raw_path,
+        offset,
+        length + 1,
+        "burst-news-#{index}",
+        sha,
+        index
+      )
     end)
 
     {report_path, 0} = Task.await(task, 15_000)
@@ -706,11 +720,118 @@ defmodule Primeradiant.DaemonNewsReplayTest do
 
     output_event_ids =
       output_reports
-      |> Enum.map(fn path -> path |> File.read!() |> Jason.decode!() |> get_in(["source", "event_id"]) end)
+      |> Enum.map(fn path ->
+        path |> File.read!() |> Jason.decode!() |> get_in(["source", "event_id"])
+      end)
       |> Enum.sort()
 
     assert output_event_ids == Enum.sort(package_event_ids)
     refute File.exists?(Path.join(package_root, "news.db"))
+  end
+
+  test "Subspace daemon DB wakeup imports news envelopes without mutating source DB" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-subspace-daemon-watch-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    source_db = Path.join(tmp, "daemon.sqlite3")
+    cursor_file = Path.join(tmp, "primeradiant/cursor.txt")
+    package_root = Path.join(tmp, "packages")
+    run_root = Path.join(tmp, "runs")
+
+    create_subspace_daemon_db!(
+      source_db,
+      [
+        {"subspace-news-1", "2026-06-03 05:00:00",
+         envelope(
+           "Subspace first",
+           "Subspace first service is open venue is north speaker is desk."
+         )}
+      ]
+    )
+
+    before_stat = File.stat!(source_db)
+    File.mkdir_p!(Path.dirname(cursor_file))
+    File.write!(cursor_file, "2026-06-03 05:00:00|1\n")
+
+    watcher_script = Path.expand("scripts/r1/watch_sqlite_wakeup.sh")
+    emitter_script = Path.expand("scripts/r1/emit_subspace_daemon_cursor_event_packages.sh")
+
+    task =
+      Task.async(fn ->
+        System.cmd(watcher_script, [
+          "--source-db",
+          source_db,
+          "--tenant",
+          @tenant,
+          "--cursor-file",
+          cursor_file,
+          "--package-root",
+          package_root,
+          "--run-root",
+          run_root,
+          "--limit",
+          "10",
+          "--run-id",
+          "subspace-watch-test",
+          "--timeout-seconds",
+          "8",
+          "--poll-interval-seconds",
+          "1",
+          "--emit-cursor-script",
+          emitter_script
+        ])
+      end)
+
+    Process.sleep(1200)
+
+    insert_subspace_daemon_event!(
+      source_db,
+      2,
+      "subspace-news-2",
+      "2026-06-03 05:01:00",
+      envelope(
+        "Subspace second",
+        "Subspace second service is open venue is north speaker is desk."
+      )
+    )
+
+    after_source_commit_stat = File.stat!(source_db)
+
+    {report_path, 0} = Task.await(task, 10_000)
+    report = report_path |> String.trim() |> File.read!() |> Jason.decode!()
+
+    assert report["source_mode"] == "sqlite_file_wakeup_read_only_cursor"
+    assert report["wake_payload_trusted_as_story_fact"] == false
+    assert report["source_db_mutated_by_primeradiant"] == false
+    assert report["emitted_count"] == 1
+    assert report["next_cursor"] == "2026-06-03 05:01:00|2"
+
+    [pass] = report["passes"]
+    manifest = pass["manifest_path"] |> File.read!() |> Jason.decode!()
+    assert manifest["source_mode"] == "subspace_daemon_read_only_db_cursor"
+
+    [package] = manifest["packages"]
+
+    output_report =
+      Path.join([run_root, package["event_id"], "changed-stories-report.json"])
+      |> File.read!()
+      |> Jason.decode!()
+
+    assert get_in(output_report, ["source", "event_id"]) == "subspace-watch-test-pass-0001-1"
+    assert get_in(output_report, ["source", "message_type"]) == "swarm.channel.news.report.v0"
+    assert get_in(output_report, ["primeradiant_writes", "inputs"]) == 1
+
+    after_stat = File.stat!(source_db)
+    assert before_stat != after_source_commit_stat
+    assert after_source_commit_stat.mtime == after_stat.mtime
+    assert after_source_commit_stat.size == after_stat.size
+    refute File.exists?(Path.join(package_root, "daemon.sqlite3"))
   end
 
   test "R1 push and consume handoff keeps source read-only and writes primeradiant output" do
@@ -897,7 +1018,7 @@ defmodule Primeradiant.DaemonNewsReplayTest do
   end
 
   defp insert_source_row!(db_path, raw_path, offset, length, id, sha, index) do
-    minute = (index - 1)
+    minute = index - 1
 
     sql = """
     INSERT INTO messages VALUES
@@ -906,6 +1027,43 @@ defmodule Primeradiant.DaemonNewsReplayTest do
 
     {_out, 0} = System.cmd("sqlite3", [db_path, sql])
   end
+
+  defp create_subspace_daemon_db!(db_path, rows) do
+    sql = """
+    CREATE TABLE daemon_event (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ingress_source_id INTEGER NOT NULL,
+      message_id TEXT NOT NULL,
+      message_timestamp TEXT NOT NULL,
+      inbound_event TEXT NOT NULL,
+      author_id TEXT NOT NULL,
+      author_name TEXT NOT NULL,
+      text TEXT NOT NULL,
+      sender_embeddings_json TEXT,
+      attention_space_id TEXT,
+      attention_fallback INTEGER NOT NULL,
+      payload_json TEXT,
+      raw_body TEXT,
+      accepted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      attention_disposition TEXT NOT NULL DEFAULT 'deliver',
+      attention_delivery_mode TEXT NOT NULL DEFAULT 'unknown_legacy'
+    );
+    #{Enum.map_join(rows, "\n", fn {message_id, accepted_at, item} -> "INSERT INTO daemon_event (ingress_source_id, message_id, message_timestamp, inbound_event, author_id, author_name, text, attention_fallback, accepted_at) VALUES (1, '#{message_id}', '#{accepted_at}Z', 'new_message', 'sender', 'argus-racter-publisher', '#{sql_string(Jason.encode!(item))}', 0, '#{accepted_at}');" end)}
+    """
+
+    {_out, 0} = System.cmd("sqlite3", [db_path, sql])
+  end
+
+  defp insert_subspace_daemon_event!(db_path, id, message_id, accepted_at, item) do
+    sql = """
+    INSERT INTO daemon_event (id, ingress_source_id, message_id, message_timestamp, inbound_event, author_id, author_name, text, attention_fallback, accepted_at)
+    VALUES (#{id}, 1, '#{message_id}', '#{accepted_at}Z', 'new_message', 'sender', 'argus-racter-publisher', '#{sql_string(Jason.encode!(item))}', 0, '#{accepted_at}');
+    """
+
+    {_out, 0} = System.cmd("sqlite3", [db_path, sql])
+  end
+
+  defp sql_string(value), do: String.replace(value, "'", "''")
 
   defp create_source_db_with_hashes!(db_path, raw_path, offsets, ids, rows) do
     inserts =

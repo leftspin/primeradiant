@@ -4,7 +4,7 @@ set -euo pipefail
 usage() {
   cat <<'USAGE'
 Usage:
-  watch_sqlite_wakeup.sh --source-db PATH --tenant TENANT --cursor-file PATH --package-root DIR --run-root DIR [--actor ACTOR] [--limit N] [--run-id ID] [--timeout-seconds N] [--poll-interval-seconds N] [--debounce-seconds N]
+  watch_sqlite_wakeup.sh --source-db PATH --tenant TENANT --cursor-file PATH --package-root DIR --run-root DIR [--actor ACTOR] [--limit N] [--run-id ID] [--timeout-seconds N] [--poll-interval-seconds N] [--debounce-seconds N] [--emit-cursor-script PATH] [--consume-packages true|false]
 
 Observes daemon-news SQLite DB/WAL/SHM file changes as a wakeup bell, then runs
 the normal read-only cursor importer in serialized bounded passes until caught
@@ -23,6 +23,8 @@ RUN_ID=""
 TIMEOUT_SECONDS="30"
 POLL_INTERVAL_SECONDS="1"
 DEBOUNCE_SECONDS="1"
+EMIT_CURSOR_SCRIPT=""
+CONSUME_PACKAGES="true"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -37,6 +39,8 @@ while [[ $# -gt 0 ]]; do
     --timeout-seconds) TIMEOUT_SECONDS="$2"; shift 2 ;;
     --poll-interval-seconds) POLL_INTERVAL_SECONDS="$2"; shift 2 ;;
     --debounce-seconds) DEBOUNCE_SECONDS="$2"; shift 2 ;;
+    --emit-cursor-script) EMIT_CURSOR_SCRIPT="$2"; shift 2 ;;
+    --consume-packages) CONSUME_PACKAGES="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown argument: $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -67,13 +71,23 @@ if ! [[ "$DEBOUNCE_SECONDS" =~ ^[0-9]+$ ]]; then
   exit 2
 fi
 
+if [[ "$CONSUME_PACKAGES" != "true" && "$CONSUME_PACKAGES" != "false" ]]; then
+  echo "consume-packages must be true or false" >&2
+  exit 2
+fi
+
 if [[ -z "$RUN_ID" ]]; then
   RUN_ID="watch-$(date -u +%Y%m%dT%H%M%SZ)"
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-EMIT_CURSOR="$SCRIPT_DIR/emit_cursor_event_packages.sh"
+EMIT_CURSOR="${EMIT_CURSOR_SCRIPT:-$SCRIPT_DIR/emit_cursor_event_packages.sh}"
 CONSUME_PACKAGE="$SCRIPT_DIR/consume_event_package.sh"
+
+if [[ ! -x "$EMIT_CURSOR" ]]; then
+  echo "emit cursor script is not executable: $EMIT_CURSOR" >&2
+  exit 2
+fi
 
 signature() {
   for path in "$SOURCE_DB" "$SOURCE_DB-wal" "$SOURCE_DB-shm"; do
@@ -155,14 +169,16 @@ while :; do
   MANIFEST_PATH="$("$EMIT_CURSOR" "${EMIT_ARGS[@]}")"
   MANIFEST_PATH="$(printf "%s" "$MANIFEST_PATH" | tail -n 1)"
 
-  while IFS= read -r package_dir; do
-    [[ -z "$package_dir" || "$package_dir" == "null" ]] && continue
-    "$CONSUME_PACKAGE" \
-      --package-dir "$package_dir" \
-      --run-root "$RUN_ROOT" \
-      --tenant "$TENANT" \
-      --actor "$ACTOR" >/dev/null
-  done < <(jq -r '.packages[].package_dir' "$MANIFEST_PATH")
+  if [[ "$CONSUME_PACKAGES" == "true" ]]; then
+    while IFS= read -r package_dir; do
+      [[ -z "$package_dir" || "$package_dir" == "null" ]] && continue
+      "$CONSUME_PACKAGE" \
+        --package-dir "$package_dir" \
+        --run-root "$RUN_ROOT" \
+        --tenant "$TENANT" \
+        --actor "$ACTOR" >/dev/null
+    done < <(jq -r '.packages[].package_dir' "$MANIFEST_PATH")
+  fi
 
   EMITTED_COUNT="$(jq -r '.emitted_count' "$MANIFEST_PATH")"
   NEXT_CURSOR="$(jq -r '.next_cursor' "$MANIFEST_PATH")"
@@ -210,6 +226,7 @@ jq -s \
   --arg start_signature "$START_SIGNATURE" \
   --arg wake_signature "$WAKE_SIGNATURE" \
   --arg final_signature "$LAST_IMPORT_SIGNATURE" \
+  --arg consume_packages "$CONSUME_PACKAGES" \
   --argjson pass_count "$PASS_COUNT" \
   --argjson emitted_count "$TOTAL_EMITTED" \
   '{
@@ -221,6 +238,7 @@ jq -s \
     wake_signal_debounced: true,
     importer_single_flight: true,
     importer_catch_up_until_empty: true,
+    consume_packages: $consume_packages,
     wake_payload_trusted_as_story_fact: false,
     source_db_mutated_by_primeradiant: false,
     persistent_service_installed: false,

@@ -1,0 +1,155 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'USAGE'
+Usage:
+  live_subspace_daemon_watcher_once.sh --source-db PATH --tenant TENANT --state-root DIR --eurisko-target USER@HOST --eurisko-repo DIR [--actor ACTOR] [--ssh-key PATH] [--limit N] [--timeout-seconds N] [--poll-interval-seconds N] [--debounce-seconds N] [--run-id ID]
+
+Runs one live Subspace daemon SQLite DB/WAL wakeup pass on the source host,
+ships bounded Primeradiant event packages to EURISKO, and consumes them there
+into Primeradiant-owned soup/output. The source DB is read with sqlite3
+-readonly and is not copied or mutated.
+USAGE
+}
+
+SOURCE_DB=""
+TENANT=""
+STATE_ROOT=""
+EURISKO_TARGET=""
+EURISKO_REPO=""
+ACTOR="flynn"
+SSH_KEY="${HOME}/.ssh/id_ed25519_clu"
+LIMIT="50"
+TIMEOUT_SECONDS="300"
+POLL_INTERVAL_SECONDS="2"
+DEBOUNCE_SECONDS="2"
+RUN_ID=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --source-db) SOURCE_DB="$2"; shift 2 ;;
+    --tenant) TENANT="$2"; shift 2 ;;
+    --state-root) STATE_ROOT="$2"; shift 2 ;;
+    --eurisko-target) EURISKO_TARGET="$2"; shift 2 ;;
+    --eurisko-repo) EURISKO_REPO="$2"; shift 2 ;;
+    --actor) ACTOR="$2"; shift 2 ;;
+    --ssh-key) SSH_KEY="$2"; shift 2 ;;
+    --limit) LIMIT="$2"; shift 2 ;;
+    --timeout-seconds) TIMEOUT_SECONDS="$2"; shift 2 ;;
+    --poll-interval-seconds) POLL_INTERVAL_SECONDS="$2"; shift 2 ;;
+    --debounce-seconds) DEBOUNCE_SECONDS="$2"; shift 2 ;;
+    --run-id) RUN_ID="$2"; shift 2 ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "unknown argument: $1" >&2; usage >&2; exit 2 ;;
+  esac
+done
+
+if [[ -z "$SOURCE_DB" || -z "$TENANT" || -z "$STATE_ROOT" || -z "$EURISKO_TARGET" || -z "$EURISKO_REPO" ]]; then
+  usage >&2
+  exit 2
+fi
+
+if [[ ! -r "$SOURCE_DB" ]]; then
+  echo "source DB is not readable: $SOURCE_DB" >&2
+  exit 1
+fi
+
+if [[ ! -r "$SSH_KEY" ]]; then
+  echo "SSH key is not readable: $SSH_KEY" >&2
+  exit 1
+fi
+
+if [[ -z "$RUN_ID" ]]; then
+  RUN_ID="live-subspace-$(date -u +%Y%m%dT%H%M%SZ)"
+fi
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WATCHER="$SCRIPT_DIR/watch_sqlite_wakeup.sh"
+EMITTER="$SCRIPT_DIR/emit_subspace_daemon_cursor_event_packages.sh"
+
+CURSOR_FILE="$STATE_ROOT/cursor.txt"
+PACKAGE_ROOT="$STATE_ROOT/packages/$RUN_ID"
+LOCAL_RUN_ROOT="$STATE_ROOT/local-consume-placeholder/$RUN_ID"
+EURISKO_HANDOFF_ROOT="/home/clu/primeradiant-handoffs/$RUN_ID"
+EURISKO_RUN_ROOT="/home/clu/primeradiant-runs/$RUN_ID"
+
+mkdir -p "$STATE_ROOT" "$PACKAGE_ROOT" "$LOCAL_RUN_ROOT"
+
+WATCH_REPORT="$(
+  "$WATCHER" \
+    --source-db "$SOURCE_DB" \
+    --tenant "$TENANT" \
+    --cursor-file "$CURSOR_FILE" \
+    --package-root "$PACKAGE_ROOT" \
+    --run-root "$LOCAL_RUN_ROOT" \
+    --actor "$ACTOR" \
+    --limit "$LIMIT" \
+    --run-id "$RUN_ID" \
+    --timeout-seconds "$TIMEOUT_SECONDS" \
+    --poll-interval-seconds "$POLL_INTERVAL_SECONDS" \
+    --debounce-seconds "$DEBOUNCE_SECONDS" \
+    --emit-cursor-script "$EMITTER" \
+    --consume-packages false
+)"
+WATCH_REPORT="$(printf "%s" "$WATCH_REPORT" | tail -n 1)"
+
+ssh -i "$SSH_KEY" "$EURISKO_TARGET" "mkdir -p '$EURISKO_HANDOFF_ROOT' '$EURISKO_RUN_ROOT'"
+
+PACKAGE_LIST="$STATE_ROOT/$RUN_ID-packages.txt"
+jq -r '.passes[].manifest_path' "$WATCH_REPORT" |
+  while IFS= read -r manifest; do
+    [[ -z "$manifest" || "$manifest" == "null" ]] && continue
+    jq -r '.packages[].package_dir' "$manifest"
+  done > "$PACKAGE_LIST"
+
+CONSUMED_JSONL="$STATE_ROOT/$RUN_ID-consumed.jsonl"
+: > "$CONSUMED_JSONL"
+
+while IFS= read -r package_dir; do
+  [[ -z "$package_dir" ]] && continue
+  package_name="$(basename "$package_dir")"
+  remote_package="$EURISKO_HANDOFF_ROOT/$package_name"
+
+  tar -C "$package_dir" -cf - . |
+    ssh -i "$SSH_KEY" "$EURISKO_TARGET" "mkdir -p '$remote_package' && tar -C '$remote_package' -xf -"
+
+  remote_out="$(
+    ssh -i "$SSH_KEY" "$EURISKO_TARGET" "cd '$EURISKO_REPO/storage-harness' && scripts/r1/consume_event_package.sh --package-dir '$remote_package' --run-root '$EURISKO_RUN_ROOT' --tenant '$TENANT' --actor '$ACTOR'"
+  )"
+  remote_out="$(printf "%s" "$remote_out" | tail -n 1)"
+  jq -n \
+    --arg package_dir "$package_dir" \
+    --arg remote_package "$remote_package" \
+    --arg remote_out "$remote_out" \
+    '{package_dir: $package_dir, remote_package: $remote_package, remote_out: $remote_out}' \
+    >> "$CONSUMED_JSONL"
+done < "$PACKAGE_LIST"
+
+REPORT="$STATE_ROOT/$RUN_ID-live-report.json"
+jq -s \
+  --arg run_id "$RUN_ID" \
+  --arg source_db "$SOURCE_DB" \
+  --arg watch_report "$WATCH_REPORT" \
+  --arg eurisko_target "$EURISKO_TARGET" \
+  --arg eurisko_repo "$EURISKO_REPO" \
+  --arg eurisko_handoff_root "$EURISKO_HANDOFF_ROOT" \
+  --arg eurisko_run_root "$EURISKO_RUN_ROOT" \
+  '{
+    run_id: $run_id,
+    source_db_path: $source_db,
+    source_db_mutated_by_primeradiant: false,
+    source_db_copied_by_primeradiant: false,
+    wake_signal_role: "sqlite_db_wal_shm_wakeup_only",
+    wake_payload_trusted_as_story_fact: false,
+    source_host: "tars",
+    consume_host: "eurisko",
+    eurisko_target: $eurisko_target,
+    eurisko_repo: $eurisko_repo,
+    eurisko_handoff_root: $eurisko_handoff_root,
+    eurisko_run_root: $eurisko_run_root,
+    local_watch_report: $watch_report,
+    consumed: .
+  }' "$CONSUMED_JSONL" > "$REPORT"
+
+printf "%s\n" "$REPORT"
