@@ -82,28 +82,78 @@ EURISKO_RUN_ROOT="/home/clu/primeradiant-runs/$RUN_ID"
 
 mkdir -p "$STATE_ROOT" "$PACKAGE_ROOT" "$LOCAL_RUN_ROOT"
 
-WATCH_REPORT="$(
-  "$WATCHER" \
-    --source-db "$SOURCE_DB" \
-    --tenant "$TENANT" \
-    --cursor-file "$CURSOR_FILE" \
-    --package-root "$PACKAGE_ROOT" \
-    --run-root "$LOCAL_RUN_ROOT" \
-    --actor "$ACTOR" \
-    --limit "$LIMIT" \
-    --run-id "$RUN_ID" \
-    --timeout-seconds "$TIMEOUT_SECONDS" \
-    --poll-interval-seconds "$POLL_INTERVAL_SECONDS" \
-    --debounce-seconds "$DEBOUNCE_SECONDS" \
-    --emit-cursor-script "$EMITTER" \
-    --consume-packages false
-)"
-WATCH_REPORT="$(printf "%s" "$WATCH_REPORT" | tail -n 1)"
+MANIFESTS_JSONL="$STATE_ROOT/$RUN_ID-manifests.jsonl"
+: > "$MANIFESTS_JSONL"
+
+CURRENT_CURSOR=""
+if [[ -s "$CURSOR_FILE" ]]; then
+  CURRENT_CURSOR="$(tr -d '\r\n' < "$CURSOR_FILE")"
+fi
+
+CATCHUP_COUNT=0
+CATCHUP_PASS=0
+while :; do
+  CATCHUP_PASS=$((CATCHUP_PASS + 1))
+  CATCHUP_ROOT="$PACKAGE_ROOT/catchup-passes/$(printf '%04d' "$CATCHUP_PASS")"
+  EMIT_ARGS=(
+    --source-db "$SOURCE_DB"
+    --tenant "$TENANT"
+    --package-root "$CATCHUP_ROOT"
+    --limit "$LIMIT"
+    --run-id "$RUN_ID-catchup-$(printf '%04d' "$CATCHUP_PASS")"
+  )
+  if [[ -n "$CURRENT_CURSOR" ]]; then
+    EMIT_ARGS+=(--after-cursor "$CURRENT_CURSOR")
+  fi
+
+  CATCHUP_MANIFEST="$("$EMITTER" "${EMIT_ARGS[@]}")"
+  CATCHUP_MANIFEST="$(printf "%s" "$CATCHUP_MANIFEST" | tail -n 1)"
+  jq -n --arg kind "cursor_catchup" --arg manifest_path "$CATCHUP_MANIFEST" \
+    '{kind: $kind, manifest_path: $manifest_path}' >> "$MANIFESTS_JSONL"
+
+  EMITTED_COUNT="$(jq -r '.emitted_count' "$CATCHUP_MANIFEST")"
+  NEXT_CURSOR="$(jq -r '.next_cursor' "$CATCHUP_MANIFEST")"
+  CATCHUP_COUNT=$((CATCHUP_COUNT + EMITTED_COUNT))
+  if [[ -n "$NEXT_CURSOR" && "$NEXT_CURSOR" != "null" ]]; then
+    CURRENT_CURSOR="$NEXT_CURSOR"
+    printf "%s\n" "$CURRENT_CURSOR" > "$CURSOR_FILE"
+  fi
+  if [[ "$EMITTED_COUNT" -lt "$LIMIT" ]]; then
+    break
+  fi
+done
+
+WATCH_REPORT=""
+if [[ "$CATCHUP_COUNT" -eq 0 ]]; then
+  WATCH_REPORT="$(
+    "$WATCHER" \
+      --source-db "$SOURCE_DB" \
+      --tenant "$TENANT" \
+      --cursor-file "$CURSOR_FILE" \
+      --package-root "$PACKAGE_ROOT/watch" \
+      --run-root "$LOCAL_RUN_ROOT" \
+      --actor "$ACTOR" \
+      --limit "$LIMIT" \
+      --run-id "$RUN_ID" \
+      --timeout-seconds "$TIMEOUT_SECONDS" \
+      --poll-interval-seconds "$POLL_INTERVAL_SECONDS" \
+      --debounce-seconds "$DEBOUNCE_SECONDS" \
+      --emit-cursor-script "$EMITTER" \
+      --consume-packages false
+  )"
+  WATCH_REPORT="$(printf "%s" "$WATCH_REPORT" | tail -n 1)"
+  jq -r '.passes[].manifest_path' "$WATCH_REPORT" |
+    while IFS= read -r manifest_path; do
+      [[ -z "$manifest_path" || "$manifest_path" == "null" ]] && continue
+      jq -n --arg kind "wakeup" --arg manifest_path "$manifest_path" \
+        '{kind: $kind, manifest_path: $manifest_path}' >> "$MANIFESTS_JSONL"
+    done
+fi
 
 ssh -i "$SSH_KEY" "$EURISKO_TARGET" "mkdir -p '$EURISKO_HANDOFF_ROOT' '$EURISKO_RUN_ROOT'"
 
 PACKAGE_LIST="$STATE_ROOT/$RUN_ID-packages.txt"
-jq -r '.passes[].manifest_path' "$WATCH_REPORT" |
+jq -r '.manifest_path' "$MANIFESTS_JSONL" |
   while IFS= read -r manifest; do
     [[ -z "$manifest" || "$manifest" == "null" ]] && continue
     jq -r '.packages[].package_dir' "$manifest"
@@ -137,6 +187,7 @@ jq -s \
   --arg run_id "$RUN_ID" \
   --arg source_db "$SOURCE_DB" \
   --arg watch_report "$WATCH_REPORT" \
+  --argjson catchup_count "$CATCHUP_COUNT" \
   --arg eurisko_target "$EURISKO_TARGET" \
   --arg eurisko_repo "$EURISKO_REPO" \
   --arg eurisko_handoff_root "$EURISKO_HANDOFF_ROOT" \
@@ -154,6 +205,7 @@ jq -s \
     eurisko_repo: $eurisko_repo,
     eurisko_handoff_root: $eurisko_handoff_root,
     eurisko_run_root: $eurisko_run_root,
+    cursor_catchup_before_wait_count: $catchup_count,
     local_watch_report: $watch_report,
     consumed: .
   }' "$CONSUMED_JSONL" > "$REPORT"
