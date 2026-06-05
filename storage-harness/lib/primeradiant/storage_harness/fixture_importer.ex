@@ -1,8 +1,8 @@
 defmodule Primeradiant.StorageHarness.FixtureImporter do
   @moduledoc false
 
-  alias Primeradiant.Arbitration.Engine
   alias Primeradiant.Ingestion.Normalizer
+  alias Primeradiant.Mediation.WriteGate, as: Engine
   alias Primeradiant.Projections.StoryClassifier
   alias Primeradiant.Proposals.Builder
   alias Primeradiant.Soup.Store

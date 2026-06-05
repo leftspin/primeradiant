@@ -257,6 +257,43 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert DurableSoupDb.table_count(soup_db_path, "inputs", @tenant) == 1
   end
 
+  test "real daemon news typography with explicit date can commit story state" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-daemon-news-typography-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    soup_db_path = Path.join(tmp, "primeradiant-event-soup.sqlite3")
+    raw_path = Path.join(tmp, "archive.jsonl")
+
+    [row] = [
+      envelope(
+        "Tomb Raider: Legacy of Atlantis PC requirements list RTX 3080 and RX 6800 XT",
+        "Tomb Raider: Legacy of Atlantis launches February 12, 2027 on PS5 — Amazon’s studio says trailer passes 5M views."
+      )
+    ]
+
+    [{offset, length}] = write_archive!(raw_path, [row])
+    event = committed_source_item_event("event-news-typography", raw_path, offset, length, row)
+
+    {:ok, state, report} =
+      DaemonNewsEvent.consume_event(event,
+        soup_db_path: soup_db_path,
+        tenant_id: @tenant,
+        actor_id: "flynn"
+      )
+
+    assert [%{"status" => "usable", "count" => 1}] = report.extraction_quality.counts
+    assert report.primeradiant_writes.stories == 1
+    assert report.primeradiant_writes.graph_commits > 0
+    assert report.changed_stories != []
+    assert [%{structural_facts: %{"date" => "feb-12-2027"}}] = state.stories
+  end
+
   test "event envelope refuses raw digest mismatch before admission" do
     tmp =
       Path.join(

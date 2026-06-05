@@ -10,7 +10,7 @@ defmodule Primeradiant.Extraction.ProductionExtractor do
   @structural_fact_keys ~w(service_state route crossings terminal_staffing venue hours deadline owner amount quoted_amount status battery location triage decision task assignee speaker availability ownership responsibility affected_group group date actor)
   @entity_kinds ~w(person org place product project account agency event document unknown)
   @boilerplate ~r/\b(subscribe|advertisement|share this|related articles|recommended|privacy policy|terms of service|unsubscribe|copyright|all rights reserved|cookie settings|sign up)\b/i
-  @unsupported_language ~r/[^\x00-\x7F]/
+  @unsupported_language ~r/[^\x00-\x7F\x{00A0}\x{2018}\x{2019}\x{201C}\x{201D}\x{2013}\x{2014}\x{2026}]/u
 
   def extract(%Input{} = input, opts \\ []) do
     result = build_result(input, opts)
@@ -157,7 +157,9 @@ defmodule Primeradiant.Extraction.ProductionExtractor do
     |> Enum.reduce({[], evidence}, fn sentence, {claims, evidence} ->
       sentence_claims(sentence)
       |> Enum.reduce({claims, evidence}, fn raw_claim, {claims, evidence} ->
-        evidence_ref = EvidenceBuilder.ref(evidence, input, sentence)
+        evidence_ref =
+          EvidenceBuilder.ref(evidence, input, Map.get(raw_claim, :evidence_text, sentence))
+
         evidence = EvidenceBuilder.put(evidence, evidence_ref)
         claim = claim_from(input, raw_claim, sentence, length(claims), evidence_ref)
         {claims ++ [claim], evidence}
@@ -216,6 +218,23 @@ defmodule Primeradiant.Extraction.ProductionExtractor do
         }
       end)
 
+    launch_date_claims =
+      Regex.scan(
+        ~r/\b(?<subject>[A-Z][A-Za-z0-9&' :.-]{1,90}?)\s+(?<predicate>launches|launch date(?: is| set for)?|release date(?: is| set for)?)\s+(?<value>(?:Jan|January|Feb|February|Mar|March|Apr|April|May|Jun|June|Jul|July|Aug|August|Sep|Sept|September|Oct|October|Nov|November|Dec|December)\.?\s+\d{1,2},?\s+\d{4})\b/i,
+        normalized,
+        capture: [:subject, :predicate, :value]
+      )
+      |> Enum.map(fn [subject, predicate, value] ->
+        %{
+          subject: subject,
+          predicate: "date",
+          copula: nil,
+          value: date_value(value),
+          scope: "launch",
+          evidence_text: "#{subject} #{predicate} #{value}"
+        }
+      end)
+
     standalone_claims =
       Regex.scan(
         ~r/(?:^|[.;]\s+|\s+)(?<predicate>[a-z][a-z0-9_]{2,35})\s+(?<copula>is|are|was|were|remains|remain|stays|stayed|became|becomes|set to|moved to)\s+(?<value>[A-Za-z0-9_.:$%-]+)(?:\s+(?:for|during|in|by|since)\s+(?<scope>[A-Za-z0-9_.:-]+))?/,
@@ -238,7 +257,11 @@ defmodule Primeradiant.Extraction.ProductionExtractor do
         )
       end)
 
-    (subject_claims ++ verb_object_claims ++ compact_claims ++ standalone_claims)
+    (subject_claims ++
+       verb_object_claims ++
+       compact_claims ++
+       launch_date_claims ++
+       standalone_claims)
     |> Enum.reject(&bad_predicate?/1)
     |> Enum.uniq_by(&{fact_key(&1.predicate), fact_value(&1.value)})
   end
@@ -872,6 +895,37 @@ defmodule Primeradiant.Extraction.ProductionExtractor do
     value
     |> String.replace(~r/\bquoted amount\b/i, "quoted_amount")
     |> String.replace(~r/\bterminal staffing\b/i, "terminal_staffing")
+  end
+
+  defp date_value(value) do
+    [month, day, year] =
+      value
+      |> String.downcase()
+      |> String.replace(~r/[,.]/, "")
+      |> String.split(~r/\s+/, trim: true)
+
+    [month_value(month), day, year]
+    |> Enum.join("-")
+  end
+
+  defp month_value(value) do
+    value
+    |> String.downcase()
+    |> case do
+      "january" -> "jan"
+      "february" -> "feb"
+      "march" -> "mar"
+      "april" -> "apr"
+      "june" -> "jun"
+      "july" -> "jul"
+      "august" -> "aug"
+      "september" -> "sep"
+      "sept" -> "sep"
+      "october" -> "oct"
+      "november" -> "nov"
+      "december" -> "dec"
+      month -> month
+    end
   end
 
   defp slug(value) do
