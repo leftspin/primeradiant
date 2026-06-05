@@ -1,10 +1,10 @@
-defmodule Primeradiant.Arbitration.Engine do
+defmodule Primeradiant.Mediation.WriteGate do
   @moduledoc false
 
   alias Primeradiant.Soup.Store
 
-  def commit(store, proposal, normalized) do
-    validate_proposal!(store, proposal)
+  def commit(store, proposal, normalized, registry_row \\ nil) do
+    permission = validate_candidate_mutation!(store, proposal, registry_row)
 
     accepted = %{proposal | status: :accepted}
 
@@ -18,11 +18,13 @@ defmodule Primeradiant.Arbitration.Engine do
                 proposal_id: proposal.id,
                 from: proposal.status,
                 to: :accepted,
-                actor: :arbiter,
+                actor: :write_mediator,
                 actor_id: proposal.actor_id,
                 evidence_refs: proposal.evidence_refs,
                 confidence: proposal.confidence,
                 agent_role: proposal.agent_role,
+                permission_check: permission.check,
+                direct_write_authority: permission.direct_write_authority,
                 agent_config_version: proposal.agent_config_version,
                 prompt_version_hash: proposal.prompt_version_hash,
                 input_packet_hash: proposal.input_packet_hash,
@@ -375,25 +377,60 @@ defmodule Primeradiant.Arbitration.Engine do
     Map.new(map, fn {k, v} -> {to_string(k), v} end)
   end
 
-  defp validate_proposal!(store, proposal) do
+  defp validate_candidate_mutation!(store, proposal, registry_row) do
     if proposal.status != :pending,
-      do: raise(ArgumentError, "proposal must be pending before arbitration")
+      do: raise(ArgumentError, "candidate mutation must be pending before write mediation")
 
     if !is_binary(proposal.agent_run_id),
-      do: raise(ArgumentError, "proposal requires agent_run_id")
+      do: raise(ArgumentError, "candidate mutation requires agent_run_id")
 
-    if !is_binary(proposal.actor_id), do: raise(ArgumentError, "proposal requires actor_id")
-    if proposal.evidence_refs == [], do: raise(ArgumentError, "proposal requires evidence refs")
-    if !is_float(proposal.confidence), do: raise(ArgumentError, "proposal requires confidence")
+    if !is_binary(proposal.actor_id),
+      do: raise(ArgumentError, "candidate mutation requires actor_id")
+
+    if proposal.evidence_refs == [],
+      do: raise(ArgumentError, "candidate mutation requires evidence refs")
+
+    if !is_float(proposal.confidence),
+      do: raise(ArgumentError, "candidate mutation requires confidence")
 
     if proposal.confidence < 0.0 or proposal.confidence > 1.0,
-      do: raise(ArgumentError, "proposal confidence out of range")
+      do: raise(ArgumentError, "candidate mutation confidence out of range")
 
+    validate_permission!(proposal, registry_row)
+    validate_visibility!(store, proposal)
     validate_accessible_evidence!(store, proposal)
 
     Enum.each(proposal.ops, fn op ->
       validate_op!(op)
     end)
+
+    permission_result(registry_row)
+  end
+
+  defp validate_permission!(_proposal, nil), do: :ok
+
+  defp validate_permission!(proposal, registry_row) do
+    if registry_row.agent_id != proposal.agent_role,
+      do: raise(ArgumentError, "candidate mutation agent role is not registry-authorized")
+
+    if registry_row.permissions.propose != true,
+      do: raise(ArgumentError, "candidate mutation agent lacks candidate-mutation permission")
+  end
+
+  defp validate_visibility!(store, proposal) do
+    if proposal.visibility not in ["public", "private"],
+      do: raise(ArgumentError, "candidate mutation visibility is unsupported")
+
+    if proposal.visibility == "public" do
+      refs =
+        [proposal.evidence_refs | Enum.map(proposal.ops, &Map.get(&1, :evidence_refs, []))]
+        |> List.flatten()
+        |> Enum.uniq()
+
+      if Enum.any?(refs, &((evidence_acl(store, proposal, &1) || %{})["privacy"] != "public")) do
+        raise ArgumentError, "candidate mutation public write requires public evidence"
+      end
+    end
   end
 
   defp validate_accessible_evidence!(store, proposal) do
@@ -403,13 +440,12 @@ defmodule Primeradiant.Arbitration.Engine do
       |> Enum.uniq()
 
     Enum.each(refs, fn ref ->
-      input_op = Enum.find(proposal.ops, &(&1.op == :create_input and &1.input_id == ref))
-      input_node = store.nodes[ref]
-      acl = if input_op, do: input_op.acl, else: get_in(input_node || %{}, [:attrs, :acl])
+      acl = evidence_acl(store, proposal, ref)
 
       cond do
         acl == nil ->
-          raise ArgumentError, "proposal evidence ref is not a committed or proposed input"
+          raise ArgumentError,
+                "candidate mutation evidence ref is not a committed or candidate input"
 
         acl["privacy"] == "public" ->
           :ok
@@ -418,10 +454,26 @@ defmodule Primeradiant.Arbitration.Engine do
           :ok
 
         true ->
-          raise ArgumentError, "proposal evidence is not accessible to actor"
+          raise ArgumentError, "candidate mutation evidence is not accessible to actor"
       end
     end)
   end
+
+  defp evidence_acl(store, proposal, ref) do
+    input_op = Enum.find(proposal.ops, &(&1.op == :create_input and &1.input_id == ref))
+    input_node = store.nodes[ref]
+
+    if input_op, do: input_op.acl, else: get_in(input_node || %{}, [:attrs, :acl])
+  end
+
+  defp permission_result(nil),
+    do: %{check: :legacy_candidate_mutation_path, direct_write_authority: nil}
+
+  defp permission_result(registry_row),
+    do: %{
+      check: :registry_candidate_mutation_permission,
+      direct_write_authority: registry_row.permissions.commit
+    }
 
   defp validate_op!(op) do
     allowed_ops = [

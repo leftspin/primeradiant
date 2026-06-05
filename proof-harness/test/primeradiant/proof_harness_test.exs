@@ -6,7 +6,7 @@ defmodule Primeradiant.ProofHarnessTest do
   alias Primeradiant.ProofHarness
   alias Primeradiant.Projections.StoryClassifier
   alias Primeradiant.Proposals.Builder
-  alias Primeradiant.Arbitration.Engine
+  alias Primeradiant.Mediation.WriteGate, as: Engine
   alias Primeradiant.Soup.Store
 
   test "golden corpus includes inspectable expected artifacts" do
@@ -191,16 +191,16 @@ defmodule Primeradiant.ProofHarnessTest do
            )
   end
 
-  test "arbitration rejects unevidenced, already-decided, and generic-related proposals before commit" do
+  test "write mediation rejects unevidenced, already-disposed, and generic-related candidate mutations before commit" do
     [raw | _] = FixtureLoader.load_corpus().inputs
     normalized = Normalizer.normalize(raw)
     proposal = Builder.build(normalized, StoryClassifier.decide(Store.new(), normalized))
 
-    assert_raise ArgumentError, "proposal requires evidence refs", fn ->
+    assert_raise ArgumentError, "candidate mutation requires evidence refs", fn ->
       Engine.commit(Store.new(), %{proposal | evidence_refs: [], ops: []}, normalized)
     end
 
-    assert_raise ArgumentError, "proposal must be pending before arbitration", fn ->
+    assert_raise ArgumentError, "candidate mutation must be pending before write mediation", fn ->
       Engine.commit(Store.new(), %{proposal | status: :accepted}, normalized)
     end
 
@@ -222,7 +222,7 @@ defmodule Primeradiant.ProofHarnessTest do
         ops: proposal.ops ++ inaccessible_op_proposal.ops
     }
 
-    assert_raise ArgumentError, "proposal evidence is not accessible to actor", fn ->
+    assert_raise ArgumentError, "candidate mutation public write requires public evidence", fn ->
       Engine.commit(Store.new(), hostile, normalized)
     end
 
@@ -235,7 +235,7 @@ defmodule Primeradiant.ProofHarnessTest do
     private_proposal =
       Builder.build(private_normalized, StoryClassifier.decide(Store.new(), private_normalized))
 
-    assert_raise ArgumentError, "proposal evidence is not accessible to actor", fn ->
+    assert_raise ArgumentError, "candidate mutation evidence is not accessible to actor", fn ->
       Engine.commit(Store.new(), %{private_proposal | actor_id: "not-flynn"}, private_normalized)
     end
   end

@@ -10,6 +10,7 @@ defmodule Primeradiant.Soup.Store do
       proposal_decisions: [],
       commits: [],
       refusals: [],
+      non_commitment_pressure: [],
       activations: [],
       indexed_fingerprints: MapSet.new(),
       watch_index: %{}
@@ -40,6 +41,10 @@ defmodule Primeradiant.Soup.Store do
 
   def append_refusal(store, refusal) do
     %{store | refusals: store.refusals ++ [refusal]}
+  end
+
+  def append_non_commitment_pressure(store, pressure) do
+    %{store | non_commitment_pressure: store.non_commitment_pressure ++ [pressure]}
   end
 
   def append_activation(store, activation) do

@@ -45,27 +45,65 @@ defmodule Primeradiant.EcologyRuntimeTest do
     assert audit.runs.agent_choice_recorded
     assert audit.runs.provenance_hashes
 
-    assert audit.writes.typed_proposals
-    assert audit.writes.evidence_backed_proposals
+    assert audit.writes.typed_candidate_mutations
+    assert audit.writes.evidence_backed_candidate_mutations
+    assert audit.writes.candidate_mutation_risk_flags
+    assert audit.writes.candidate_mutation_dispositions
+    assert audit.writes.non_commitment_outcomes_visible
+    assert audit.writes.refusal_pressure_visible_to_future_agents
+    assert audit.writes.mechanical_write_mediation
+    assert audit.writes.no_higher_truth_verifier
     assert audit.writes.append_only_mutations
     assert audit.writes.linked_to_agent_runs
     assert audit.writes.downstream_activations
 
     run_ids = result.agent_runs |> Enum.map(& &1.agent_run_id) |> MapSet.new()
-    proposal_run_ids = Map.new(result.proposals, &{&1.proposal_id, &1.agent_run_id})
 
-    assert Enum.all?(result.proposals, &MapSet.member?(run_ids, &1.agent_run_id))
+    candidate_mutation_run_ids =
+      Map.new(result.candidate_mutations, &{&1.candidate_mutation_id, &1.agent_run_id})
+
+    assert Enum.all?(result.candidate_mutations, &MapSet.member?(run_ids, &1.agent_run_id))
 
     assert Enum.all?(
              result.mutations,
-             &MapSet.member?(run_ids, Map.get(proposal_run_ids, &1.proposal_id))
+             &MapSet.member?(
+               run_ids,
+               Map.get(candidate_mutation_run_ids, &1.candidate_mutation_id)
+             )
            )
 
     run_by_id = Map.new(result.agent_runs, &{&1.agent_run_id, &1})
 
     assert Enum.all?(
-             result.proposals,
+             result.candidate_mutations,
              &(Map.fetch!(run_by_id, &1.agent_run_id).status != :skipped_duplicate)
+           )
+
+    refute Enum.any?(result.candidate_mutations, &Map.has_key?(&1, :proposal_id))
+
+    refute Enum.any?(
+             result.candidate_mutations,
+             &String.starts_with?(&1.candidate_mutation_id, "proposal:")
+           )
+
+    refute Enum.any?(result.mediation_decisions, &(&1.actor == :arbiter))
+    refute Enum.any?(result.mediation_decisions, & &1.truth_judgment)
+
+    assert Enum.all?(
+             result.mediation_decisions,
+             &(&1.permission_check == :registry_candidate_mutation_permission)
+           )
+
+    refute Enum.any?(result.mutations, &Map.has_key?(&1, :proposal_id))
+
+    refute Enum.any?(
+             result.mutations,
+             &String.starts_with?(&1.candidate_mutation_id, "proposal:")
+           )
+
+    assert Enum.any?(
+             result.agent_runs,
+             &(Map.get(Map.get(&1, :packet, %{}), :refusal_pressure, []) != [])
            )
 
     assert audit.boundary.no_t328_source_emitter_registered
@@ -165,7 +203,7 @@ defmodule Primeradiant.EcologyRuntimeTest do
     assert coverage.proof_counts.activations >= 5
     assert coverage.proof_counts.agent_runs >= 3
     assert coverage.proof_counts.packets >= 3
-    assert coverage.proof_counts.proposals > 0
+    assert coverage.proof_counts.candidate_mutations > 0
     assert coverage.proof_counts.mutations > 0
   end
 end

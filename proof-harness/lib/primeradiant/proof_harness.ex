@@ -1,7 +1,7 @@
 defmodule Primeradiant.ProofHarness do
   @moduledoc false
 
-  alias Primeradiant.Arbitration.Engine
+  alias Primeradiant.Mediation.WriteGate, as: Engine
   alias Primeradiant.Authoring.Briefing
   alias Primeradiant.Ingestion.FixtureLoader
   alias Primeradiant.Ingestion.Normalizer

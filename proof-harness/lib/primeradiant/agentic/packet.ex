@@ -48,6 +48,7 @@ defmodule Primeradiant.Agentic.Packet do
       input: normalized,
       visible_story_refs: Enum.map(visible_stories, & &1.story_key),
       stories: visible_stories,
+      refusal_pressure: visible_refusals(store, output_visibility, user_id),
       private_refs_allowed: private_allowed?(normalized.acl)
     })
   end
@@ -67,6 +68,7 @@ defmodule Primeradiant.Agentic.Packet do
       evidence_refs: public_refs,
       snippets: [],
       seen_story_keys: Map.keys(seen_state.stories),
+      refusal_pressure: visible_refusals(store, "private", user_id),
       private_refs_allowed: true
     })
   end
@@ -85,6 +87,7 @@ defmodule Primeradiant.Agentic.Packet do
       story_state: story && story.state,
       visible_story_refs:
         if(story && story_visible?(story, store, user_id), do: [story_key], else: []),
+      refusal_pressure: visible_refusals(store, activation.packet.output_visibility, user_id),
       trigger_packet_hash: activation.packet_hash,
       private_refs_allowed: activation.packet.output_visibility == "private"
     })
@@ -121,5 +124,25 @@ defmodule Primeradiant.Agentic.Packet do
   defp input_visible?(node, user_id) do
     acl = get_in(node, [:attrs, :acl]) || %{"privacy" => "public"}
     acl["privacy"] == "public" or user_id in (acl["participants"] || [])
+  end
+
+  defp visible_refusals(store, output_visibility, user_id) do
+    (store.refusals ++ Map.get(store, :non_commitment_pressure, []))
+    |> Enum.filter(fn refusal ->
+      visibility =
+        Map.get(refusal, :visibility) || get_in(refusal, [:packet, :output_visibility]) ||
+          "public"
+
+      visibility == "public" or (output_visibility == "private" and refusal.actor_id == user_id)
+    end)
+    |> Enum.map(fn refusal ->
+      %{
+        status: refusal.status,
+        evidence_refs: refusal.evidence_refs,
+        uncertainty_class: refusal.uncertainty_class,
+        rationale: Map.get(refusal, :rationale) || Map.get(refusal, :reason),
+        trace_id: Map.get(refusal, :trace_id)
+      }
+    end)
   end
 end

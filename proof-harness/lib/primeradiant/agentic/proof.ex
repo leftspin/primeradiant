@@ -3,7 +3,7 @@ defmodule Primeradiant.Agentic.Proof do
 
   alias Primeradiant.Agentic.Transcript
   alias Primeradiant.Agentic.Worker
-  alias Primeradiant.Arbitration.Engine
+  alias Primeradiant.Mediation.WriteGate, as: Engine
   alias Primeradiant.Authoring.Briefing
   alias Primeradiant.Ingestion.FixtureLoader
   alias Primeradiant.Projections.StoryClassifier

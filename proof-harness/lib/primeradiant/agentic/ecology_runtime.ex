@@ -3,7 +3,7 @@ defmodule Primeradiant.Agentic.EcologyRuntime do
 
   alias Primeradiant.Agentic.Transcript
   alias Primeradiant.Agentic.Worker
-  alias Primeradiant.Arbitration.Engine
+  alias Primeradiant.Mediation.WriteGate, as: Engine
   alias Primeradiant.Ingestion.FixtureLoader
   alias Primeradiant.Soup.Store
   alias Primeradiant.UserContext.SeenState
@@ -42,9 +42,9 @@ defmodule Primeradiant.Agentic.EcologyRuntime do
       leases: [],
       agent_runs: [],
       packets: [],
-      proposals: [],
+      candidate_mutations: [],
       mutations: [],
-      proposal_decisions: [],
+      mediation_decisions: [],
       failures: [],
       scheduler_inspections: [],
       suppressions: [],
@@ -86,7 +86,7 @@ defmodule Primeradiant.Agentic.EcologyRuntime do
           :stale_marker,
           :question,
           :facet,
-          :proposal,
+          :candidate_mutation,
           :prior_agent_trace
         ],
         [
@@ -108,7 +108,7 @@ defmodule Primeradiant.Agentic.EcologyRuntime do
           :claim,
           :user_watch,
           :private_seen_state,
-          :proposal,
+          :candidate_mutation,
           :authored_output,
           :prior_agent_trace
         ],
@@ -140,7 +140,7 @@ defmodule Primeradiant.Agentic.EcologyRuntime do
         timeout_seconds: 180,
         max_concurrency: 2,
         cooldown_seconds: 600,
-        max_proposals_per_run: 12
+        max_candidate_mutations_per_run: 12
       },
       permissions: %{
         propose: true,
@@ -186,7 +186,7 @@ defmodule Primeradiant.Agentic.EcologyRuntime do
     reads:
       types: #{Enum.join(readable_types, ",")}
     emits:
-      proposal_types: #{Enum.join(emitted_types, ",")}
+      candidate_mutation_types: #{Enum.join(emitted_types, ",")}
     triggers:
       kinds: #{Enum.join(trigger_kinds, ",")}
     permissions:
@@ -277,7 +277,7 @@ defmodule Primeradiant.Agentic.EcologyRuntime do
       max_depth: 2,
       max_child_activations: 4,
       max_runs_per_agent: 3,
-      max_proposals_per_run: 12,
+      max_candidate_mutations_per_run: 12,
       max_wall_clock_seconds: 300,
       exhaustion_outcome: :budget_exhausted
     }
@@ -382,7 +382,14 @@ defmodule Primeradiant.Agentic.EcologyRuntime do
          raw
        ) do
     before_commits = length(runtime.store.commits)
-    store = Engine.commit(runtime.store, proposal, normalized)
+
+    store =
+      Engine.commit(
+        runtime.store,
+        proposal,
+        normalized,
+        registry_for(runtime, proposal.agent_role)
+      )
 
     runtime =
       %{
@@ -395,7 +402,7 @@ defmodule Primeradiant.Agentic.EcologyRuntime do
                   fixture_id: raw["fixture_id"],
                   classification: identity.decision.classification,
                   story_key: identity.decision.story_key,
-                  proposal_id: proposal.id,
+                  candidate_mutation_id: candidate_mutation_id(proposal),
                   evidence_refs: proposal.evidence_refs,
                   confidence: proposal.confidence,
                   outcome: :committed,
@@ -427,7 +434,7 @@ defmodule Primeradiant.Agentic.EcologyRuntime do
                 fixture_id: raw["fixture_id"],
                 classification: identity.decision.classification,
                 story_key: identity.decision.story_key,
-                proposal_id: nil,
+                candidate_mutation_id: nil,
                 evidence_refs: invocation.evidence_refs,
                 confidence: invocation.confidence,
                 outcome: :refused,
@@ -577,10 +584,12 @@ defmodule Primeradiant.Agentic.EcologyRuntime do
         if invocation do
           packet = packet_record(activation, invocation.packet, invocation.packet_hash)
           completed = complete_agent_run_record(pre_run, activation, invocation, opts)
+          store = maybe_append_non_commitment_pressure(runtime.store, completed)
 
           %{
             runtime
-            | activations: runtime.activations ++ [activation],
+            | store: store,
+              activations: runtime.activations ++ [activation],
               packets: runtime.packets ++ [packet],
               agent_runs: replace_run(runtime.agent_runs, pre_run.agent_run_id, completed),
               leases: release_lease(runtime.leases, lease.lease_id, :released)
@@ -733,8 +742,9 @@ defmodule Primeradiant.Agentic.EcologyRuntime do
   defp finalize_logs(runtime) do
     %{
       runtime
-      | proposals: Enum.map(runtime.store.proposals, &proposal_record/1),
-        proposal_decisions: Enum.map(runtime.store.proposal_decisions, &decision_record/1),
+      | candidate_mutations: Enum.map(runtime.store.proposals, &candidate_mutation_record/1),
+        mediation_decisions:
+          Enum.map(runtime.store.proposal_decisions, &mediation_decision_record/1),
         mutations: Enum.with_index(runtime.store.commits, 1) |> Enum.map(&mutation_record/1)
     }
   end
@@ -857,7 +867,7 @@ defmodule Primeradiant.Agentic.EcologyRuntime do
       :facet,
       :user_watch,
       :private_seen_state,
-      :proposal,
+      :candidate_mutation,
       :authored_output,
       :prior_agent_trace
     ])
@@ -947,7 +957,7 @@ defmodule Primeradiant.Agentic.EcologyRuntime do
         Enum.all?(
           proof_runs,
           &(is_atom(&1.operation_family) and is_list(&1.evidence_refs) and
-              is_list(&1.proposal_ids))
+              is_list(&1.candidate_mutation_ids))
         )
     }
   end
@@ -958,21 +968,50 @@ defmodule Primeradiant.Agentic.EcologyRuntime do
       |> Enum.map(& &1.agent_run_id)
       |> MapSet.new()
 
-    proposal_run_ids = Map.new(runtime.proposals, &{&1.proposal_id, &1.agent_run_id})
+    candidate_mutation_run_ids =
+      Map.new(runtime.candidate_mutations, &{&1.candidate_mutation_id, &1.agent_run_id})
 
     %{
-      typed_proposals: Enum.all?(runtime.proposals, &is_atom(&1.operation_family)),
-      evidence_backed_proposals: Enum.all?(runtime.proposals, &(&1.evidence_refs != [])),
-      proposal_risk_flags: Enum.all?(runtime.proposals, &is_list(&1.risk_flags)),
+      typed_candidate_mutations:
+        Enum.all?(runtime.candidate_mutations, &is_atom(&1.operation_family)),
+      evidence_backed_candidate_mutations:
+        Enum.all?(runtime.candidate_mutations, &(&1.evidence_refs != [])),
+      candidate_mutation_risk_flags:
+        Enum.all?(runtime.candidate_mutations, &is_list(&1.risk_flags)),
       append_only_mutations: Enum.all?(runtime.mutations, &(&1.status == :committed)),
       mutation_ids: Enum.all?(runtime.mutations, &is_binary(&1.mutation_id)),
       mutation_trace_ids: Enum.all?(runtime.mutations, &is_binary(&1.trace_id)),
       linked_to_agent_runs:
-        Enum.all?(runtime.proposals, &MapSet.member?(run_ids, &1.agent_run_id)) and
+        Enum.all?(runtime.candidate_mutations, &MapSet.member?(run_ids, &1.agent_run_id)) and
           Enum.all?(
             runtime.mutations,
-            &MapSet.member?(run_ids, Map.get(proposal_run_ids, &1.proposal_id))
+            &MapSet.member?(
+              run_ids,
+              Map.get(candidate_mutation_run_ids, &1.candidate_mutation_id)
+            )
           ),
+      candidate_mutation_dispositions:
+        Enum.all?(runtime.candidate_mutations, &(&1.disposition_status in [:accepted])),
+      non_commitment_outcomes_visible:
+        Enum.any?(
+          runtime.store.refusals ++ runtime.store.non_commitment_pressure,
+          &(&1.status in [:abstained, :refused] and &1.evidence_refs != [])
+        ),
+      refusal_pressure_visible_to_future_agents:
+        Enum.any?(
+          runtime.agent_runs,
+          &(Map.get(Map.get(&1, :packet, %{}), :refusal_pressure, []) != [])
+        ),
+      mechanical_write_mediation:
+        Enum.all?(
+          runtime.mediation_decisions,
+          &(&1.actor == :write_mediator and &1.disposition == :accepted and
+              &1.mediation_scope == :mechanical_containment and
+              &1.permission_check == :registry_candidate_mutation_permission)
+        ),
+      no_higher_truth_verifier:
+        Enum.all?(runtime.mediation_decisions, &(&1.actor != :arbiter)) and
+          Enum.all?(runtime.mediation_decisions, &(&1.truth_judgment == false)),
       downstream_activations:
         Enum.any?(
           runtime.agent_runs,
@@ -1064,7 +1103,7 @@ defmodule Primeradiant.Agentic.EcologyRuntime do
         activations: length(runtime.activations),
         agent_runs: length(Enum.reject(runtime.agent_runs, &(&1.status == :running))),
         packets: length(runtime.packets),
-        proposals: length(runtime.proposals),
+        candidate_mutations: length(runtime.candidate_mutations),
         mutations: length(runtime.mutations),
         failures: length(runtime.failures)
       }
@@ -1128,21 +1167,25 @@ defmodule Primeradiant.Agentic.EcologyRuntime do
         audit.runs.precreated_records and audit.runs.terminal_run_records
 
       id == "REQ1178-WRITE-02" ->
-        audit.runs.parsed_outputs and audit.writes.typed_proposals
+        audit.runs.parsed_outputs and audit.writes.typed_candidate_mutations
 
       id in ["REQ1178-WRITE-03", "AC1178-05"] ->
         audit.writes.linked_to_agent_runs and audit.writes.mutation_ids and
-          audit.writes.mutation_trace_ids and audit.writes.evidence_backed_proposals and
-          audit.writes.append_only_mutations
+          audit.writes.mutation_trace_ids and audit.writes.evidence_backed_candidate_mutations and
+          audit.writes.append_only_mutations and audit.writes.no_higher_truth_verifier
 
       id in ["REQ1178-WRITE-04", "REQ1178-WRITE-05"] ->
-        audit.writes.proposal_risk_flags and audit.writes.append_only_mutations
+        audit.writes.candidate_mutation_risk_flags and audit.writes.append_only_mutations and
+          audit.writes.mechanical_write_mediation
 
       id in ["REQ1178-WRITE-06", "REQ1178-WRITE-07"] ->
-        audit.writes.downstream_activations
+        audit.writes.downstream_activations and audit.writes.non_commitment_outcomes_visible and
+          audit.writes.refusal_pressure_visible_to_future_agents
 
       id == "REQ1178-WRITE-08" ->
-        audit.writes.refusal_pressure_visible
+        audit.writes.refusal_pressure_visible and audit.writes.non_commitment_outcomes_visible and
+          audit.writes.refusal_pressure_visible_to_future_agents and
+          audit.writes.mechanical_write_mediation and audit.writes.no_higher_truth_verifier
 
       id == "REQ1178-FAIL-01" ->
         audit.scheduler.leases_recorded
@@ -1259,7 +1302,11 @@ defmodule Primeradiant.Agentic.EcologyRuntime do
         audit.runs.provenance_hashes and audit.runs.agent_choice_recorded
 
       id == "VT1178-06" ->
-        audit.writes.linked_to_agent_runs and audit.writes.evidence_backed_proposals and
+        audit.writes.linked_to_agent_runs and audit.writes.evidence_backed_candidate_mutations and
+          audit.writes.candidate_mutation_dispositions and
+          audit.writes.non_commitment_outcomes_visible and
+          audit.writes.refusal_pressure_visible_to_future_agents and
+          audit.writes.mechanical_write_mediation and audit.writes.no_higher_truth_verifier and
           audit.writes.downstream_activations
 
       id == "VT1178-07" ->
@@ -1500,7 +1547,7 @@ defmodule Primeradiant.Agentic.EcologyRuntime do
       alternatives_or_uncertainty: invocation.uncertainty_class,
       rationale: invocation.reason,
       evidence_refs: invocation.evidence_refs,
-      proposal_ids: proposal_ids(invocation),
+      candidate_mutation_ids: candidate_mutation_ids(invocation),
       operation_family: invocation.operation_family,
       decision_source: invocation.decision_source,
       deterministic_product_logic: invocation.deterministic_product_logic,
@@ -1520,10 +1567,10 @@ defmodule Primeradiant.Agentic.EcologyRuntime do
     end)
   end
 
-  defp proposal_record(proposal) do
+  defp candidate_mutation_record(proposal) do
     %{
-      proposal_id: proposal.id,
-      proposed_operations: Enum.map(proposal.ops, & &1.op),
+      candidate_mutation_id: candidate_mutation_id(proposal),
+      intended_operations: Enum.map(proposal.ops, & &1.op),
       evidence_refs: proposal.evidence_refs,
       confidence: proposal.confidence,
       uncertainty: proposal.uncertainty_class,
@@ -1531,20 +1578,33 @@ defmodule Primeradiant.Agentic.EcologyRuntime do
       risk_flags: risk_flags(proposal),
       source_packet_hash: proposal.input_packet_hash,
       agent_run_id: proposal.agent_run_id,
-      proposal_status: proposal.status,
+      disposition_status: proposal.status,
       operation_family: proposal.classification,
       visibility: proposal.visibility,
-      trace_id: "trace:t1178:proposal:#{proposal.id}"
+      trace_id: "trace:t1178:candidate-mutation:#{candidate_mutation_id(proposal)}"
     }
   end
 
-  defp decision_record(decision),
-    do: Map.put(decision, :trace_id, "trace:t1178:proposal-decision:#{decision.proposal_id}")
+  defp mediation_decision_record(decision) do
+    {candidate_mutation_id, decision} = Map.pop(decision, :proposal_id)
+    candidate_mutation_id = candidate_mutation_id(candidate_mutation_id)
+
+    decision
+    |> Map.put(:candidate_mutation_id, candidate_mutation_id)
+    |> Map.put(:disposition, decision.to)
+    |> Map.put(:mediation_scope, :mechanical_containment)
+    |> Map.put(:truth_judgment, false)
+    |> Map.put(:trace_id, "trace:t1178:write-mediation:#{candidate_mutation_id}")
+  end
 
   defp mutation_record({commit, index}) do
+    {candidate_mutation_id, commit} = Map.pop(commit, :proposal_id)
+    candidate_mutation_id = candidate_mutation_id(candidate_mutation_id)
+
     commit
+    |> Map.put(:candidate_mutation_id, candidate_mutation_id)
     |> Map.put(:mutation_id, "mutation:t1178:#{index}")
-    |> Map.put(:trace_id, "trace:t1178:mutation:#{index}:#{commit.proposal_id}")
+    |> Map.put(:trace_id, "trace:t1178:mutation:#{index}:#{candidate_mutation_id}")
     |> Map.put(:operation_family, Map.get(commit, :operation_family) || commit.op)
   end
 
@@ -1584,10 +1644,33 @@ defmodule Primeradiant.Agentic.EcologyRuntime do
     })
   end
 
-  defp proposal_ids(%{proposal: proposal}), do: [proposal.id]
-  defp proposal_ids(_invocation), do: []
+  defp maybe_append_non_commitment_pressure(store, %{status: status} = run)
+       when status in [:abstained, :refused] do
+    Store.append_non_commitment_pressure(store, %{
+      status: status,
+      evidence_refs: run.evidence_refs,
+      uncertainty_class: run.alternatives_or_uncertainty,
+      rationale: run.rationale,
+      visibility: Map.get(run.packet, :output_visibility),
+      actor_id: "flynn",
+      trace_id: "trace:t1178:non-commitment-pressure:#{run.agent_run_id}",
+      agent_run_id: run.agent_run_id
+    })
+  end
+
+  defp maybe_append_non_commitment_pressure(store, _run), do: store
+
+  defp candidate_mutation_ids(%{proposal: proposal}), do: [candidate_mutation_id(proposal)]
+  defp candidate_mutation_ids(_invocation), do: []
+
+  defp candidate_mutation_id(%{id: id}), do: candidate_mutation_id(id)
+  defp candidate_mutation_id("proposal:" <> id), do: "candidate-mutation:" <> id
+  defp candidate_mutation_id(id), do: id
 
   defp trigger!(runtime, kind), do: Enum.find(runtime.triggers, &(&1.kind == kind))
+
+  defp registry_for(runtime, agent_id),
+    do: Enum.find(runtime.registry, &(&1.agent_id == agent_id))
 
   defp hash(value) do
     :sha256
