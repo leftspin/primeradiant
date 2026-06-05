@@ -1,8 +1,7 @@
 defmodule Primeradiant.Agentic.EcologyRuntime do
   @moduledoc false
 
-  alias Primeradiant.Agentic.Transcript
-  alias Primeradiant.Agentic.Worker
+  alias Primeradiant.Agentic.LiveWorker, as: Worker
   alias Primeradiant.Mediation.WriteGate, as: Engine
   alias Primeradiant.Ingestion.FixtureLoader
   alias Primeradiant.Soup.Store
@@ -22,7 +21,7 @@ defmodule Primeradiant.Agentic.EcologyRuntime do
       |> new_runtime(registry, triggers)
       |> record_scheduler_inspection()
       |> record_suppressions()
-      |> run_ingest_events(corpus.inputs)
+      |> run_ingest_events(proof_inputs(corpus.inputs))
       |> run_scheduled_authoring()
       |> run_interval_follow_on_review()
       |> run_manual_story_review(corpus.inputs)
@@ -59,8 +58,14 @@ defmodule Primeradiant.Agentic.EcologyRuntime do
       },
       spec_amendment_needed: false,
       remaining_product_proof_gap:
-        "Production source-emitter registration, persistent scheduling, UI claims, and deployed runtime behavior remain out of scope for T1178."
+        "Production source-emitter registration, persistent scheduling, UI claims, and deployed runtime behavior remain out of scope for T1178. Product proof requires live Gibson/Qwen invocations, not recorded artifacts."
     }
+  end
+
+  defp proof_inputs(inputs) do
+    wanted = MapSet.new(["public_story_001_initial_report", "public_story_002_followup_update"])
+
+    Enum.filter(inputs, &MapSet.member?(wanted, &1["fixture_id"]))
   end
 
   defp registry_rows do
@@ -125,11 +130,13 @@ defmodule Primeradiant.Agentic.EcologyRuntime do
       agent_id: role,
       enabled: true,
       semantic_version: config.config_version,
-      runtime_target: :local_recorded_agent_route,
-      model_route: :configured,
+      runtime_target: :gibson_llama_server,
+      model_route: "http://gibson:8080/v1/chat/completions",
       yaml_source: yaml,
       yaml_hash: hash(yaml),
       prompt_hash: config.prompt_version_hash,
+      prompt_body: config.prompt_body,
+      prompt_body_hash: config.prompt_version_hash,
       registry_version: "#{config.config_version}:#{hash(yaml)}",
       created_at: @created_at,
       retired_at: nil,
@@ -178,11 +185,12 @@ defmodule Primeradiant.Agentic.EcologyRuntime do
     enabled: true
     version: #{config.config_version}
     runtime:
-      server: local
-      runner: recorded-agent-artifact
-      model_route: configured
+      server: gibson
+      runner: live-gibson-qwen
+      model_route: http://gibson:8080/v1/chat/completions
     prompts:
       prompt_hash: #{config.prompt_version_hash}
+      prompt_body: #{inspect(config.prompt_body)}
     reads:
       types: #{Enum.join(readable_types, ",")}
     emits:
@@ -492,14 +500,9 @@ defmodule Primeradiant.Agentic.EcologyRuntime do
       })
 
     {runtime, _invocation} =
-      invoke_agent(
-        runtime,
-        activation,
-        fn ->
-          Worker.flynn_relative_authoring(runtime.store, SeenState.new("flynn"), "flynn", :second)
-        end,
-        selected_operation_family: :create_authored_delta
-      )
+      invoke_agent(runtime, activation, fn ->
+        Worker.flynn_relative_authoring(runtime.store, SeenState.new("flynn"), "flynn", :second)
+      end)
 
     runtime
   end
@@ -524,14 +527,9 @@ defmodule Primeradiant.Agentic.EcologyRuntime do
       })
 
     {runtime, _invocation} =
-      invoke_agent(
-        runtime,
-        activation,
-        fn ->
-          Worker.follow_on_review(runtime.store, activation, "flynn")
-        end,
-        selected_operation_family: :mark_no_op
-      )
+      invoke_agent(runtime, activation, fn ->
+        Worker.follow_on_review(runtime.store, activation, "flynn")
+      end)
 
     runtime
   end
@@ -752,7 +750,8 @@ defmodule Primeradiant.Agentic.EcologyRuntime do
   defp build_audit(runtime) do
     proof_runs =
       Enum.filter(runtime.agent_runs, fn run ->
-        run.status != :running and Map.get(run, :decision_source) == :recorded_agent_transcript and
+        run.status != :running and
+          Map.get(run, :decision_source) == :live_gibson_qwen_inference and
           Map.get(run, :deterministic_product_logic) == false and
           Map.get(run, :invoked_through_runtime) == true
       end)
@@ -1046,7 +1045,7 @@ defmodule Primeradiant.Agentic.EcologyRuntime do
       deterministic_standins_not_counted:
         Enum.all?(
           proof_runs,
-          &(&1.decision_source == :recorded_agent_transcript and &1.invoked_through_runtime)
+          &(&1.decision_source == :live_gibson_qwen_inference and &1.invoked_through_runtime)
         ),
       no_scripted_fixture_oracle_product_proof:
         Enum.all?(proof_runs, &(&1.operation_family != :fixture_oracle)),
@@ -1067,7 +1066,15 @@ defmodule Primeradiant.Agentic.EcologyRuntime do
         Enum.all?(
           proof_runs,
           &(&1.operation_family != :precomputed_authored_delta and
-              &1.decision_source == :recorded_agent_transcript)
+              &1.decision_source == :live_gibson_qwen_inference)
+        ),
+      live_gibson_qwen_inference:
+        Enum.all?(
+          proof_runs,
+          &(&1.producer_kind == :live_model_inference and
+              &1.runtime_target == :gibson_llama_server and
+              &1.model_family == "qwen" and String.contains?(&1.model, "Qwen") and
+              is_binary(&1.invocation_id) and is_binary(&1.prompt_body_hash))
         ),
       wrong_product_shape_exclusions:
         runtime.boundary_report.no_t328_source_emitter_registered and
@@ -1504,8 +1511,8 @@ defmodule Primeradiant.Agentic.EcologyRuntime do
       agent_id: activation.agent_id,
       agent_definition_version: activation.agent_definition_version,
       depth: activation.depth,
-      runtime_target: :local_recorded_agent_route,
-      model_route: :configured,
+      runtime_target: :gibson_llama_server,
+      model_route: "http://gibson:8080/v1/chat/completions",
       operation_family: nil,
       status: :running,
       created_at: @proof_now,
@@ -1529,13 +1536,13 @@ defmodule Primeradiant.Agentic.EcologyRuntime do
 
     Map.merge(pre_run, %{
       prompt_hash: get_in(invocation, [:config, :prompt_version_hash]),
-      invocation_id: "#{Transcript.artifact_hash()}:#{activation.activation_id}",
+      invocation_id: invocation_id_for(invocation, activation),
       packet_hash: invocation.packet_hash,
       output_hash: invocation.agent_output_hash,
       status: status,
       started_at: @proof_now,
       finished_at: @proof_now,
-      duration_ms: 0,
+      duration_ms: Map.get(invocation, :duration_ms, 0),
       depth: activation.depth,
       selected_soup_region:
         Enum.uniq(
@@ -1554,6 +1561,12 @@ defmodule Primeradiant.Agentic.EcologyRuntime do
       producer_kind: invocation.producer_kind,
       producer_id: invocation.producer_id,
       artifact_ref: invocation.artifact_ref,
+      model_family: Map.get(invocation, :model_family),
+      model_route: Map.get(invocation, :model_route),
+      model: Map.get(invocation, :model),
+      prompt_body_hash: Map.get(invocation, :prompt_body_hash),
+      system_prompt_hash: Map.get(invocation, :system_prompt_hash),
+      prompt_body: Map.get(invocation, :prompt_body),
       fresh_import_event: activation.activation_kind == :ingest_event,
       packet: invocation.packet,
       invoked_through_runtime: true
@@ -1566,6 +1579,15 @@ defmodule Primeradiant.Agentic.EcologyRuntime do
       run -> run
     end)
   end
+
+  defp invocation_id_for(
+         %{decision_source: :live_gibson_qwen_inference} = invocation,
+         _activation
+       ),
+       do: Map.fetch!(invocation, :invocation_transport_id)
+
+  defp invocation_id_for(_invocation, activation),
+    do: "mechanical-substrate:#{activation.activation_id}"
 
   defp candidate_mutation_record(proposal) do
     %{

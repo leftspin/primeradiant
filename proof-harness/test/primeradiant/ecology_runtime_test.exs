@@ -30,6 +30,14 @@ defmodule Primeradiant.EcologyRuntimeTest do
     assert audit.registry.enabled_disabled_version_state
     assert audit.registry.version_history
     assert length(result.registry_history) == length(result.registry)
+    assert Enum.all?(result.registry, &(&1.runtime_target == :gibson_llama_server))
+
+    assert Enum.all?(
+             result.registry,
+             &(is_binary(&1.prompt_body) and byte_size(&1.prompt_body) > 120)
+           )
+
+    assert Enum.all?(result.registry, &(&1.prompt_body_hash == &1.prompt_hash))
 
     assert audit.packets.bounded
     assert audit.packets.packet_hashes
@@ -125,9 +133,36 @@ defmodule Primeradiant.EcologyRuntimeTest do
     assert audit.anti_cheat.hard_coded_clusters_not_counted
     assert audit.anti_cheat.fixture_trusted_story_ids_not_counted
     assert audit.anti_cheat.precomputed_authored_deltas_not_counted
+    assert audit.anti_cheat.live_gibson_qwen_inference
     assert audit.anti_cheat.wrong_product_shape_exclusions
 
     refute Enum.any?(result.agent_runs, &(&1.operation_family == :source_admission))
+
+    refute Enum.any?(
+             result.agent_runs,
+             &(Map.get(&1, :decision_source) == :recorded_agent_transcript)
+           )
+
+    refute Enum.any?(
+             result.agent_runs,
+             &(Map.get(&1, :producer_kind) == :recorded_agent_run_artifact)
+           )
+
+    live_runs =
+      Enum.filter(result.agent_runs, &(Map.get(&1, :producer_kind) == :live_model_inference))
+
+    assert length(live_runs) >= 3
+    assert Enum.all?(live_runs, &(&1.runtime_target == :gibson_llama_server))
+    assert Enum.all?(live_runs, &(&1.model_family == "qwen"))
+    assert Enum.all?(live_runs, &String.contains?(&1.model, "Qwen"))
+    assert Enum.all?(live_runs, &(is_binary(&1.invocation_id) and &1.invocation_id != ""))
+
+    assert Enum.all?(
+             live_runs,
+             &(is_binary(&1.prompt_body_hash) and byte_size(&1.prompt_body_hash) == 64)
+           )
+
+    assert Enum.all?(live_runs, &(is_binary(&1.prompt_body) and byte_size(&1.prompt_body) > 120))
 
     assert Enum.any?(
              result.agent_runs,
