@@ -87,6 +87,30 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
     }
   end
 
+  def source_admission_report(db_path, tenant_id, source_summary, ingestion_report) do
+    %{
+      source: source_summary,
+      primeradiant_writes: %{
+        owned_state_only: true,
+        durable: true,
+        soup_db_path: db_path,
+        inputs: count(db_path, "inputs", tenant_id),
+        stories: count(db_path, "stories", tenant_id),
+        proposals: count(db_path, "proposals", tenant_id),
+        proposal_ops: count(db_path, "proposal_ops", tenant_id),
+        graph_commits: count(db_path, "graph_commits", tenant_id),
+        evidence_refs: count(db_path, "evidence_refs", tenant_id),
+        substrate_proof_only: true,
+        story_meaning_proof: false
+      },
+      ingestion: ingestion_report,
+      admitted_source_items: Map.get(ingestion_report, :admissions, []),
+      changed_stories: [],
+      substrate_proof_only: true,
+      story_meaning_proof: false
+    }
+  end
+
   def table_count(db_path, table, tenant_id), do: count(db_path, table, tenant_id)
 
   defp extraction_quality_report(db_path, tenant_id) do

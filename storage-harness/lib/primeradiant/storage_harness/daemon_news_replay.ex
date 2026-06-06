@@ -30,15 +30,13 @@ defmodule Primeradiant.StorageHarness.DaemonNewsReplay do
         source_row_count: length(rows)
       })
 
-      report =
-        DurableSoupDb.changed_stories_report(
-          soup_db_path,
-          tenant_id,
-          source_summary,
-          ingestion_report
-        )
-
-      {:ok, state, report}
+      {:ok, state,
+       DurableSoupDb.source_admission_report(
+         soup_db_path,
+         tenant_id,
+         source_summary,
+         ingestion_report
+       )}
     end
   end
 

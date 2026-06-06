@@ -54,18 +54,18 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert report.primeradiant_writes.durable
     assert report.primeradiant_writes.soup_db_path == soup_db_path
     assert report.primeradiant_writes.inputs == 2
-    assert report.primeradiant_writes.graph_commits > 0
-    assert report.extraction_quality.counts != []
+    assert report.primeradiant_writes.graph_commits == 0
+    assert report.story_meaning_proof == false
     assert File.regular?(soup_db_path)
 
     assert DurableSoupDb.table_count(soup_db_path, "inputs", @tenant) == 2
-    assert DurableSoupDb.table_count(soup_db_path, "stories", @tenant) >= 1
-    assert DurableSoupDb.table_count(soup_db_path, "story_events", @tenant) >= 2
-    assert DurableSoupDb.table_count(soup_db_path, "story_fact_versions", @tenant) >= 1
-    assert DurableSoupDb.table_count(soup_db_path, "proposals", @tenant) >= 2
-    assert DurableSoupDb.table_count(soup_db_path, "proposal_decisions", @tenant) >= 2
-    assert DurableSoupDb.table_count(soup_db_path, "graph_commits", @tenant) > 0
-    assert DurableSoupDb.table_count(soup_db_path, "evidence_refs", @tenant) > 0
+    assert DurableSoupDb.table_count(soup_db_path, "stories", @tenant) == 0
+    assert DurableSoupDb.table_count(soup_db_path, "story_events", @tenant) == 0
+    assert DurableSoupDb.table_count(soup_db_path, "story_fact_versions", @tenant) == 0
+    assert DurableSoupDb.table_count(soup_db_path, "proposals", @tenant) == 0
+    assert DurableSoupDb.table_count(soup_db_path, "proposal_decisions", @tenant) == 0
+    assert DurableSoupDb.table_count(soup_db_path, "graph_commits", @tenant) == 0
+    assert DurableSoupDb.table_count(soup_db_path, "evidence_refs", @tenant) == 0
 
     assert Enum.all?(state.inputs, &is_nil(&1.fixture_id))
     assert Enum.all?(state.inputs, &(&1.source_type == "news_article"))
@@ -75,15 +75,8 @@ defmodule Primeradiant.DaemonNewsReplayTest do
              &(get_in(&1.normalized, ["source_mode"]) == "manual_real_ingest_v1")
            )
 
-    assert [%{"evidence" => evidence} | _] = report.changed_stories
-    assert evidence != []
-
-    labels =
-      evidence
-      |> Enum.flat_map(& &1.evidence_refs)
-      |> Enum.map(& &1.label)
-
-    assert Enum.any?(labels, &String.contains?(&1, "news-1"))
+    assert report.changed_stories == []
+    assert length(report.admitted_source_items) == 2
   end
 
   test "changed stories report is regenerated from persisted soup database" do
@@ -123,14 +116,14 @@ defmodule Primeradiant.DaemonNewsReplayTest do
       )
 
     persisted_report =
-      DurableSoupDb.changed_stories_report(
+      DurableSoupDb.source_admission_report(
         soup_db_path,
         @tenant,
         first_report.source,
         first_report.ingestion
       )
 
-    assert persisted_report.changed_stories == first_report.changed_stories
+    assert persisted_report.admitted_source_items == first_report.admitted_source_items
     assert persisted_report.primeradiant_writes.soup_db_path == soup_db_path
   end
 
@@ -192,15 +185,10 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert before_stat.mtime == after_stat.mtime
     assert before_stat.size == after_stat.size
 
-    decision = List.first(report.ingestion.decisions)
-    assert decision.decision_type == :abstain
-    assert decision.status == :needs_more_evidence
     assert report.primeradiant_writes.inputs == 1
-    assert report.primeradiant_writes.proposals == 1
+    assert report.primeradiant_writes.proposals == 0
     assert report.primeradiant_writes.graph_commits == 0
-
-    assert [%{"status" => "usable", "count" => 1}] = report.extraction_quality.counts
-    assert [] = report.extraction_quality.refused_or_low_confidence_sample
+    assert report.ingestion.meaning_proof == :requires_packet_grounded_agent_runs
 
     normalized =
       sqlite_json!(
@@ -208,8 +196,8 @@ defmodule Primeradiant.DaemonNewsReplayTest do
         "SELECT normalized FROM inputs WHERE external_id = 'news-planet';"
       )
 
-    facts = Jason.decode!(normalized)["production_extractor_v1"]["claims"]
-    refute Enum.any?(facts, &(&1["structural_candidate"] == true))
+    admitted = Jason.decode!(normalized)
+    assert admitted["source_mode"] == "manual_real_ingest_v1"
   end
 
   test "event envelope drives R1 admission and output without cadence" do
@@ -248,8 +236,8 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert report.event_driven_r1.production_source_event_emitter_present == false
     assert report.primeradiant_writes.owned_state_only
     assert report.primeradiant_writes.inputs == 1
-    assert report.primeradiant_writes.graph_commits > 0
-    assert report.changed_stories != []
+    assert report.primeradiant_writes.graph_commits == 0
+    assert report.changed_stories == []
 
     assert [%{external_id: "event-news-1"}] = state.inputs
     assert get_in(List.first(state.inputs).normalized, ["metadata", "event_driven_r1"])
@@ -257,7 +245,7 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert DurableSoupDb.table_count(soup_db_path, "inputs", @tenant) == 1
   end
 
-  test "real daemon news typography with explicit date can commit story state" do
+  test "real daemon news typography with explicit date admits evidence only" do
     tmp =
       Path.join(
         System.tmp_dir!(),
@@ -287,11 +275,10 @@ defmodule Primeradiant.DaemonNewsReplayTest do
         actor_id: "flynn"
       )
 
-    assert [%{"status" => "usable", "count" => 1}] = report.extraction_quality.counts
-    assert report.primeradiant_writes.stories == 1
-    assert report.primeradiant_writes.graph_commits > 0
-    assert report.changed_stories != []
-    assert [%{structural_facts: %{"date" => "feb-12-2027"}}] = state.stories
+    assert report.primeradiant_writes.stories == 0
+    assert report.primeradiant_writes.graph_commits == 0
+    assert report.changed_stories == []
+    assert state.stories == []
   end
 
   test "event envelope refuses raw digest mismatch before admission" do
@@ -374,7 +361,7 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert report.source.mode == "event_envelope"
     assert report.source.event_id == "evt-emitter-news-1"
     assert report.primeradiant_writes.inputs == 1
-    assert report.primeradiant_writes.graph_commits > 0
+    assert report.primeradiant_writes.graph_commits == 0
 
     after_stat = File.stat!(source_db)
     assert before_stat.mtime == after_stat.mtime

@@ -2,7 +2,7 @@ defmodule Primeradiant.ProductionExtractorQualityTest do
   use ExUnit.Case, async: false
 
   alias Primeradiant.Extraction.ProductionExtractor
-  alias Primeradiant.StorageHarness.{ChangesetStore, Input, KnowledgeWork, RealIngestion}
+  alias Primeradiant.StorageHarness.{ChangesetStore, Input, RealIngestion}
 
   @tenant Ecto.UUID.generate()
 
@@ -72,82 +72,27 @@ defmodule Primeradiant.ProductionExtractorQualityTest do
     end
   end
 
-  test "production extractor output drives downstream story semantics" do
+  test "production extractor output stays outside source-ingest story semantics" do
     {:ok, state, report} = RealIngestion.ingest_items(downstream_items())
-    decisions = Map.new(report.decisions, &{&1.input_ref, &1.decision_type})
 
-    assert :split in Map.values(decisions)
-    assert :attach in Map.values(decisions)
-    assert :conflict in Map.values(decisions)
-    assert :no_op in Map.values(decisions)
-    assert :color in Map.values(decisions)
-    assert :stale in Map.values(decisions)
-    assert :abstain in Map.values(decisions)
+    assert report.source_behavior == :evidence_admission_only
+    assert report.meaning_proof == :requires_packet_grounded_agent_runs
+    assert report.stories == 0
+    assert report.proposals == 0
+    assert report.graph_commits == 0
 
-    graph_evidence =
-      Enum.filter(
-        state.evidence_refs,
-        &(&1.subject_type in [
-            "proposal_op",
-            "graph_commit",
-            "story_fact_version",
-            "edge",
-            "conflict",
-            "story_event"
-          ])
-      )
+    assert state.stories == []
+    assert state.proposals == []
+    assert state.proposal_ops == []
+    assert state.proposal_decisions == []
+    assert state.graph_commits == []
+    assert state.edges == []
+    assert state.story_fact_versions == []
+    assert state.story_events == []
+    assert state.conflicts == []
 
-    assert graph_evidence != []
-    assert Enum.all?(graph_evidence, &String.contains?(&1.evidence_label, "#ev:"))
-
-    state =
-      KnowledgeWork.attach_watches(state, [
-        %{
-          watch_key: "watch:flynn:device-deadline",
-          intent: "Track device battery deadline",
-          priority: 80,
-          match_any: ["device", "battery", "deadline"]
-        }
-      ])
-
-    {:ok, state, first_delta} = KnowledgeWork.record_verified_delta(state, "flynn")
-    assert first_delta.verified
-    assert first_delta.text =~ "[watch]"
-
-    {state, _repeat} =
-      RealIngestion.ingest_item(state, %{
-        source_item(
-          "clinic-repeat-after-seen",
-          "Metro Clinic triage is open for current venue is north hours is evening"
-        )
-        | observed_at: "2026-05-17T11:00:00Z"
-      })
-
-    {state, _spin} =
-      RealIngestion.ingest_item(state, %{
-        source_item(
-          "clinic-spin-after-seen",
-          "Opinion column: Metro Clinic leaders spin the triage disruption as modernization."
-        )
-        | source_type: "opinion_column",
-          observed_at: "2026-05-17T11:05:00Z"
-      })
-
-    {state, _update} =
-      RealIngestion.ingest_item(state, %{
-        source_item(
-          "device-update-after-seen",
-          "Device Battery battery is low for current location is lab deadline is friday"
-        )
-        | source_type: "user_note",
-          observed_at: "2026-05-17T11:10:00Z",
-          acl: %{"privacy" => "private", "participants" => ["flynn"]}
-      })
-
-    {:ok, _state, second_delta} = KnowledgeWork.record_verified_delta(state, "flynn")
-    assert second_delta.text =~ "deadline=friday"
-    refute second_delta.text =~ "spin-after-seen"
-    refute second_delta.text =~ "repeat-after-seen"
+    assert Enum.all?(report.admissions, &(&1.meaning_proof == :not_ingest_owned))
+    assert Enum.all?(report.admissions, &(&1.story_identity == nil))
   end
 
   defp extract_case!(case_def) do

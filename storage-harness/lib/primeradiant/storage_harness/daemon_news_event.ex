@@ -25,7 +25,7 @@ defmodule Primeradiant.StorageHarness.DaemonNewsEvent do
       })
 
       report =
-        DurableSoupDb.changed_stories_report(
+        DurableSoupDb.source_admission_report(
           soup_db_path,
           tenant_id,
           summary,
