@@ -4,7 +4,7 @@ set -euo pipefail
 usage() {
   cat <<'USAGE'
 Usage:
-  live_subspace_daemon_watcher_once.sh --source-db PATH --tenant TENANT --state-root DIR --eurisko-target USER@HOST --eurisko-repo DIR [--actor ACTOR] [--ssh-key PATH] [--eurisko-mix PATH] [--eurisko-erlang-bin DIR] [--eurisko-sqlite-bin DIR] [--limit N] [--timeout-seconds N] [--poll-interval-seconds N] [--debounce-seconds N] [--run-id ID]
+  live_subspace_daemon_watcher_once.sh --source-db PATH --tenant TENANT --state-root DIR --eurisko-target USER@HOST --eurisko-repo DIR [--actor ACTOR] [--story-agents true|false] [--ssh-key PATH] [--eurisko-mix PATH] [--eurisko-erlang-bin DIR] [--eurisko-sqlite-bin DIR] [--limit N] [--timeout-seconds N] [--poll-interval-seconds N] [--debounce-seconds N] [--run-id ID]
 
 Runs one live Subspace daemon SQLite DB/WAL wakeup pass on the source host,
 ships bounded Primeradiant event packages to EURISKO, and consumes them there
@@ -19,6 +19,7 @@ STATE_ROOT=""
 EURISKO_TARGET=""
 EURISKO_REPO=""
 ACTOR="flynn"
+STORY_AGENTS="true"
 SSH_KEY="${HOME}/.ssh/id_ed25519_clu"
 EURISKO_MIX="/home/clu/.local/share/mise/installs/elixir/1.19.5-otp-28/bin/mix"
 EURISKO_ERLANG_BIN="/home/clu/.local/share/mise/installs/erlang/28.5/bin"
@@ -37,6 +38,7 @@ while [[ $# -gt 0 ]]; do
     --eurisko-target) EURISKO_TARGET="$2"; shift 2 ;;
     --eurisko-repo) EURISKO_REPO="$2"; shift 2 ;;
     --actor) ACTOR="$2"; shift 2 ;;
+    --story-agents) STORY_AGENTS="$2"; shift 2 ;;
     --ssh-key) SSH_KEY="$2"; shift 2 ;;
     --eurisko-mix) EURISKO_MIX="$2"; shift 2 ;;
     --eurisko-erlang-bin) EURISKO_ERLANG_BIN="$2"; shift 2 ;;
@@ -171,7 +173,11 @@ while IFS= read -r package_dir; do
     ssh -i "$SSH_KEY" "$EURISKO_TARGET" "mkdir -p '$remote_package' && tar -C '$remote_package' -xf -"
 
   remote_out="$(
-    ssh -i "$SSH_KEY" "$EURISKO_TARGET" "cd '$EURISKO_REPO/storage-harness' && PATH='$(dirname "$EURISKO_MIX")':'$EURISKO_ERLANG_BIN':'$EURISKO_SQLITE_BIN':\$PATH scripts/r1/consume_event_package.sh --package-dir '$remote_package' --run-root '$EURISKO_RUN_ROOT' --tenant '$TENANT' --actor '$ACTOR'"
+    if [[ "$STORY_AGENTS" == "true" ]]; then
+      ssh -i "$SSH_KEY" "$EURISKO_TARGET" "cd '$EURISKO_REPO/storage-harness' && PATH='$(dirname "$EURISKO_MIX")':'$EURISKO_ERLANG_BIN':'$EURISKO_SQLITE_BIN':\$PATH scripts/r1/consume_event_package.sh --package-dir '$remote_package' --run-root '$EURISKO_RUN_ROOT' --tenant '$TENANT' --actor '$ACTOR' --story-agents"
+    else
+      ssh -i "$SSH_KEY" "$EURISKO_TARGET" "cd '$EURISKO_REPO/storage-harness' && PATH='$(dirname "$EURISKO_MIX")':'$EURISKO_ERLANG_BIN':'$EURISKO_SQLITE_BIN':\$PATH scripts/r1/consume_event_package.sh --package-dir '$remote_package' --run-root '$EURISKO_RUN_ROOT' --tenant '$TENANT' --actor '$ACTOR'"
+    fi
   )"
   remote_out="$(printf "%s" "$remote_out" | tail -n 1)"
   jq -n \
