@@ -1038,7 +1038,9 @@ defmodule Primeradiant.DaemonNewsReplayTest do
 
   test "live EURISKO watcher enables story agents by default with explicit evidence-only opt-out" do
     watcher_script = Path.expand("scripts/r1/live_subspace_daemon_watcher_once.sh")
+    emitter_script = Path.expand("scripts/r1/emit_subspace_daemon_cursor_event_packages.sh")
     source = File.read!(watcher_script)
+    emitter_source = File.read!(emitter_script)
 
     assert source =~ ~s(STORY_AGENTS="true")
     assert source =~ "--story-agents true|false"
@@ -1047,6 +1049,7 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert source =~ "--actor '$ACTOR' --story-agents"
     assert source =~ "--actor '$ACTOR'\""
     assert source =~ "--consume-packages false"
+    assert emitter_source =~ ~s(sqlite3 -readonly -cmd ".timeout 10000" -json "$SOURCE_DB")
   end
 
   test "R1 push and consume handoff keeps source read-only and writes primeradiant output" do

@@ -77,7 +77,7 @@ ROWS_JSON="$PACKAGE_ROOT/cursor-rows.json"
 PACKAGES_JSONL="$PACKAGE_ROOT/packages.jsonl"
 : > "$PACKAGES_JSONL"
 
-sqlite3 -readonly -json "$SOURCE_DB" "
+sqlite3 -readonly -cmd ".timeout 10000" -json "$SOURCE_DB" "
   SELECT id, message_id, message_timestamp, inbound_event, author_id, author_name,
          accepted_at, text
     FROM daemon_event
