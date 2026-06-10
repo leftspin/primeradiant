@@ -17,7 +17,8 @@ defmodule Mix.Tasks.Primeradiant.DaemonNewsEvent do
           raw_root: :string,
           tenant: :string,
           actor: :string,
-          soup_db: :string
+          soup_db: :string,
+          story_agents: :boolean
         ]
       )
 
@@ -28,7 +29,8 @@ defmodule Mix.Tasks.Primeradiant.DaemonNewsEvent do
       raw_root: Keyword.get(opts, :raw_root),
       tenant_id: Keyword.get(opts, :tenant) || get_in(event, ["source", "tenant_id"]),
       actor_id: Keyword.get(opts, :actor, "flynn"),
-      soup_db_path: Keyword.get(opts, :soup_db, DaemonNewsEvent.default_soup_db_path())
+      soup_db_path: Keyword.get(opts, :soup_db, DaemonNewsEvent.default_soup_db_path()),
+      story_agent_loop?: Keyword.get(opts, :story_agents, false)
     ]
 
     case DaemonNewsEvent.consume_event(event, consume_opts) do

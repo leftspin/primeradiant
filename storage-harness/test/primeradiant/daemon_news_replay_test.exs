@@ -4,6 +4,8 @@ defmodule Primeradiant.DaemonNewsReplayTest do
   alias Primeradiant.StorageHarness.DaemonNewsReplay
   alias Primeradiant.StorageHarness.DaemonNewsEvent
   alias Primeradiant.StorageHarness.DurableSoupDb
+  alias Primeradiant.StorageHarness.LiveStoryAgentLoop
+  alias Primeradiant.StorageHarness.State
 
   @tenant Ecto.UUID.generate()
 
@@ -243,6 +245,182 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert get_in(List.first(state.inputs).normalized, ["metadata", "event_driven_r1"])
     assert File.regular?(soup_db_path)
     assert DurableSoupDb.table_count(soup_db_path, "inputs", @tenant) == 1
+  end
+
+  test "event envelope can activate story agents and persist agent-authored meaning state" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-daemon-news-story-agents-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    soup_db_path = Path.join(tmp, "primeradiant-event-soup.sqlite3")
+    raw_path = Path.join(tmp, "archive.jsonl")
+
+    [row] = [
+      envelope(
+        "Agent Civic Clinic triage open",
+        "Agent Civic Clinic triage is open venue is north speaker is desk."
+      )
+    ]
+
+    [{offset, length}] = write_archive!(raw_path, [row])
+    event = committed_source_item_event("event-agent-news-1", raw_path, offset, length, row)
+
+    {:ok, state, report} =
+      DaemonNewsEvent.consume_event(event,
+        soup_db_path: soup_db_path,
+        tenant_id: @tenant,
+        actor_id: "flynn",
+        story_agent_loop?: true,
+        story_agent_opts: [adapter: &stub_story_agent/3]
+      )
+
+    loop = report.live_story_agent_loop
+    [chain] = loop.correlation_chains
+
+    assert report.story_meaning_proof == true
+    assert report.substrate_proof_only == false
+    assert loop.source_behavior == :evidence_admission_then_live_story_agents
+    assert loop.agent_runs == 2
+    assert loop.agent_families == [:story_identity, :meaning_update]
+    assert loop.proposals == 1
+    assert loop.proposal_ops == 1
+    assert loop.proposal_decisions == 1
+    assert loop.graph_commits == 1
+    assert loop.story_events == 1
+    assert loop.zero_agent_zero_story_shape_nonconforming? == false
+    assert loop.story_meaning_proof == true
+
+    assert chain.source_ref == "news_article:event-agent-news-1"
+    assert chain.activation_id
+    assert length(chain.packet_ids) == 2
+    assert length(chain.agent_run_ids) == 2
+    assert chain.proposal_id
+    assert chain.graph_commit_id
+    assert chain.story_event_id
+    assert chain.evidence_refs == ["evidence:news_article:event-agent-news-1:body_text:0:97"]
+
+    assert report.primeradiant_writes.inputs == 1
+    assert report.primeradiant_writes.agent_runs == 2
+    assert report.primeradiant_writes.stories == 1
+    assert report.primeradiant_writes.proposals == 1
+    assert report.primeradiant_writes.proposal_ops == 1
+    assert report.primeradiant_writes.proposal_decisions == 1
+    assert report.primeradiant_writes.graph_commits == 1
+    assert report.primeradiant_writes.story_events == 1
+    assert report.changed_stories != []
+
+    assert [%{external_id: "event-agent-news-1"} = input] = state.inputs
+    assert get_in(input.normalized, ["meaning_proof"]) == "not_ingest_owned"
+    assert is_nil(input.normalized["story_identity"])
+    assert is_nil(input.normalized["story_classification"])
+    assert is_nil(input.normalized["materiality_decision"])
+    assert is_nil(input.normalized["relevance_decision"])
+
+    assert DurableSoupDb.table_count(soup_db_path, "inputs", @tenant) == 1
+    assert DurableSoupDb.table_count(soup_db_path, "agent_runs", @tenant) == 2
+    assert DurableSoupDb.table_count(soup_db_path, "stories", @tenant) == 1
+    assert DurableSoupDb.table_count(soup_db_path, "proposals", @tenant) == 1
+    assert DurableSoupDb.table_count(soup_db_path, "proposal_ops", @tenant) == 1
+    assert DurableSoupDb.table_count(soup_db_path, "proposal_decisions", @tenant) == 1
+    assert DurableSoupDb.table_count(soup_db_path, "graph_commits", @tenant) == 1
+    assert DurableSoupDb.table_count(soup_db_path, "story_events", @tenant) == 1
+    assert DurableSoupDb.table_count(soup_db_path, "evidence_refs", @tenant) > 0
+
+    agent_scopes =
+      sqlite_json_rows!(
+        soup_db_path,
+        "SELECT agent_type, scope FROM agent_runs ORDER BY agent_type;"
+      )
+      |> Map.new(fn row -> {row["agent_type"], Jason.decode!(row["scope"])} end)
+
+    assert agent_scopes |> Map.keys() |> Enum.sort() == ["meaning_update", "story_identity"]
+
+    Enum.each(agent_scopes, fn {agent_type, scope} ->
+      assert scope["correlation_id"] == chain.correlation_id
+      assert scope["packet_id"] in chain.packet_ids
+      assert String.starts_with?(scope["packet_id"], "packet:#{agent_type}:")
+      assert scope["evidence_refs"] == chain.evidence_refs
+      assert scope["producer_kind"] == "test_stub"
+      assert scope["decision_source"] == "test_stub"
+    end)
+
+    [proposal] =
+      sqlite_json_rows!(
+        soup_db_path,
+        "SELECT id, agent_run_id, story_id, status FROM proposals;"
+      )
+
+    assert proposal["id"] == chain.proposal_id
+    assert proposal["agent_run_id"] == chain.meaning_agent_run_id
+    assert proposal["story_id"] == chain.story_id
+    assert proposal["status"] == "accepted"
+
+    [proposal_op] =
+      sqlite_json_rows!(
+        soup_db_path,
+        "SELECT id, proposal_id, payload, status FROM proposal_ops;"
+      )
+
+    assert proposal_op["id"] == chain.proposal_op_id
+    assert proposal_op["proposal_id"] == chain.proposal_id
+    assert proposal_op["status"] == "committed"
+    payload = Jason.decode!(proposal_op["payload"])
+    assert payload["correlation_id"] == chain.correlation_id
+    assert payload["source_ref"] == chain.source_ref
+    assert payload["meaning_agent_run_id"] == chain.meaning_agent_run_id
+    assert payload["operation_family"] == "commit_story_meaning"
+
+    [commit] =
+      sqlite_json_rows!(
+        soup_db_path,
+        "SELECT id, proposal_id, proposal_op_id, committed_by_type, committed_by_id FROM graph_commits;"
+      )
+
+    assert commit["id"] == chain.graph_commit_id
+    assert commit["proposal_id"] == chain.proposal_id
+    assert commit["proposal_op_id"] == chain.proposal_op_id
+    assert commit["committed_by_type"] == "agent"
+    assert commit["committed_by_id"] == chain.meaning_agent_run_id
+
+    [event_row] =
+      sqlite_json_rows!(
+        soup_db_path,
+        "SELECT id, story_id, input_id, proposal_id, proposal_op_id, graph_commit_id FROM story_events;"
+      )
+
+    assert event_row["id"] == chain.story_event_id
+    assert event_row["story_id"] == chain.story_id
+    assert event_row["input_id"] == input.id
+    assert event_row["proposal_id"] == chain.proposal_id
+    assert event_row["proposal_op_id"] == chain.proposal_op_id
+    assert event_row["graph_commit_id"] == chain.graph_commit_id
+
+    evidence_labels =
+      sqlite_json_rows!(soup_db_path, "SELECT evidence_label FROM evidence_refs;")
+      |> Enum.map(& &1["evidence_label"])
+      |> Enum.uniq()
+
+    assert evidence_labels == chain.evidence_refs
+  end
+
+  test "live story-agent loop does not claim story proof with zero admissions" do
+    state = State.new(tenant_id: @tenant, user_id: "flynn")
+
+    {_state, report} = LiveStoryAgentLoop.run(state, [], "flynn", adapter: &stub_story_agent/3)
+
+    assert report.substrate_proof_only == true
+    assert report.story_meaning_proof == false
+    assert report.zero_agent_zero_story_shape_nonconforming? == true
+    assert report.correlation_chains == []
+    assert report.agent_runs == 0
+    assert report.stories == 0
+    assert report.proposals == 0
+    assert report.graph_commits == 0
   end
 
   test "real daemon news typography with explicit date admits evidence only" do
@@ -1130,6 +1308,47 @@ defmodule Primeradiant.DaemonNewsReplayTest do
   defp sqlite_json!(db_path, sql) do
     {output, 0} = System.cmd("sqlite3", [db_path, sql])
     String.trim(output)
+  end
+
+  defp sqlite_json_rows!(db_path, sql) do
+    {output, 0} = System.cmd("sqlite3", ["-cmd", ".mode json", db_path, sql])
+    Jason.decode!(output)
+  end
+
+  defp stub_story_agent(%{role: :story_identity}, _packet, _ctx) do
+    %{
+      output: %{
+        "story_key" => "civic-clinic-triage",
+        "classification" => "new_story",
+        "confidence" => 0.82,
+        "rationale" => "packet identifies a bounded clinic triage story"
+      },
+      model: "stub-story-agent",
+      model_route: "test://story-identity",
+      producer_kind: "test_stub",
+      decision_source: "test_stub",
+      invocation_transport_id: "stub-story-identity",
+      duration_ms: 1
+    }
+  end
+
+  defp stub_story_agent(%{role: :meaning_update}, _packet, _ctx) do
+    %{
+      output: %{
+        "story_key" => "civic-clinic-triage",
+        "operation_family" => "commit_story_meaning",
+        "classification" => "new_story",
+        "changed_facts" => %{"service" => "triage", "state" => "open", "venue" => "north"},
+        "confidence" => 0.79,
+        "rationale" => "packet supports an open triage service event"
+      },
+      model: "stub-meaning-agent",
+      model_route: "test://meaning-update",
+      producer_kind: "test_stub",
+      decision_source: "test_stub",
+      invocation_transport_id: "stub-meaning-update",
+      duration_ms: 1
+    }
   end
 
   defp committed_source_item_event(id, raw_path, offset, length, envelope) do

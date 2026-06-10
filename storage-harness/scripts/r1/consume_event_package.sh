@@ -4,7 +4,7 @@ set -euo pipefail
 usage() {
   cat <<'USAGE'
 Usage:
-  consume_event_package.sh --package-dir DIR --run-root DIR --tenant TENANT [--actor ACTOR]
+  consume_event_package.sh --package-dir DIR --run-root DIR --tenant TENANT [--actor ACTOR] [--story-agents]
 
 Consumes a bounded daemon-news R1 event package and writes Primeradiant-owned
 soup/output under RUN_ROOT. The source event, not a timer or snapshot cadence,
@@ -16,6 +16,7 @@ PACKAGE_DIR=""
 RUN_ROOT=""
 TENANT=""
 ACTOR="flynn"
+STORY_AGENTS=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -23,6 +24,7 @@ while [[ $# -gt 0 ]]; do
     --run-root) RUN_ROOT="$2"; shift 2 ;;
     --tenant) TENANT="$2"; shift 2 ;;
     --actor) ACTOR="$2"; shift 2 ;;
+    --story-agents) STORY_AGENTS=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown argument: $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -55,13 +57,18 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HARNESS_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 pushd "$HARNESS_DIR" >/dev/null
-mix primeradiant.daemon_news_event \
-  --event "$EVENT_PATH" \
-  --raw-root "$PACKAGE_DIR" \
-  --tenant "$TENANT" \
-  --actor "$ACTOR" \
-  --soup-db "$SOUP_DB" \
-  > "$MIX_OUTPUT"
+MIX_ARGS=(
+  primeradiant.daemon_news_event
+  --event "$EVENT_PATH"
+  --raw-root "$PACKAGE_DIR"
+  --tenant "$TENANT"
+  --actor "$ACTOR"
+  --soup-db "$SOUP_DB"
+)
+if [[ "$STORY_AGENTS" -eq 1 ]]; then
+  MIX_ARGS+=(--story-agents)
+fi
+mix "${MIX_ARGS[@]}" > "$MIX_OUTPUT"
 popd >/dev/null
 
 awk 'found || /^\{/ {found=1; print}' "$MIX_OUTPUT" > "$REPORT"

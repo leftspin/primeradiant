@@ -1,7 +1,12 @@
 defmodule Primeradiant.StorageHarness.DaemonNewsEvent do
   @moduledoc false
 
-  alias Primeradiant.StorageHarness.{DaemonNewsAdapter, DurableSoupDb, RealIngestion}
+  alias Primeradiant.StorageHarness.{
+    DaemonNewsAdapter,
+    DurableSoupDb,
+    LiveStoryAgentLoop,
+    RealIngestion
+  }
 
   @source_mode "daemon_news_event_r1"
 
@@ -16,8 +21,28 @@ defmodule Primeradiant.StorageHarness.DaemonNewsEvent do
     actor_id = Keyword.get(opts, :actor_id, "flynn")
     soup_db_path = Keyword.get(opts, :soup_db_path, default_soup_db_path())
 
+    story_agent_loop? = Keyword.get(opts, :story_agent_loop?, false)
+    story_agent_opts = Keyword.get(opts, :story_agent_opts, [])
+
     with {:ok, item, summary} <- event_to_item(event, tenant_id, raw_root),
          {:ok, state, ingestion_report} <- RealIngestion.ingest_items([item], actor_id) do
+      admissions = Map.get(ingestion_report, :admissions, [])
+
+      {state, report} =
+        if story_agent_loop? and admissions != [] do
+          {state, story_agent_report} =
+            LiveStoryAgentLoop.run(
+              state,
+              admissions,
+              actor_id,
+              story_agent_opts
+            )
+
+          {state, story_agent_report(state, summary, ingestion_report, story_agent_report)}
+        else
+          {state, source_admission_report(state, summary, ingestion_report)}
+        end
+
       DurableSoupDb.persist!(soup_db_path, state, %{
         source_kind: DaemonNewsAdapter.source_adapter(),
         source_db_path: "event:#{summary.event_id}",
@@ -25,12 +50,7 @@ defmodule Primeradiant.StorageHarness.DaemonNewsEvent do
       })
 
       report =
-        DurableSoupDb.source_admission_report(
-          soup_db_path,
-          tenant_id,
-          summary,
-          ingestion_report
-        )
+        report.(soup_db_path, tenant_id)
         |> Map.put(:event_driven_r1, %{
           event_type: DaemonNewsAdapter.event_type(),
           adapter: DaemonNewsAdapter.source_adapter(),
@@ -39,6 +59,28 @@ defmodule Primeradiant.StorageHarness.DaemonNewsEvent do
         })
 
       {:ok, state, report}
+    end
+  end
+
+  defp source_admission_report(_state, summary, ingestion_report) do
+    fn soup_db_path, tenant_id ->
+      DurableSoupDb.source_admission_report(soup_db_path, tenant_id, summary, ingestion_report)
+    end
+  end
+
+  defp story_agent_report(_state, summary, ingestion_report, story_agent_report) do
+    fn soup_db_path, tenant_id ->
+      DurableSoupDb.changed_stories_report(
+        soup_db_path,
+        tenant_id,
+        summary,
+        Map.merge(ingestion_report, story_agent_report)
+      )
+      |> Map.merge(%{
+        story_meaning_proof: story_agent_report.story_meaning_proof,
+        substrate_proof_only: story_agent_report.substrate_proof_only,
+        live_story_agent_loop: story_agent_report
+      })
     end
   end
 
