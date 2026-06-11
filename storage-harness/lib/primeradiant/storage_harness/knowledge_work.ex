@@ -625,6 +625,7 @@ defmodule Primeradiant.StorageHarness.KnowledgeWork do
 
   defp story_changed_for_actor?(state, story, user_id) do
     seen_inputs = seen_input_refs(state, story, user_id) |> MapSet.new()
+    authored_inputs = authored_input_refs(state, user_id) |> MapSet.new()
     seen_version = seen_story_version(state, story, user_id)
 
     state
@@ -632,7 +633,8 @@ defmodule Primeradiant.StorageHarness.KnowledgeWork do
     |> Enum.any?(fn event ->
       input_ref = input_ref(state, event.input_id)
 
-      not MapSet.member?(seen_inputs, input_ref) and event.story_version >= seen_version and
+      not MapSet.member?(seen_inputs, input_ref) and
+        not MapSet.member?(authored_inputs, input_ref) and event.story_version >= seen_version and
         (seen_version == 0 or delta_visible_event?(event))
     end)
   end
