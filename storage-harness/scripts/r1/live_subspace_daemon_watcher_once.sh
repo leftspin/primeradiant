@@ -81,6 +81,7 @@ PACKAGE_ROOT="$STATE_ROOT/packages/$RUN_ID"
 LOCAL_RUN_ROOT="$STATE_ROOT/local-consume-placeholder/$RUN_ID"
 EURISKO_HANDOFF_ROOT="/home/clu/primeradiant-handoffs/$RUN_ID"
 EURISKO_RUN_ROOT="/home/clu/primeradiant-runs/$RUN_ID"
+EURISKO_SOUP_DB="$EURISKO_RUN_ROOT/soup.sqlite3"
 
 mkdir -p "$STATE_ROOT" "$PACKAGE_ROOT" "$LOCAL_RUN_ROOT"
 
@@ -174,9 +175,9 @@ while IFS= read -r package_dir; do
 
   remote_out="$(
     if [[ "$STORY_AGENTS" == "true" ]]; then
-      ssh -i "$SSH_KEY" "$EURISKO_TARGET" "cd '$EURISKO_REPO/storage-harness' && PATH='$(dirname "$EURISKO_MIX")':'$EURISKO_ERLANG_BIN':'$EURISKO_SQLITE_BIN':\$PATH scripts/r1/consume_event_package.sh --package-dir '$remote_package' --run-root '$EURISKO_RUN_ROOT' --tenant '$TENANT' --actor '$ACTOR' --story-agents"
+      ssh -n -i "$SSH_KEY" "$EURISKO_TARGET" "cd '$EURISKO_REPO/storage-harness' && PATH='$(dirname "$EURISKO_MIX")':'$EURISKO_ERLANG_BIN':'$EURISKO_SQLITE_BIN':\$PATH scripts/r1/consume_event_package.sh --package-dir '$remote_package' --run-root '$EURISKO_RUN_ROOT' --tenant '$TENANT' --actor '$ACTOR' --story-agents --soup-db '$EURISKO_SOUP_DB'"
     else
-      ssh -i "$SSH_KEY" "$EURISKO_TARGET" "cd '$EURISKO_REPO/storage-harness' && PATH='$(dirname "$EURISKO_MIX")':'$EURISKO_ERLANG_BIN':'$EURISKO_SQLITE_BIN':\$PATH scripts/r1/consume_event_package.sh --package-dir '$remote_package' --run-root '$EURISKO_RUN_ROOT' --tenant '$TENANT' --actor '$ACTOR'"
+      ssh -n -i "$SSH_KEY" "$EURISKO_TARGET" "cd '$EURISKO_REPO/storage-harness' && PATH='$(dirname "$EURISKO_MIX")':'$EURISKO_ERLANG_BIN':'$EURISKO_SQLITE_BIN':\$PATH scripts/r1/consume_event_package.sh --package-dir '$remote_package' --run-root '$EURISKO_RUN_ROOT' --tenant '$TENANT' --actor '$ACTOR' --soup-db '$EURISKO_SOUP_DB'"
     fi
   )"
   remote_out="$(printf "%s" "$remote_out" | tail -n 1)"
@@ -211,6 +212,7 @@ jq -s \
     eurisko_repo: $eurisko_repo,
     eurisko_handoff_root: $eurisko_handoff_root,
     eurisko_run_root: $eurisko_run_root,
+    eurisko_soup_db: ($eurisko_run_root + "/soup.sqlite3"),
     cursor_catchup_before_wait_count: $catchup_count,
     local_watch_report: $watch_report,
     consumed: .

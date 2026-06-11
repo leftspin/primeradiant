@@ -1252,9 +1252,10 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert source =~ "--story-agents true|false"
     assert source =~ "consume_event_package.sh"
     assert source =~ ~s(if [[ "$STORY_AGENTS" == "true" ]]; then)
-    assert source =~ "--actor '$ACTOR' --story-agents"
-    assert source =~ "--actor '$ACTOR'\""
+    assert source =~ "--actor '$ACTOR' --story-agents --soup-db '$EURISKO_SOUP_DB'"
+    assert source =~ "--actor '$ACTOR' --soup-db '$EURISKO_SOUP_DB'"
     assert source =~ "--consume-packages false"
+    assert source =~ "EURISKO_SOUP_DB=\"$EURISKO_RUN_ROOT/soup.sqlite3\""
     assert emitter_source =~ ~s(sqlite3 -readonly -cmd ".timeout 10000" -json "$SOURCE_DB")
   end
 
