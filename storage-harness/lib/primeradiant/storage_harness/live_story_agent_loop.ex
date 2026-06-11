@@ -29,12 +29,14 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
 
   @identity_prompt """
   Decide story identity/shape for the admitted source evidence. Choose a stable story_key from the packet text.
-  Do not use source-provided story labels. Return a new_story or substantive_update decision with rationale.
+  Compare the packet to visible_story_refs. Reuse an existing story_key only when source evidence is about the same story.
+  Do not use source-provided story labels. Return new_story or substantive_update with rationale.
   """
 
   @meaning_prompt """
   Author the smallest story/meaning mutation justified by the bounded packet and the story identity decision.
   If the packet supports a story write, return operation_family commit_story_meaning with changed_facts.
+  If the packet repeats an existing story without material change, classify duplicate, no_op, stale, or adds_color.
   If evidence is insufficient, return operation_family mark_no_op with a refusal_reason.
   """
 
@@ -117,7 +119,7 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
       invoke_agent(
         state,
         config(:story_identity),
-        packet(input, admission, :story_identity, correlation_id, %{}),
+        packet(state, input, admission, :story_identity, correlation_id, actor_id, %{}),
         actor_id,
         adapter,
         correlation_id
@@ -129,7 +131,7 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
       invoke_agent(
         state,
         config(:meaning_update),
-        packet(input, admission, :meaning_update, correlation_id, %{
+        packet(state, input, admission, :meaning_update, correlation_id, actor_id, %{
           story_identity: %{
             story_key: story_key,
             classification: classification(identity.output, "new_story"),
@@ -680,7 +682,7 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
       raise ArgumentError, "admitted input not found for #{admission.source_ref}"
   end
 
-  defp packet(%Input{} = input, admission, role, correlation_id, extra) do
+  defp packet(state, %Input{} = input, admission, role, correlation_id, actor_id, extra) do
     Map.merge(
       %{
         packet_id: "packet:#{role}:#{correlation_id}",
@@ -694,12 +696,27 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
         content_span_refs: admission.content_span_refs,
         source_provenance: admission.source_provenance,
         snippet: String.slice(input.body_text || "", 0, 600),
-        visible_story_refs: [],
+        visible_story_refs: visible_story_refs(state, actor_id),
         traversal_depth: 1,
         raw_database_access: false
       },
       extra
     )
+  end
+
+  defp visible_story_refs(state, _actor_id) do
+    state.stories
+    |> Enum.map(fn story ->
+      %{
+        story_key: story.story_key,
+        title: story.title,
+        version: story.version,
+        state: story.state,
+        structural_facts: story.structural_facts || %{},
+        updated_at_story: story.updated_at_story && DateTime.to_iso8601(story.updated_at_story),
+        last_material_at: story.last_material_at && DateTime.to_iso8601(story.last_material_at)
+      }
+    end)
   end
 
   defp config(:story_identity) do
@@ -714,7 +731,7 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
   defp config(:meaning_update) do
     config(:meaning_update, "meaning-update.v1.t1269.live-loop", @meaning_prompt, %{
       operation_family: "commit_story_meaning | mark_no_op",
-      classification: "new_story | substantive_update | repeated_noop_input",
+      classification: "new_story | substantive_update | repeated_noop_input | duplicate | no_op | adds_color | stale",
       story_key: "stable story key",
       changed_facts: "object",
       confidence: "0.0-1.0",
