@@ -4,6 +4,7 @@ defmodule Primeradiant.StorageHarness.KnowledgeWork do
   alias Primeradiant.StorageHarness.{
     AuthoredOutput,
     AuthoredOutputUnit,
+    AgentRun,
     ChangesetStore,
     Edge,
     EvidenceRef,
@@ -54,18 +55,50 @@ defmodule Primeradiant.StorageHarness.KnowledgeWork do
   end
 
   def record_verified_delta(%State{} = state, user_id \\ "flynn") do
-    output = render_delta(state, user_id)
+    {state, agent_run} = ensure_delta_agent_run(state, user_id)
+    output = render_delta(state, user_id) |> Map.put(:agent_run_key, agent_run.agent_run_key)
 
     if output.bullets == [] do
       {:ok, state, output}
     else
+      advance_seen? = Enum.any?(output.touched_story_keys, &unseen_story?(state, user_id, &1))
+
       state =
-        state
-        |> record_output!(output)
-        |> mark_seen!(output)
+        if advance_seen? do
+          state
+          |> record_output!(output)
+          |> mark_seen!(output)
+        else
+          record_output!(state, output)
+        end
 
       {:ok, state, output}
     end
+  end
+
+  defp ensure_delta_agent_run(state, user_id) do
+    key = "agent-run:flynn-seen-delta.v1.t1274:#{length(state.agent_runs) + 1}"
+
+    run =
+      ChangesetStore.insert!(AgentRun, %{
+        tenant_id: state.tenant_id,
+        agent_run_key: key,
+        agent_type: "flynn_seen_delta",
+        prompt_version: "flynn-seen-delta.v1.t1274",
+        model: "soup-native-delta",
+        scope: %{
+          "user_id" => user_id,
+          "operation_family" => "flynn_relative_seen_delta",
+          "prior_seen_states" => Enum.map(state.seen_states, & &1.id),
+          "story_count" => length(state.stories)
+        },
+        status: "succeeded",
+        trace_id: "trace:#{key}",
+        started_at: DateTime.utc_now() |> DateTime.truncate(:microsecond),
+        ended_at: DateTime.utc_now() |> DateTime.truncate(:microsecond)
+      })
+
+    {state |> State.append(:agent_runs, run) |> State.put_source_id(:agent_run, key, run.id), run}
   end
 
   def render_delta(%State{} = state, user_id \\ "flynn") do
@@ -304,7 +337,7 @@ defmodule Primeradiant.StorageHarness.KnowledgeWork do
       ChangesetStore.insert!(Proposal, %{
         tenant_id: state.tenant_id,
         proposal_key: authoring_proposal_key,
-        agent_run_id: State.source_id!(state, :agent_run, "agent-run:manual-real-ingest-v1"),
+        agent_run_id: State.source_id!(state, :agent_run, authored_output.agent_run_key),
         actor_id: authored_output.user_id,
         story_id: story_id,
         fixture_id: nil,
@@ -522,10 +555,10 @@ defmodule Primeradiant.StorageHarness.KnowledgeWork do
   end
 
   defp story_bullets(state, story, user_id) do
-    unseen_material_events = unseen_material_events(state, story, user_id)
+    unseen_delta_events = unseen_delta_events(state, story, user_id)
 
     events =
-      case unseen_material_events do
+      case unseen_delta_events do
         [] -> [latest_visible_story_event(state, story, user_id)]
         events -> events
       end
@@ -543,7 +576,7 @@ defmodule Primeradiant.StorageHarness.KnowledgeWork do
       text:
         "#{prefix}#{story.title}: #{why_text(event)}. Evidence: #{Enum.join(evidence_refs, ", ")}#{fact_text(facts)}",
       evidence_refs: evidence_refs,
-      claim_refs: claim_refs_for_facts(state, story, facts),
+      claim_refs: claim_refs_for_event(state, story, event, facts),
       classification: event && event.classification
     }
   end
@@ -584,6 +617,12 @@ defmodule Primeradiant.StorageHarness.KnowledgeWork do
     |> Enum.filter(&Map.has_key?(state.source_ids, {:node, &1}))
   end
 
+  defp claim_refs_for_event(state, story, event, facts) when event != nil do
+    if material_event?(event), do: claim_refs_for_facts(state, story, facts), else: []
+  end
+
+  defp claim_refs_for_event(state, story, nil, facts), do: claim_refs_for_facts(state, story, facts)
+
   defp story_changed_for_actor?(state, story, user_id) do
     seen_inputs = seen_input_refs(state, story, user_id) |> MapSet.new()
     seen_version = seen_story_version(state, story, user_id)
@@ -594,20 +633,26 @@ defmodule Primeradiant.StorageHarness.KnowledgeWork do
       input_ref = input_ref(state, event.input_id)
 
       not MapSet.member?(seen_inputs, input_ref) and event.story_version >= seen_version and
-        (seen_version == 0 or material_event?(event))
+        (seen_version == 0 or delta_visible_event?(event))
     end)
   end
 
   defp material_event?(event),
     do: event.classification in ["split", "attach", "conflict"] and event.changed_facts != %{}
 
+  defp nonmaterial_exclusion_event?(event),
+    do: event.classification in ["duplicate", "no_op", "stale", "color"]
+
+  defp delta_visible_event?(event), do: material_event?(event) or nonmaterial_exclusion_event?(event)
+
   defp latest_visible_story_event(state, story, user_id) do
     events = visible_story_events(state, story, user_id)
     Enum.find(Enum.reverse(events), &material_event?/1) || List.last(events)
   end
 
-  defp unseen_material_events(state, story, user_id) do
+  defp unseen_delta_events(state, story, user_id) do
     seen_inputs = seen_input_refs(state, story, user_id) |> MapSet.new()
+    authored_inputs = authored_input_refs(state, user_id) |> MapSet.new()
     seen_version = seen_story_version(state, story, user_id)
 
     if seen_version == 0 do
@@ -618,15 +663,36 @@ defmodule Primeradiant.StorageHarness.KnowledgeWork do
       |> Enum.filter(fn event ->
         input_ref = input_ref(state, event.input_id)
 
-        not MapSet.member?(seen_inputs, input_ref) and event.story_version >= seen_version and
-          material_event?(event)
+        not MapSet.member?(seen_inputs, input_ref) and
+          not MapSet.member?(authored_inputs, input_ref) and event.story_version >= seen_version and
+          delta_visible_event?(event)
       end)
     end
   end
 
+  defp authored_input_refs(state, user_id) do
+    output_ids =
+      state.authored_outputs
+      |> Enum.filter(&(&1.user_id == user_id))
+      |> MapSet.new(& &1.id)
+
+    state.authored_output_units
+    |> Enum.filter(&MapSet.member?(output_ids, &1.authored_output_id))
+    |> Enum.flat_map(&input_refs_from_unit/1)
+    |> Enum.uniq()
+  end
+
+  defp input_refs_from_unit(unit) do
+    Enum.flat_map(unit.evidence_refs || [], fn
+      %{"input_ref" => ref} -> [ref]
+      %{input_ref: ref} -> [ref]
+      _ -> []
+    end)
+  end
+
   defp bullet_evidence_refs(state, story, user_id, latest_event) do
     cond do
-      latest_event && material_event?(latest_event) ->
+      latest_event && delta_visible_event?(latest_event) ->
         [input_ref(state, latest_event.input_id)]
 
       true ->
@@ -678,6 +744,11 @@ defmodule Primeradiant.StorageHarness.KnowledgeWork do
       nil -> 0
       seen -> seen.seen_story_version
     end
+  end
+
+  defp unseen_story?(state, user_id, story_key) do
+    story = Enum.find(state.stories, &(&1.story_key == story_key))
+    story && seen_story_version(state, story, user_id) == 0
   end
 
   defp seen_refs_for_output(authored_output, story_key) do
@@ -749,10 +820,12 @@ defmodule Primeradiant.StorageHarness.KnowledgeWork do
     do: "changed for Flynn because committed evidence partially contradicts prior story facts"
 
   defp why_text(%{classification: "color"}),
-    do: "did not structurally change, but source framing shifted"
+    do: "no material new update; source adds color only"
 
   defp why_text(%{classification: "stale"}), do: "mostly background; no material change was found"
-  defp why_text(%{classification: "no_op"}), do: "repeated known facts without new material delta"
+  defp why_text(%{classification: "no_op"}),
+    do: "no material new update; repeated known facts without new material delta"
+  defp why_text(%{classification: "duplicate"}), do: "duplicate evidence; no material new update"
 
   defp why_text(%{classification: "attach"}),
     do: "changed for Flynn since last seen because committed facts moved"
@@ -762,8 +835,11 @@ defmodule Primeradiant.StorageHarness.KnowledgeWork do
 
   defp verified_output?([]), do: true
 
-  defp verified_output?(bullet_records),
-    do: Enum.all?(bullet_records, &(&1.evidence_refs != [] and &1.claim_refs != []))
+  defp verified_output?(bullet_records) do
+    Enum.all?(bullet_records, fn unit ->
+      unit.evidence_refs != [] and (unit.claim_refs != [] or nonmaterial_classification?(unit.classification))
+    end)
+  end
 
   defp validate_output!(state, output) do
     if output.verified != true, do: raise(ArgumentError, "cannot mark seen for unverified output")
@@ -775,12 +851,16 @@ defmodule Primeradiant.StorageHarness.KnowledgeWork do
       do: raise(ArgumentError, "authored output requires grounded units")
 
     Enum.each(output.sentence_evidence, fn unit ->
-      if unit.evidence_refs == [] or unit.claim_refs == [],
+      if unit.evidence_refs == [] or
+           (unit.claim_refs == [] and not nonmaterial_classification?(unit.classification)),
         do: raise(ArgumentError, "authored output requires grounded units")
 
       validate_actor_evidence_refs!(state, output.user_id, unit.evidence_refs)
     end)
   end
+
+  defp nonmaterial_classification?(classification),
+    do: classification in ["duplicate", "no_op", "stale", "color"]
 
   defp add_evidence_refs(state, subject_type, subject_id, refs, attrs) do
     Enum.reduce(refs, state, fn ref, acc ->

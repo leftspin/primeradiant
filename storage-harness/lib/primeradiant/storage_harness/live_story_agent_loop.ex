@@ -17,7 +17,8 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
     SoupNode,
     State,
     Story,
-    StoryEvent
+    StoryEvent,
+    StoryFactVersion
   }
 
   @system_prompt """
@@ -253,40 +254,23 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
          correlation_id
        ) do
     confidence = confidence(meaning.output, confidence(identity.output, 0.66))
-    classification = classification(meaning.output, classification(identity.output, "new_story"))
     changed_facts = changed_facts(meaning.output, input)
     title = story_title(meaning.output, input)
 
-    story =
-      ChangesetStore.insert!(Story, %{
-        tenant_id: state.tenant_id,
-        story_key: story_key,
-        title: title,
-        state: "active",
-        version: 0,
-        first_observed_at: input.observed_at,
-        updated_at_story: input.observed_at,
-        last_material_at: input.observed_at,
-        structural_facts: %{},
-        background_facts: %{},
-        colors: [],
-        questions: %{},
-        topic_tokens: [],
-        attrs: %{
-          "correlation_id" => correlation_id,
-          "identity_agent_run_id" => identity.run.id,
-          "meaning_agent_run_id" => meaning.run.id,
-          "identity_packet_hash" => identity.packet_hash,
-          "meaning_packet_hash" => meaning.packet_hash,
-          "identity_output_hash" => identity.run.scope["output_hash"],
-          "meaning_output_hash" => meaning.run.scope["output_hash"]
-        }
-      })
+    {state, story, story_inserted?} =
+      upsert_story(
+        state,
+        story_key,
+        title,
+        input,
+        changed_facts,
+        identity,
+        meaning,
+        correlation_id
+      )
 
-    state =
-      state
-      |> State.append(:stories, story)
-      |> State.put_source_id(:story, story_key, story.id)
+    story_version = story.version
+    event_classification = event_classification(meaning.output, story_inserted?)
 
     proposal =
       ChangesetStore.insert!(Proposal, %{
@@ -296,7 +280,7 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
         actor_id: actor_id,
         story_id: story.id,
         fixture_id: nil,
-        classification: classification,
+        classification: event_classification,
         confidence: ChangesetStore.decimal(confidence),
         rationale: rationale(meaning.output),
         status: "accepted"
@@ -311,7 +295,7 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
         payload: %{
           "operation_family" => operation_family(meaning.output),
           "story_key" => story_key,
-          "classification" => classification,
+          "classification" => event_classification,
           "changed_facts" => changed_facts,
           "source_ref" => source_ref,
           "correlation_id" => correlation_id,
@@ -367,27 +351,15 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
         attrs: %{"acl" => input.acl, "correlation_id" => correlation_id}
       })
 
-    story_node =
-      ChangesetStore.insert!(SoupNode, %{
-        tenant_id: state.tenant_id,
-        node_key: story_key,
-        node_type: "story",
-        title: title,
-        state: "active",
-        story_id: story.id,
-        proposal_id: proposal.id,
-        proposal_op_id: proposal_op.id,
-        graph_commit_id: commit.id,
-        confidence: ChangesetStore.decimal(confidence),
-        attrs: %{"correlation_id" => correlation_id}
-      })
+    {state, story_node} =
+      upsert_story_node(state, story, proposal, proposal_op, commit, confidence, correlation_id)
 
     edge =
       ChangesetStore.insert!(Edge, %{
         tenant_id: state.tenant_id,
         from_node_id: input_node.id,
         to_node_id: story_node.id,
-        edge_type: "supports",
+        edge_type: edge_type_for_event(event_classification),
         status: "committed",
         confidence: ChangesetStore.decimal(confidence),
         proposal_id: proposal.id,
@@ -401,8 +373,8 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
         tenant_id: state.tenant_id,
         story_id: story.id,
         input_id: input.id,
-        classification: classification,
-        story_version: 1,
+        classification: event_classification,
+        story_version: story_version,
         changed_facts: changed_facts,
         observed_at: input.observed_at,
         proposal_id: proposal.id,
@@ -419,10 +391,18 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
       |> State.append(:graph_commits, commit)
       |> State.append(:soup_nodes, input_node)
       |> State.put_source_id(:node, source_ref, input_node.id)
-      |> State.append(:soup_nodes, story_node)
-      |> State.put_source_id(:node, story_key, story_node.id)
+      |> append_new_story_node(story_node, story_inserted?)
       |> State.append(:edges, edge)
       |> State.append(:story_events, event)
+      |> write_fact_versions(
+        story,
+        input,
+        proposal,
+        proposal_op,
+        commit,
+        changed_facts,
+        evidence_refs
+      )
       |> evidence("proposal", proposal.id, input, evidence_refs, proposal.id, nil, nil)
       |> evidence(
         "proposal_op",
@@ -481,10 +461,186 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
        proposal_decision_id: decision.id,
        graph_commit_id: commit.id,
        story_event_id: event.id,
-       classification: classification,
+       classification: event_classification,
        operation_family: operation_family(meaning.output),
        meaning_agent_run_id: meaning.run.id
      }}
+  end
+
+  defp upsert_story(
+         state,
+         story_key,
+         title,
+         input,
+         changed_facts,
+         identity,
+         meaning,
+         correlation_id
+       ) do
+    attrs = %{
+      "correlation_id" => correlation_id,
+      "identity_agent_run_id" => identity.run.id,
+      "meaning_agent_run_id" => meaning.run.id,
+      "identity_packet_hash" => identity.packet_hash,
+      "meaning_packet_hash" => meaning.packet_hash,
+      "identity_output_hash" => identity.run.scope["output_hash"],
+      "meaning_output_hash" => meaning.run.scope["output_hash"]
+    }
+
+    case Enum.find(state.stories, &(&1.story_key == story_key)) do
+      nil ->
+        story =
+          ChangesetStore.insert!(Story, %{
+            tenant_id: state.tenant_id,
+            story_key: story_key,
+            title: title,
+            state: "active",
+            version: 1,
+            first_observed_at: input.observed_at,
+            updated_at_story: input.observed_at,
+            last_material_at: input.observed_at,
+            structural_facts: changed_facts,
+            background_facts: %{},
+            colors: [],
+            questions: %{},
+            topic_tokens: [],
+            attrs: attrs
+          })
+
+        {state
+         |> State.append(:stories, story)
+         |> State.put_source_id(:story, story_key, story.id), story, true}
+
+      existing ->
+        story =
+          ChangesetStore.update!(existing, %{
+            title: title,
+            version: existing.version + 1,
+            updated_at_story: input.observed_at,
+            last_material_at:
+              if(
+                material_classification?(classification(meaning.output, "substantive_update")),
+                do: input.observed_at,
+                else: existing.last_material_at
+              ),
+            structural_facts:
+              if(
+                material_classification?(classification(meaning.output, "substantive_update")),
+                do: Map.merge(existing.structural_facts || %{}, changed_facts),
+                else: existing.structural_facts || %{}
+              ),
+            attrs: Map.merge(existing.attrs || %{}, attrs)
+          })
+
+        {State.replace(state, :stories, story.id, story), story, false}
+    end
+  end
+
+  defp upsert_story_node(state, story, proposal, op, commit, confidence, correlation_id) do
+    case Enum.find(state.soup_nodes, &(&1.node_key == story.story_key)) do
+      nil ->
+        node =
+          ChangesetStore.insert!(SoupNode, %{
+            tenant_id: state.tenant_id,
+            node_key: story.story_key,
+            node_type: "story",
+            title: story.title,
+            state: "active",
+            story_id: story.id,
+            proposal_id: proposal.id,
+            proposal_op_id: op.id,
+            graph_commit_id: commit.id,
+            confidence: ChangesetStore.decimal(confidence),
+            attrs: %{"correlation_id" => correlation_id}
+          })
+
+        {state |> State.put_source_id(:node, story.story_key, node.id), node}
+
+      node ->
+        {state, node}
+    end
+  end
+
+  defp append_new_story_node(state, story_node, true) do
+    state
+    |> State.append(:soup_nodes, story_node)
+    |> State.put_source_id(:node, story_node.node_key, story_node.id)
+  end
+
+  defp append_new_story_node(state, _story_node, false), do: state
+
+  defp write_fact_versions(
+         state,
+         story,
+         input,
+         proposal,
+         op,
+         commit,
+         changed_facts,
+         evidence_refs
+       ) do
+    Enum.reduce(changed_facts, state, fn {key, value}, acc ->
+      claim_key = "claim:#{story.story_key}:#{key}"
+
+      claim_node =
+        case Enum.find(acc.soup_nodes, &(&1.node_key == claim_key)) do
+          nil ->
+            ChangesetStore.insert!(SoupNode, %{
+              tenant_id: acc.tenant_id,
+              node_key: claim_key,
+              node_type: "claim",
+              title: "#{key}=#{value}",
+              state: "active",
+              story_id: story.id,
+              proposal_id: proposal.id,
+              proposal_op_id: op.id,
+              graph_commit_id: commit.id,
+              confidence: op.confidence,
+              attrs: %{"fact_key" => key, "fact_value" => value}
+            })
+
+          existing ->
+            existing
+        end
+
+      fact =
+        ChangesetStore.insert!(StoryFactVersion, %{
+          tenant_id: acc.tenant_id,
+          story_id: story.id,
+          claim_node_id: claim_node.id,
+          fact_key: to_string(key),
+          fact_value: to_string(value),
+          time_scope: "current",
+          status: "current",
+          proposal_id: proposal.id,
+          proposal_op_id: op.id,
+          graph_commit_id: commit.id,
+          input_id: input.id,
+          confidence: op.confidence,
+          observed_at: input.observed_at
+        })
+
+      acc =
+        if Enum.any?(acc.soup_nodes, &(&1.id == claim_node.id)),
+          do: acc,
+          else:
+            acc
+            |> State.append(:soup_nodes, claim_node)
+            |> State.put_source_id(:node, claim_key, claim_node.id)
+
+      acc
+      |> State.append(:story_fact_versions, fact)
+      |> evidence(
+        "soup_node",
+        claim_node.id,
+        input,
+        evidence_refs,
+        proposal.id,
+        op.id,
+        claim_node.id
+      )
+      |> evidence("story_fact_version", fact.id, input, evidence_refs, proposal.id, op.id, nil)
+    end)
   end
 
   defp evidence(
@@ -589,11 +745,42 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
   defp classification(output, default) do
     value = to_string(output["classification"] || default)
 
-    if value in ["new_story", "substantive_update", "repeated_noop_input"] do
+    if value in [
+         "new_story",
+         "substantive_update",
+         "repeated_noop_input",
+         "duplicate",
+         "no_op",
+         "adds_color",
+         "stale"
+       ] do
       value
     else
       default
     end
+  end
+
+  defp event_classification(_output, true), do: "split"
+
+  defp event_classification(output, false) do
+    case classification(output, "substantive_update") do
+      "duplicate" -> "duplicate"
+      "no_op" -> "no_op"
+      "repeated_noop_input" -> "no_op"
+      "adds_color" -> "color"
+      "stale" -> "stale"
+      _ -> "attach"
+    end
+  end
+
+  defp edge_type_for_event("duplicate"), do: "duplicates"
+  defp edge_type_for_event("no_op"), do: "duplicates"
+  defp edge_type_for_event("color"), do: "adds_color"
+  defp edge_type_for_event("conflict"), do: "contradicts"
+  defp edge_type_for_event(_classification), do: "supports"
+
+  defp material_classification?(classification) do
+    classification in ["new_story", "substantive_update"]
   end
 
   defp operation_family(output) do

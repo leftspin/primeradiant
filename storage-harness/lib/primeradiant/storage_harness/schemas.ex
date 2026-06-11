@@ -812,7 +812,6 @@ defmodule Primeradiant.StorageHarness.AuthoredOutputUnit do
       :claim_refs
     ])
     |> validate_non_empty_list(:evidence_refs)
-    |> validate_non_empty_list(:claim_refs)
   end
 end
 

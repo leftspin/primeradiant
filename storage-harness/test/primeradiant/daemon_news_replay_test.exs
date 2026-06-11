@@ -305,13 +305,17 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert chain.evidence_refs == ["evidence:news_article:event-agent-news-1:body_text:0:97"]
 
     assert report.primeradiant_writes.inputs == 1
-    assert report.primeradiant_writes.agent_runs == 2
+    assert report.primeradiant_writes.agent_runs == 3
     assert report.primeradiant_writes.stories == 1
-    assert report.primeradiant_writes.proposals == 1
-    assert report.primeradiant_writes.proposal_ops == 1
-    assert report.primeradiant_writes.proposal_decisions == 1
-    assert report.primeradiant_writes.graph_commits == 1
+    assert report.primeradiant_writes.proposals == 2
+    assert report.primeradiant_writes.proposal_ops == 2
+    assert report.primeradiant_writes.proposal_decisions == 2
+    assert report.primeradiant_writes.graph_commits == 2
     assert report.primeradiant_writes.story_events == 1
+    assert report.seen_state_delta.authored_outputs == 1
+    assert report.seen_state_delta.authored_output_units == 1
+    assert report.seen_state_delta.seen_states == 1
+    assert report.seen_state_delta.seen_state_refs >= 3
     assert report.changed_stories != []
 
     assert [%{external_id: "event-agent-news-1"} = input] = state.inputs
@@ -322,13 +326,17 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert is_nil(input.normalized["relevance_decision"])
 
     assert DurableSoupDb.table_count(soup_db_path, "inputs", @tenant) == 1
-    assert DurableSoupDb.table_count(soup_db_path, "agent_runs", @tenant) == 2
+    assert DurableSoupDb.table_count(soup_db_path, "agent_runs", @tenant) == 3
     assert DurableSoupDb.table_count(soup_db_path, "stories", @tenant) == 1
-    assert DurableSoupDb.table_count(soup_db_path, "proposals", @tenant) == 1
-    assert DurableSoupDb.table_count(soup_db_path, "proposal_ops", @tenant) == 1
-    assert DurableSoupDb.table_count(soup_db_path, "proposal_decisions", @tenant) == 1
-    assert DurableSoupDb.table_count(soup_db_path, "graph_commits", @tenant) == 1
+    assert DurableSoupDb.table_count(soup_db_path, "proposals", @tenant) == 2
+    assert DurableSoupDb.table_count(soup_db_path, "proposal_ops", @tenant) == 2
+    assert DurableSoupDb.table_count(soup_db_path, "proposal_decisions", @tenant) == 2
+    assert DurableSoupDb.table_count(soup_db_path, "graph_commits", @tenant) == 2
     assert DurableSoupDb.table_count(soup_db_path, "story_events", @tenant) == 1
+    assert DurableSoupDb.table_count(soup_db_path, "authored_outputs", @tenant) == 1
+    assert DurableSoupDb.table_count(soup_db_path, "authored_output_units", @tenant) == 1
+    assert DurableSoupDb.table_count(soup_db_path, "seen_states", @tenant) == 1
+    assert DurableSoupDb.table_count(soup_db_path, "seen_state_refs", @tenant) >= 3
     assert DurableSoupDb.table_count(soup_db_path, "evidence_refs", @tenant) > 0
 
     agent_scopes =
@@ -338,9 +346,15 @@ defmodule Primeradiant.DaemonNewsReplayTest do
       )
       |> Map.new(fn row -> {row["agent_type"], Jason.decode!(row["scope"])} end)
 
-    assert agent_scopes |> Map.keys() |> Enum.sort() == ["meaning_update", "story_identity"]
+    assert agent_scopes |> Map.keys() |> Enum.sort() == [
+             "flynn_seen_delta",
+             "meaning_update",
+             "story_identity"
+           ]
 
-    Enum.each(agent_scopes, fn {agent_type, scope} ->
+    agent_scopes
+    |> Map.take(["meaning_update", "story_identity"])
+    |> Enum.each(fn {agent_type, scope} ->
       assert scope["correlation_id"] == chain.correlation_id
       assert scope["packet_id"] in chain.packet_ids
       assert String.starts_with?(scope["packet_id"], "packet:#{agent_type}:")
@@ -352,7 +366,7 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     [proposal] =
       sqlite_json_rows!(
         soup_db_path,
-        "SELECT id, agent_run_id, story_id, status FROM proposals;"
+        "SELECT id, agent_run_id, story_id, status FROM proposals WHERE id = '#{chain.proposal_id}';"
       )
 
     assert proposal["id"] == chain.proposal_id
@@ -363,7 +377,7 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     [proposal_op] =
       sqlite_json_rows!(
         soup_db_path,
-        "SELECT id, proposal_id, payload, status FROM proposal_ops;"
+        "SELECT id, proposal_id, payload, status FROM proposal_ops WHERE id = '#{chain.proposal_op_id}';"
       )
 
     assert proposal_op["id"] == chain.proposal_op_id
@@ -378,7 +392,7 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     [commit] =
       sqlite_json_rows!(
         soup_db_path,
-        "SELECT id, proposal_id, proposal_op_id, committed_by_type, committed_by_id FROM graph_commits;"
+        "SELECT id, proposal_id, proposal_op_id, committed_by_type, committed_by_id FROM graph_commits WHERE id = '#{chain.graph_commit_id}';"
       )
 
     assert commit["id"] == chain.graph_commit_id
@@ -405,7 +419,199 @@ defmodule Primeradiant.DaemonNewsReplayTest do
       |> Enum.map(& &1["evidence_label"])
       |> Enum.uniq()
 
-    assert evidence_labels == chain.evidence_refs
+    assert Enum.all?(chain.evidence_refs, &(&1 in evidence_labels))
+    assert "news_article:event-agent-news-1" in evidence_labels
+  end
+
+  test "event story agents persist Flynn seen refs and later soup-native deltas across cycles" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-daemon-news-seen-deltas-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    soup_db_path = Path.join(tmp, "primeradiant-event-soup.sqlite3")
+    raw_path = Path.join(tmp, "archive.jsonl")
+
+    rows = [
+      envelope(
+        "Agent Civic Clinic triage open",
+        "Agent Civic Clinic triage is open venue is north speaker is desk."
+      ),
+      envelope(
+        "Agent Civic Clinic triage adds west desk",
+        "Agent Civic Clinic triage remains open and now adds west desk coverage."
+      )
+    ]
+
+    offsets = write_archive!(raw_path, rows)
+
+    first_event =
+      committed_source_item_event(
+        "event-agent-news-1",
+        raw_path,
+        elem(Enum.at(offsets, 0), 0),
+        elem(Enum.at(offsets, 0), 1),
+        Enum.at(rows, 0)
+      )
+
+    second_event =
+      committed_source_item_event(
+        "event-agent-news-2",
+        raw_path,
+        elem(Enum.at(offsets, 1), 0),
+        elem(Enum.at(offsets, 1), 1),
+        Enum.at(rows, 1)
+      )
+
+    {:ok, _first_state, first_report} =
+      DaemonNewsEvent.consume_event(first_event,
+        soup_db_path: soup_db_path,
+        tenant_id: @tenant,
+        actor_id: "flynn",
+        story_agent_loop?: true,
+        story_agent_opts: [adapter: &stub_story_agent_with_later_update/3]
+      )
+
+    assert first_report.seen_state_delta.seen_states == 1
+    assert first_report.seen_state_delta.authored_outputs == 1
+
+    {:ok, second_state, second_report} =
+      DaemonNewsEvent.consume_event(second_event,
+        soup_db_path: soup_db_path,
+        tenant_id: @tenant,
+        actor_id: "flynn",
+        story_agent_loop?: true,
+        story_agent_opts: [adapter: &stub_story_agent_with_later_update/3]
+      )
+
+    assert length(second_state.inputs) == 2
+    assert length(second_state.stories) == 1
+    assert second_state.stories |> hd() |> Map.fetch!(:version) == 2
+
+    assert second_report.live_story_agent_loop.correlation_chains
+           |> hd()
+           |> Map.fetch!(:classification) == "attach"
+
+    assert second_report.seen_state_delta.authored_outputs == 2
+    assert second_report.seen_state_delta.authored_output_units == 2
+    assert second_report.seen_state_delta.seen_states == 1
+    assert second_report.seen_state_delta.seen_state_refs >= 4
+
+    [seen] =
+      sqlite_json_rows!(
+        soup_db_path,
+        "SELECT seen_story_version FROM seen_states WHERE tenant_id = '#{@tenant}';"
+      )
+
+    assert seen["seen_story_version"] == 1
+
+    seen_refs =
+      sqlite_json_rows!(
+        soup_db_path,
+        "SELECT ref_kind, ref_id FROM seen_state_refs WHERE tenant_id = '#{@tenant}' ORDER BY ref_kind, ref_id;"
+      )
+
+    assert %{"ref_kind" => "input", "ref_id" => "news_article:event-agent-news-1"} in seen_refs
+    refute %{"ref_kind" => "input", "ref_id" => "news_article:event-agent-news-2"} in seen_refs
+    assert %{"ref_kind" => "claim", "ref_id" => "claim:civic-clinic-triage:service"} in seen_refs
+    refute %{"ref_kind" => "claim", "ref_id" => "claim:civic-clinic-triage:coverage"} in seen_refs
+  end
+
+  test "event story agents persist nonmaterial exclusion delta units across cycles" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-daemon-news-nonmaterial-deltas-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    soup_db_path = Path.join(tmp, "primeradiant-event-soup.sqlite3")
+    raw_path = Path.join(tmp, "archive.jsonl")
+
+    rows = [
+      envelope(
+        "Agent Civic Clinic triage open",
+        "Agent Civic Clinic triage is open venue is north speaker is desk."
+      ),
+      envelope(
+        "Agent Civic Clinic triage duplicate",
+        "Agent Civic Clinic triage is open venue is north speaker is desk."
+      ),
+      envelope(
+        "Agent Civic Clinic triage no change",
+        "Agent Civic Clinic triage reminder repeats the current desk state."
+      ),
+      envelope(
+        "Agent Civic Clinic triage stale background",
+        "Agent Civic Clinic triage background check says no current material change."
+      ),
+      envelope(
+        "Agent Civic Clinic triage color",
+        "Agent Civic Clinic triage coverage is described as calm and well organized."
+      )
+    ]
+
+    offsets = write_archive!(raw_path, rows)
+
+    rows
+    |> Enum.with_index(1)
+    |> Enum.each(fn {row, index} ->
+      event =
+        committed_source_item_event(
+          "event-agent-news-#{index}",
+          raw_path,
+          elem(Enum.at(offsets, index - 1), 0),
+          elem(Enum.at(offsets, index - 1), 1),
+          row
+        )
+
+      {:ok, _state, _report} =
+        DaemonNewsEvent.consume_event(event,
+          soup_db_path: soup_db_path,
+          tenant_id: @tenant,
+          actor_id: "flynn",
+          story_agent_loop?: true,
+          story_agent_opts: [adapter: &stub_story_agent_with_nonmaterial_deltas/3]
+        )
+    end)
+
+    [seen] =
+      sqlite_json_rows!(
+        soup_db_path,
+        "SELECT seen_story_version FROM seen_states WHERE tenant_id = '#{@tenant}';"
+      )
+
+    assert seen["seen_story_version"] == 1
+
+    units =
+      sqlite_json_rows!(
+        soup_db_path,
+        """
+        SELECT content, claim_refs
+        FROM authored_output_units
+        WHERE tenant_id = '#{@tenant}'
+        ORDER BY position, inserted_at;
+        """
+      )
+
+    assert length(units) == 5
+
+    nonmaterial_units = Enum.drop(units, 1)
+    assert Enum.any?(nonmaterial_units, &String.contains?(&1["content"], "duplicate evidence"))
+    assert Enum.any?(nonmaterial_units, &String.contains?(&1["content"], "repeated known facts"))
+    assert Enum.any?(nonmaterial_units, &String.contains?(&1["content"], "mostly background"))
+    assert Enum.any?(nonmaterial_units, &String.contains?(&1["content"], "adds color only"))
+
+    Enum.each(nonmaterial_units, fn unit ->
+      assert Jason.decode!(unit["claim_refs"]) == []
+      assert String.contains?(unit["content"], "no material")
+    end)
   end
 
   test "live story-agent loop does not claim story proof with zero admissions" do
@@ -1357,6 +1563,94 @@ defmodule Primeradiant.DaemonNewsReplayTest do
         "changed_facts" => %{"service" => "triage", "state" => "open", "venue" => "north"},
         "confidence" => 0.79,
         "rationale" => "packet supports an open triage service event"
+      },
+      model: "stub-meaning-agent",
+      model_route: "test://meaning-update",
+      producer_kind: "test_stub",
+      decision_source: "test_stub",
+      invocation_transport_id: "stub-meaning-update",
+      duration_ms: 1
+    }
+  end
+
+  defp stub_story_agent_with_later_update(%{role: :story_identity}, _packet, _ctx) do
+    %{
+      output: %{
+        "story_key" => "civic-clinic-triage",
+        "classification" => "new_story",
+        "confidence" => 0.82,
+        "rationale" => "packet identifies a bounded clinic triage story"
+      },
+      model: "stub-story-agent",
+      model_route: "test://story-identity",
+      producer_kind: "test_stub",
+      decision_source: "test_stub",
+      invocation_transport_id: "stub-story-identity",
+      duration_ms: 1
+    }
+  end
+
+  defp stub_story_agent_with_later_update(%{role: :meaning_update}, packet, _ctx) do
+    changed_facts =
+      if packet.external_id == "event-agent-news-2" do
+        %{"service" => "triage", "state" => "open", "coverage" => "west"}
+      else
+        %{"service" => "triage", "state" => "open", "venue" => "north"}
+      end
+
+    %{
+      output: %{
+        "story_key" => "civic-clinic-triage",
+        "operation_family" => "commit_story_meaning",
+        "classification" => "substantive_update",
+        "changed_facts" => changed_facts,
+        "confidence" => 0.79,
+        "rationale" => "packet supports a triage service event"
+      },
+      model: "stub-meaning-agent",
+      model_route: "test://meaning-update",
+      producer_kind: "test_stub",
+      decision_source: "test_stub",
+      invocation_transport_id: "stub-meaning-update",
+      duration_ms: 1
+    }
+  end
+
+  defp stub_story_agent_with_nonmaterial_deltas(%{role: :story_identity}, _packet, _ctx) do
+    %{
+      output: %{
+        "story_key" => "civic-clinic-triage",
+        "classification" => "new_story",
+        "confidence" => 0.82,
+        "rationale" => "packet identifies a bounded clinic triage story"
+      },
+      model: "stub-story-agent",
+      model_route: "test://story-identity",
+      producer_kind: "test_stub",
+      decision_source: "test_stub",
+      invocation_transport_id: "stub-story-identity",
+      duration_ms: 1
+    }
+  end
+
+  defp stub_story_agent_with_nonmaterial_deltas(%{role: :meaning_update}, packet, _ctx) do
+    {classification, changed_facts} =
+      case packet.external_id do
+        "event-agent-news-1" -> {"substantive_update", %{"service" => "triage", "state" => "open"}}
+        "event-agent-news-2" -> {"duplicate", %{}}
+        "event-agent-news-3" -> {"no_op", %{}}
+        "event-agent-news-4" -> {"stale", %{}}
+        "event-agent-news-5" -> {"adds_color", %{}}
+      end
+
+    %{
+      output: %{
+        "story_key" => "civic-clinic-triage",
+        "operation_family" => "commit_story_meaning",
+        "classification" => classification,
+        "changed_facts" => changed_facts,
+        "confidence" => 0.79,
+        "rationale" => "packet is classified against the existing triage story"
       },
       model: "stub-meaning-agent",
       model_route: "test://meaning-update",

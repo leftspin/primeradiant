@@ -4,6 +4,7 @@ defmodule Primeradiant.StorageHarness.DaemonNewsEvent do
   alias Primeradiant.StorageHarness.{
     DaemonNewsAdapter,
     DurableSoupDb,
+    KnowledgeWork,
     LiveStoryAgentLoop,
     RealIngestion
   }
@@ -24,9 +25,12 @@ defmodule Primeradiant.StorageHarness.DaemonNewsEvent do
     story_agent_loop? = Keyword.get(opts, :story_agent_loop?, false)
     story_agent_opts = Keyword.get(opts, :story_agent_opts, [])
 
+    prior_state = DurableSoupDb.load_tenant(soup_db_path, tenant_id)
+
     with {:ok, item, summary} <- event_to_item(event, tenant_id, raw_root),
          {:ok, state, ingestion_report} <- RealIngestion.ingest_items([item], actor_id) do
       admissions = Map.get(ingestion_report, :admissions, [])
+      state = DurableSoupDb.merge_state(prior_state, state)
 
       {state, report} =
         if story_agent_loop? and admissions != [] do
@@ -38,7 +42,22 @@ defmodule Primeradiant.StorageHarness.DaemonNewsEvent do
               story_agent_opts
             )
 
+          {:ok, state, delta_output} = KnowledgeWork.record_verified_delta(state, actor_id)
+
           {state, story_agent_report(state, summary, ingestion_report, story_agent_report)}
+          |> then(fn {state, report_fun} ->
+            {state,
+             fn soup_db_path, tenant_id ->
+               report_fun.(soup_db_path, tenant_id)
+               |> Map.put(:seen_state_delta_output, %{
+                 output_id: delta_output.output_id,
+                 verified: delta_output.verified,
+                 bullets: length(delta_output.bullets),
+                 touched_story_keys: delta_output.touched_story_keys,
+                 evidence_refs: delta_output.evidence_refs
+               })
+             end}
+          end)
         else
           {state, source_admission_report(state, summary, ingestion_report)}
         end

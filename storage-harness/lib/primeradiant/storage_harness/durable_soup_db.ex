@@ -9,6 +9,10 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
     :edges,
     :soup_nodes,
     :graph_commits,
+    :seen_state_refs,
+    :seen_states,
+    :authored_output_units,
+    :authored_outputs,
     :proposal_decisions,
     :proposal_ops,
     :proposals,
@@ -33,6 +37,10 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
         rows_sql(:proposal_ops, state.proposal_ops),
         rows_sql(:proposal_decisions, state.proposal_decisions),
         rows_sql(:graph_commits, state.graph_commits),
+        rows_sql(:authored_outputs, state.authored_outputs),
+        rows_sql(:authored_output_units, state.authored_output_units),
+        rows_sql(:seen_states, state.seen_states),
+        rows_sql(:seen_state_refs, state.seen_state_refs),
         rows_sql(:soup_nodes, state.soup_nodes),
         rows_sql(:edges, state.edges),
         rows_sql(:story_fact_versions, state.story_fact_versions),
@@ -44,6 +52,116 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
 
     sqlite!(db_path, sql)
     :ok
+  end
+
+  def load_tenant(db_path, tenant_id) do
+    if File.regular?(db_path) do
+      state = Primeradiant.StorageHarness.State.new(tenant_id: tenant_id, user_id: "flynn")
+
+      state
+      |> put_rows(
+        :agent_runs,
+        load_rows(db_path, "agent_runs", tenant_id, Primeradiant.StorageHarness.AgentRun)
+      )
+      |> put_rows(
+        :inputs,
+        load_rows(db_path, "inputs", tenant_id, Primeradiant.StorageHarness.Input)
+      )
+      |> put_rows(
+        :stories,
+        load_rows(db_path, "stories", tenant_id, Primeradiant.StorageHarness.Story)
+      )
+      |> put_rows(
+        :proposals,
+        load_rows(db_path, "proposals", tenant_id, Primeradiant.StorageHarness.Proposal)
+      )
+      |> put_rows(
+        :proposal_ops,
+        load_rows(db_path, "proposal_ops", tenant_id, Primeradiant.StorageHarness.ProposalOp)
+      )
+      |> put_rows(
+        :proposal_decisions,
+        load_rows(
+          db_path,
+          "proposal_decisions",
+          tenant_id,
+          Primeradiant.StorageHarness.ProposalDecision
+        )
+      )
+      |> put_rows(
+        :graph_commits,
+        load_rows(db_path, "graph_commits", tenant_id, Primeradiant.StorageHarness.GraphCommit)
+      )
+      |> put_rows(
+        :authored_outputs,
+        load_rows(
+          db_path,
+          "authored_outputs",
+          tenant_id,
+          Primeradiant.StorageHarness.AuthoredOutput
+        )
+      )
+      |> put_rows(
+        :authored_output_units,
+        load_rows(
+          db_path,
+          "authored_output_units",
+          tenant_id,
+          Primeradiant.StorageHarness.AuthoredOutputUnit
+        )
+      )
+      |> put_rows(
+        :seen_states,
+        load_rows(db_path, "seen_states", tenant_id, Primeradiant.StorageHarness.SeenState)
+      )
+      |> put_rows(
+        :seen_state_refs,
+        load_rows(db_path, "seen_state_refs", tenant_id, Primeradiant.StorageHarness.SeenStateRef)
+      )
+      |> put_rows(
+        :soup_nodes,
+        load_rows(db_path, "soup_nodes", tenant_id, Primeradiant.StorageHarness.SoupNode)
+      )
+      |> put_rows(
+        :edges,
+        load_rows(db_path, "edges", tenant_id, Primeradiant.StorageHarness.Edge)
+      )
+      |> put_rows(
+        :story_fact_versions,
+        load_rows(
+          db_path,
+          "story_fact_versions",
+          tenant_id,
+          Primeradiant.StorageHarness.StoryFactVersion
+        )
+      )
+      |> put_rows(
+        :story_events,
+        load_rows(db_path, "story_events", tenant_id, Primeradiant.StorageHarness.StoryEvent)
+      )
+      |> put_rows(
+        :conflicts,
+        load_rows(db_path, "conflicts", tenant_id, Primeradiant.StorageHarness.Conflict)
+      )
+      |> put_rows(
+        :evidence_refs,
+        load_rows(db_path, "evidence_refs", tenant_id, Primeradiant.StorageHarness.EvidenceRef)
+      )
+      |> rebuild_source_ids()
+    else
+      Primeradiant.StorageHarness.State.new(tenant_id: tenant_id, user_id: "flynn")
+    end
+  end
+
+  def merge_state(%Primeradiant.StorageHarness.State{} = prior, current) do
+    %Primeradiant.StorageHarness.State{
+      prior
+      | source_ids: Map.merge(prior.source_ids, current.source_ids)
+    }
+    |> merge_rows(:raw_inputs, current.raw_inputs)
+    |> merge_rows(:inputs, current.inputs)
+    |> merge_rows(:agent_runs, current.agent_runs)
+    |> merge_rows(:evidence_refs, current.evidence_refs)
   end
 
   def changed_stories_report(db_path, tenant_id, source_summary, ingestion_report) do
@@ -84,6 +202,7 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
         story_events: count(db_path, "story_events", tenant_id),
         evidence_refs: count(db_path, "evidence_refs", tenant_id)
       },
+      seen_state_delta: seen_state_delta_report(db_path, tenant_id),
       extraction_quality: extraction_quality_report(db_path, tenant_id),
       ingestion: ingestion_report,
       changed_stories: changed_stories
@@ -118,6 +237,48 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
   end
 
   def table_count(db_path, table, tenant_id), do: count(db_path, table, tenant_id)
+
+  defp seen_state_delta_report(db_path, tenant_id) do
+    %{
+      authored_outputs: count(db_path, "authored_outputs", tenant_id),
+      authored_output_units: count(db_path, "authored_output_units", tenant_id),
+      seen_states: count(db_path, "seen_states", tenant_id),
+      seen_state_refs: count(db_path, "seen_state_refs", tenant_id),
+      current_seen_refs:
+        query_json(db_path, """
+        SELECT json_object(
+          'seen_state_id', seen_states.id,
+          'user_id', seen_states.user_id,
+          'story_id', seen_states.story_id,
+          'seen_story_version', seen_states.seen_story_version,
+          'seen_at', seen_states.seen_at,
+          'ref_kind', seen_state_refs.ref_kind,
+          'ref_id', seen_state_refs.ref_id,
+          'authored_output_id', seen_state_refs.authored_output_id
+        )
+        FROM seen_states
+        JOIN seen_state_refs ON seen_state_refs.seen_state_id = seen_states.id
+        WHERE seen_states.tenant_id = #{sql_quote(tenant_id)}
+        ORDER BY seen_states.seen_at, seen_state_refs.ref_kind, seen_state_refs.ref_id;
+        """),
+      delta_outputs:
+        query_json(db_path, """
+        SELECT json_object(
+          'delta_report_id', authored_outputs.id,
+          'user_id', authored_outputs.user_id,
+          'story_id', authored_outputs.story_id,
+          'story_version', authored_outputs.story_version,
+          'verified', authored_outputs.verified,
+          'unit_count', COUNT(authored_output_units.id)
+        )
+        FROM authored_outputs
+        LEFT JOIN authored_output_units ON authored_output_units.authored_output_id = authored_outputs.id
+        WHERE authored_outputs.tenant_id = #{sql_quote(tenant_id)}
+        GROUP BY authored_outputs.id
+        ORDER BY authored_outputs.inserted_at;
+        """)
+    }
+  end
 
   defp extraction_quality_report(db_path, tenant_id) do
     counts =
@@ -297,6 +458,31 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
     )
   end
 
+  defp row_map(:authored_outputs, row) do
+    take(
+      row,
+      ~w(id tenant_id user_id story_id output_type content evidence_packet verified story_version status inserted_at updated_at)a
+    )
+  end
+
+  defp row_map(:authored_output_units, row) do
+    take(
+      row,
+      ~w(id tenant_id authored_output_id position unit_type content story_id evidence_refs claim_refs inserted_at)a
+    )
+  end
+
+  defp row_map(:seen_states, row) do
+    take(
+      row,
+      ~w(id tenant_id user_id story_id seen_story_version last_authored_output_id seen_at inserted_at updated_at)a
+    )
+  end
+
+  defp row_map(:seen_state_refs, row) do
+    take(row, ~w(id tenant_id seen_state_id ref_kind ref_id authored_output_id inserted_at)a)
+  end
+
   defp row_map(:soup_nodes, row) do
     take(
       row,
@@ -404,6 +590,78 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
   defp decode_json(_value, default), do: default
 
   defp now, do: DateTime.utc_now() |> DateTime.truncate(:microsecond) |> DateTime.to_iso8601()
+
+  defp put_rows(state, field, rows), do: Map.put(state, field, rows)
+
+  defp merge_rows(state, field, rows), do: Map.update!(state, field, &uniq_by_id(&1 ++ rows))
+
+  defp uniq_by_id(rows), do: rows |> Enum.reverse() |> Enum.uniq_by(& &1.id) |> Enum.reverse()
+
+  defp rebuild_source_ids(state) do
+    source_ids =
+      Enum.reduce(state.inputs, state.source_ids, fn input, acc ->
+        Map.put(acc, {:input, "#{input.source_type}:#{input.external_id}"}, input.id)
+      end)
+      |> then(fn acc ->
+        Enum.reduce(state.stories, acc, &Map.put(&2, {:story, &1.story_key}, &1.id))
+      end)
+      |> then(fn acc ->
+        Enum.reduce(state.soup_nodes, acc, &Map.put(&2, {:node, &1.node_key}, &1.id))
+      end)
+      |> then(fn acc ->
+        Enum.reduce(state.agent_runs, acc, &Map.put(&2, {:agent_run, &1.agent_run_key}, &1.id))
+      end)
+      |> then(fn acc ->
+        Enum.reduce(state.proposals, acc, &Map.put(&2, {:proposal, &1.proposal_key}, &1.id))
+      end)
+
+    %{state | source_ids: source_ids}
+  end
+
+  defp load_rows(db_path, table, tenant_id, module) do
+    query_table_json(db_path, "SELECT * FROM #{table} WHERE tenant_id = #{sql_quote(tenant_id)};")
+    |> Enum.map(&row_struct(module, &1))
+  rescue
+    _ -> []
+  end
+
+  defp query_table_json(db_path, sql) do
+    case System.cmd("sqlite3", ["-cmd", ".mode json", db_path, sql], stderr_to_stdout: true) do
+      {output, 0} -> Jason.decode!(blank_json_array(output))
+      {_output, _status} -> []
+    end
+  end
+
+  defp blank_json_array(output) do
+    case String.trim(output) do
+      "" -> "[]"
+      json -> json
+    end
+  end
+
+  defp row_struct(module, row) do
+    attrs =
+      row
+      |> Map.new(fn {key, value} -> {String.to_atom(key), load_value(key, value)} end)
+
+    struct(module, attrs)
+  end
+
+  defp load_value(_key, nil), do: nil
+  defp load_value("confidence", value), do: Decimal.new(to_string(value))
+  defp load_value("verified", value), do: value in [1, true, "1"]
+
+  defp load_value(key, value)
+       when key in ~w(acl scope normalized facts background questions colors topic_tokens attrs payload evidence_refs changed_facts structural_facts background_facts evidence_packet claim_refs) and
+              is_binary(value),
+       do: decode_json(value, %{})
+
+  defp load_value(key, value)
+       when key in ~w(inserted_at updated_at started_at ended_at committed_at observed_at first_observed_at updated_at_story last_material_at seen_at) and
+              is_binary(value),
+       do: Primeradiant.StorageHarness.ChangesetStore.iso!(value)
+
+  defp load_value(_key, value), do: value
 
   defp sqlite!(db_path, sql) do
     sql_path =
@@ -559,6 +817,59 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
       UNIQUE (proposal_op_id)
     );
 
+    CREATE TABLE IF NOT EXISTS authored_outputs (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      story_id TEXT REFERENCES stories(id),
+      output_type TEXT NOT NULL,
+      content TEXT NOT NULL,
+      evidence_packet TEXT NOT NULL,
+      verified INTEGER NOT NULL,
+      story_version INTEGER,
+      status TEXT NOT NULL CHECK (status = 'recorded'),
+      inserted_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS authored_output_units (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      authored_output_id TEXT NOT NULL REFERENCES authored_outputs(id),
+      position INTEGER NOT NULL,
+      unit_type TEXT NOT NULL,
+      content TEXT NOT NULL,
+      story_id TEXT REFERENCES stories(id),
+      evidence_refs TEXT NOT NULL,
+      claim_refs TEXT NOT NULL,
+      inserted_at TEXT NOT NULL,
+      UNIQUE (authored_output_id, position)
+    );
+
+    CREATE TABLE IF NOT EXISTS seen_states (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      story_id TEXT NOT NULL REFERENCES stories(id),
+      seen_story_version INTEGER NOT NULL,
+      last_authored_output_id TEXT NOT NULL REFERENCES authored_outputs(id),
+      seen_at TEXT NOT NULL,
+      inserted_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE (tenant_id, user_id, story_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS seen_state_refs (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      seen_state_id TEXT NOT NULL REFERENCES seen_states(id),
+      ref_kind TEXT NOT NULL CHECK (ref_kind IN ('input', 'claim', 'story', 'edge', 'conflict', 'authored_output')),
+      ref_id TEXT NOT NULL,
+      authored_output_id TEXT NOT NULL REFERENCES authored_outputs(id),
+      inserted_at TEXT NOT NULL,
+      UNIQUE (seen_state_id, ref_kind, ref_id)
+    );
+
     CREATE TABLE IF NOT EXISTS soup_nodes (
       id TEXT PRIMARY KEY,
       tenant_id TEXT NOT NULL,
@@ -653,7 +964,7 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
     CREATE TABLE IF NOT EXISTS evidence_refs (
       id TEXT PRIMARY KEY,
       tenant_id TEXT NOT NULL,
-      subject_type TEXT NOT NULL CHECK (subject_type IN ('soup_node', 'proposal', 'proposal_op', 'edge', 'conflict', 'story_fact_version', 'story_event', 'graph_commit')),
+      subject_type TEXT NOT NULL CHECK (subject_type IN ('soup_node', 'proposal', 'proposal_op', 'edge', 'conflict', 'story_fact_version', 'story_event', 'graph_commit', 'authored_output_unit')),
       subject_id TEXT NOT NULL,
       input_id TEXT NOT NULL REFERENCES inputs(id),
       soup_node_id TEXT REFERENCES soup_nodes(id),
