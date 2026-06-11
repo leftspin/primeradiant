@@ -30,6 +30,8 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
   @identity_prompt """
   Decide story identity/shape for the admitted source evidence. Choose a stable story_key from the packet text.
   Compare the packet to visible_story_refs. Reuse an existing story_key only when source evidence is about the same story.
+  If a visible story already covers the same named company, product, person, event, place, or incident family,
+  you must reuse that story_key and classify the packet as substantive_update; do not invent a near-duplicate key.
   Do not use source-provided story labels. Return new_story or substantive_update with rationale.
   """
 
