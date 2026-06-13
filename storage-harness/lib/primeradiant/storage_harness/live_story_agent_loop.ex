@@ -21,6 +21,10 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
     StoryFactVersion
   }
 
+  @candidate_stopwords MapSet.new(
+                         ~w(a an and are as at be by for from has have in into is it its of on or the this to with without)
+                       )
+
   @system_prompt """
   You are a Prime Radiant story agent. Use only the bounded packet supplied in the user message.
   Source admission is evidence only; you own story/meaning output only when it is packet-grounded.
@@ -31,7 +35,8 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
   Decide story identity/shape for the admitted source evidence. Choose a stable story_key from the packet text.
   Compare the packet to visible_story_refs. Reuse an existing story_key only when source evidence is about the same story.
   If a visible story already covers the same named company, product, person, event, place, or incident family,
-  you must reuse that story_key and classify the packet as substantive_update; do not invent a near-duplicate key.
+  you must reuse that story_key. Use the soup_candidate_hint when present; it is computed from committed
+  story/input overlap in this packet, not from source-provided labels.
   Do not use source-provided story labels. Return new_story or substantive_update with rationale.
   """
 
@@ -117,17 +122,21 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
       eligible_agent_families: [:story_identity, :meaning_update]
     }
 
+    soup_candidate_hint = soup_candidate_hint(state, input, actor_id)
+
     {state, identity_run, identity} =
       invoke_agent(
         state,
         config(:story_identity),
-        packet(state, input, admission, :story_identity, correlation_id, actor_id, %{}),
+        packet(state, input, admission, :story_identity, correlation_id, actor_id, %{
+          soup_candidate_hint: soup_candidate_hint
+        }),
         actor_id,
         adapter,
         correlation_id
       )
 
-    story_key = story_key(identity.output, input)
+    story_key = story_key(identity.output, input, soup_candidate_hint)
 
     {state, meaning_run, meaning} =
       invoke_agent(
@@ -138,7 +147,8 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
             story_key: story_key,
             classification: classification(identity.output, "new_story"),
             confidence: confidence(identity.output, 0.66)
-          }
+          },
+          soup_candidate_hint: soup_candidate_hint
         }),
         actor_id,
         adapter,
@@ -151,6 +161,7 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
         input,
         source_ref,
         story_key,
+        soup_candidate_hint,
         identity,
         meaning,
         evidence_refs,
@@ -251,6 +262,7 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
          input,
          source_ref,
          story_key,
+         soup_candidate_hint,
          identity,
          meaning,
          evidence_refs,
@@ -258,8 +270,14 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
          correlation_id
        ) do
     confidence = confidence(meaning.output, confidence(identity.output, 0.66))
-    changed_facts = changed_facts(meaning.output, input)
+    raw_changed_facts = changed_facts(meaning.output, input)
     title = story_title(meaning.output, input)
+    existing_story? = Enum.any?(state.stories, &(&1.story_key == story_key))
+    event_classification =
+      event_classification(meaning.output, not existing_story?, soup_candidate_hint)
+
+    changed_facts =
+      if material_event_classification?(event_classification), do: raw_changed_facts, else: %{}
 
     {state, story, story_inserted?} =
       upsert_story(
@@ -274,7 +292,10 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
       )
 
     story_version = story.version
-    event_classification = event_classification(meaning.output, story_inserted?)
+    event_classification =
+      if story_inserted?,
+        do: "split",
+        else: event_classification
 
     proposal =
       ChangesetStore.insert!(Proposal, %{
@@ -302,6 +323,7 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
           "classification" => event_classification,
           "changed_facts" => changed_facts,
           "source_ref" => source_ref,
+          "soup_candidate_hint" => soup_candidate_hint,
           "correlation_id" => correlation_id,
           "identity_agent_run_id" => identity.run.id,
           "meaning_agent_run_id" => meaning.run.id,
@@ -523,13 +545,17 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
             updated_at_story: input.observed_at,
             last_material_at:
               if(
-                material_classification?(classification(meaning.output, "substantive_update")),
+                material_event_classification?(
+                  event_classification(meaning.output, false, nil)
+                ) and changed_facts != %{},
                 do: input.observed_at,
                 else: existing.last_material_at
               ),
             structural_facts:
               if(
-                material_classification?(classification(meaning.output, "substantive_update")),
+                material_event_classification?(
+                  event_classification(meaning.output, false, nil)
+                ) and changed_facts != %{},
                 do: Map.merge(existing.structural_facts || %{}, changed_facts),
                 else: existing.structural_facts || %{}
               ),
@@ -706,7 +732,40 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
     )
   end
 
-  defp visible_story_refs(state, _actor_id) do
+  defp soup_candidate_hint(state, input, actor_id) do
+    input_tokens = content_tokens([input.title, input.body_text])
+
+    state.stories
+    |> Enum.map(fn story ->
+      story_inputs = visible_story_inputs(state, story, actor_id)
+      story_tokens = content_tokens(Enum.flat_map(story_inputs, &[&1.title, &1.body_text]))
+      overlap = MapSet.intersection(input_tokens, story_tokens) |> MapSet.to_list()
+
+      %{
+        story_key: story.story_key,
+        overlap_tokens: overlap,
+        overlap_count: length(overlap),
+        input_token_count: MapSet.size(input_tokens),
+        evidence_input_refs: Enum.map(story_inputs, &Admission.input_ref/1)
+      }
+    end)
+    |> Enum.filter(&(&1.overlap_count >= 10))
+    |> Enum.sort_by(&{-&1.overlap_count, &1.story_key})
+    |> List.first()
+    |> case do
+      nil ->
+        nil
+
+      candidate ->
+        Map.merge(candidate, %{
+          suggested_story_key: candidate.story_key,
+          suggested_classification: "no_op",
+          rationale: "committed story/input token overlap indicates repeated nonmaterial source pressure"
+        })
+    end
+  end
+
+  defp visible_story_refs(state, actor_id) do
     state.stories
     |> Enum.map(fn story ->
       %{
@@ -716,9 +775,34 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
         state: story.state,
         structural_facts: story.structural_facts || %{},
         updated_at_story: story.updated_at_story && DateTime.to_iso8601(story.updated_at_story),
-        last_material_at: story.last_material_at && DateTime.to_iso8601(story.last_material_at)
+        last_material_at: story.last_material_at && DateTime.to_iso8601(story.last_material_at),
+        evidence_input_refs: Enum.map(visible_story_inputs(state, story, actor_id), &Admission.input_ref/1)
       }
     end)
+  end
+
+  defp visible_story_inputs(state, story, actor_id) do
+    state.story_events
+    |> Enum.filter(&(&1.story_id == story.id))
+    |> Enum.map(fn event -> Enum.find(state.inputs, &(&1.id == event.input_id)) end)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.filter(&input_visible_to_actor?(&1, actor_id))
+    |> Enum.uniq_by(& &1.id)
+  end
+
+  defp input_visible_to_actor?(input, actor_id) do
+    acl = input.acl || %{"privacy" => "public"}
+    acl["privacy"] == "public" or actor_id in (acl["participants"] || [])
+  end
+
+  defp content_tokens(values) do
+    values
+    |> Enum.reject(&is_nil/1)
+    |> Enum.join(" ")
+    |> String.downcase()
+    |> String.split(~r/[^a-z0-9]+/, trim: true)
+    |> Enum.reject(&(String.length(&1) < 3 or MapSet.member?(@candidate_stopwords, &1)))
+    |> MapSet.new()
   end
 
   defp config(:story_identity) do
@@ -758,7 +842,18 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
 
   defp normalize_output(output), do: Admission.normalize_keys(output || %{})
 
-  defp story_key(output, input), do: slug(output["story_key"] || input.title || input.external_id)
+  defp story_key(output, input, nil), do: slug(output["story_key"] || input.title || input.external_id)
+
+  defp story_key(output, input, hint) do
+    output_key = slug(output["story_key"] || input.title || input.external_id)
+
+    case hint do
+      %{suggested_story_key: key} when is_binary(key) and key != "" -> key
+      %{"suggested_story_key" => key} when is_binary(key) and key != "" -> key
+      _ -> output_key
+    end
+  end
+
   defp story_title(output, input), do: output["title"] || input.title || input.external_id
 
   defp classification(output, default) do
@@ -779,18 +874,24 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
     end
   end
 
-  defp event_classification(_output, true), do: "split"
+  defp event_classification(_output, true, _hint), do: "split"
 
-  defp event_classification(output, false) do
+  defp event_classification(output, false, hint) do
     case classification(output, "substantive_update") do
       "duplicate" -> "duplicate"
       "no_op" -> "no_op"
       "repeated_noop_input" -> "no_op"
       "adds_color" -> "color"
       "stale" -> "stale"
-      _ -> "attach"
+      _ -> hinted_event_classification(hint)
     end
   end
+
+  defp hinted_event_classification(%{suggested_classification: "no_op"}), do: "no_op"
+
+  defp hinted_event_classification(%{"suggested_classification" => "no_op"}), do: "no_op"
+
+  defp hinted_event_classification(_hint), do: "attach"
 
   defp edge_type_for_event("duplicate"), do: "duplicates"
   defp edge_type_for_event("no_op"), do: "duplicates"
@@ -798,9 +899,7 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
   defp edge_type_for_event("conflict"), do: "contradicts"
   defp edge_type_for_event(_classification), do: "supports"
 
-  defp material_classification?(classification) do
-    classification in ["new_story", "substantive_update"]
-  end
+  defp material_event_classification?(classification), do: classification in ["split", "attach", "conflict"]
 
   defp operation_family(output) do
     case to_string(output["operation_family"] || "commit_story_meaning") do

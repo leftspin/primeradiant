@@ -614,6 +614,84 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     end)
   end
 
+  test "live story overlap hint preserves nonmaterial no-op when model overstates update" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-daemon-news-overlap-noop-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    soup_db_path = Path.join(tmp, "primeradiant-event-soup.sqlite3")
+    raw_path = Path.join(tmp, "archive.jsonl")
+
+    rows = [
+      envelope(
+        "Xbox exclusive strategy reset",
+        "Xbox exclusive strategy reset says Asha Sharma wants exclusive content and case by case decisions for console releases."
+      ),
+      envelope(
+        "Xbox exclusive strategy reset follow-up",
+        "Xbox exclusive strategy reset repeats that Asha Sharma wants exclusive content and case by case decisions for console releases."
+      )
+    ]
+
+    offsets = write_archive!(raw_path, rows)
+
+    rows
+    |> Enum.with_index(1)
+    |> Enum.each(fn {row, index} ->
+      event =
+        committed_source_item_event(
+          "event-agent-news-#{index}",
+          raw_path,
+          elem(Enum.at(offsets, index - 1), 0),
+          elem(Enum.at(offsets, index - 1), 1),
+          row
+        )
+
+      {:ok, _state, _report} =
+        DaemonNewsEvent.consume_event(event,
+          soup_db_path: soup_db_path,
+          tenant_id: @tenant,
+          actor_id: "flynn",
+          story_agent_loop?: true,
+          story_agent_opts: [adapter: &stub_story_agent_overstates_repeated_update/3]
+        )
+    end)
+
+    events =
+      sqlite_json_rows!(
+        soup_db_path,
+        """
+        SELECT story_version, classification, changed_facts
+        FROM story_events
+        WHERE tenant_id = '#{@tenant}'
+        ORDER BY story_version;
+        """
+      )
+
+    assert Enum.map(events, & &1["classification"]) == ["split", "no_op"]
+    assert Jason.decode!(List.last(events)["changed_facts"]) == %{}
+
+    [unit] =
+      sqlite_json_rows!(
+        soup_db_path,
+        """
+        SELECT content, claim_refs
+        FROM authored_output_units
+        WHERE tenant_id = '#{@tenant}' AND position = 0
+        ORDER BY inserted_at DESC
+        LIMIT 1;
+        """
+      )
+
+    assert String.contains?(unit["content"], "no material new update")
+    assert Jason.decode!(unit["claim_refs"]) == []
+  end
+
   test "live story-agent loop does not claim story proof with zero admissions" do
     state = State.new(tenant_id: @tenant, user_id: "flynn")
 
@@ -1652,6 +1730,42 @@ defmodule Primeradiant.DaemonNewsReplayTest do
         "changed_facts" => changed_facts,
         "confidence" => 0.79,
         "rationale" => "packet is classified against the existing triage story"
+      },
+      model: "stub-meaning-agent",
+      model_route: "test://meaning-update",
+      producer_kind: "test_stub",
+      decision_source: "test_stub",
+      invocation_transport_id: "stub-meaning-update",
+      duration_ms: 1
+    }
+  end
+
+  defp stub_story_agent_overstates_repeated_update(%{role: :story_identity}, _packet, _ctx) do
+    %{
+      output: %{
+        "story_key" => "xbox-exclusive-strategy-reset",
+        "classification" => "substantive_update",
+        "confidence" => 0.82,
+        "rationale" => "packet identifies Xbox exclusivity strategy"
+      },
+      model: "stub-story-agent",
+      model_route: "test://story-identity",
+      producer_kind: "test_stub",
+      decision_source: "test_stub",
+      invocation_transport_id: "stub-story-identity",
+      duration_ms: 1
+    }
+  end
+
+  defp stub_story_agent_overstates_repeated_update(%{role: :meaning_update}, _packet, _ctx) do
+    %{
+      output: %{
+        "story_key" => "xbox-exclusive-strategy-reset",
+        "operation_family" => "commit_story_meaning",
+        "classification" => "substantive_update",
+        "changed_facts" => %{"strategy" => "exclusive-content-case-by-case"},
+        "confidence" => 0.79,
+        "rationale" => "model overstated repeated source pressure as a material update"
       },
       model: "stub-meaning-agent",
       model_route: "test://meaning-update",
