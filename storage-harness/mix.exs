@@ -24,6 +24,8 @@ defmodule PrimeradiantStorageHarness.MixProject do
       {:ecto, "~> 3.13"},
       {:ecto_sql, "~> 3.13"},
       {:jason, "~> 1.4"},
+      {:plug, "~> 1.17"},
+      {:plug_cowboy, "~> 2.7"},
       {:postgrex, ">= 0.0.0"},
       {:primeradiant_proof_harness, path: "../proof-harness"}
     ]
