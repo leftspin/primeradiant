@@ -82,7 +82,7 @@ Reporter-facing Prime Radiant soup API:
 
 ```sh
 mix primeradiant.soup_api \
-  --soup-db /home/clu/primeradiant-runs/live-<run-id>/soup.sqlite3 \
+  --soup-db /home/clu/.local/state/primeradiant/soup-api/soup.sqlite3 \
   --tenant 00000000-0000-0000-0000-00000000t328 \
   --token <internal-service-token> \
   --ack-log /home/clu/.local/state/primeradiant/soup-api/acks.jsonl \
@@ -95,6 +95,23 @@ auth. It exposes `ready`, `feed`, `delta`, and `ack` for Reporter/News to read
 Prime Radiant-owned soup material without binding to run directories, SQLite
 internals, proof harness artifacts, daemon-news cursors, or authored projection
 framing.
+
+The live Subspace daemon watcher must write to the same stable soup DB path that
+the API serves. This is the default EURISKO soup DB target; pass it explicitly
+when proving or operating the runtime:
+
+```sh
+scripts/r1/live_subspace_daemon_watcher_once.sh \
+  --source-db /Volumes/Microverse/openclaw/state/.openclaw/subspace-daemon/data/daemon.sqlite3 \
+  --tenant 00000000-0000-0000-0000-00000000t328 \
+  --state-root /Users/mike/.local/state/primeradiant/t328-live-watcher \
+  --eurisko-target clu@eurisko \
+  --eurisko-repo /home/clu/src/primeradiant \
+  --eurisko-soup-db /home/clu/.local/state/primeradiant/soup-api/soup.sqlite3
+```
+
+Per-run soup DBs remain useful as bounded proof artifacts, but they are not the
+Reporter product surface.
 
 Any launchd, systemd, cron, autostart, or permanent service registration remains
 a separate deploy step unless a supported product deploy path explicitly owns

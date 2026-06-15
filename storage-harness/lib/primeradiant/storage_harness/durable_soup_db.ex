@@ -27,6 +27,7 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
     sql =
       [
         "PRAGMA foreign_keys = ON;",
+        "BEGIN IMMEDIATE;",
         schema_sql(),
         clear_tenant_sql(state.tenant_id),
         replay_run_sql(state, attrs),
@@ -46,7 +47,8 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
         rows_sql(:story_fact_versions, state.story_fact_versions),
         rows_sql(:story_events, state.story_events),
         rows_sql(:conflicts, state.conflicts),
-        rows_sql(:evidence_refs, state.evidence_refs)
+        rows_sql(:evidence_refs, state.evidence_refs),
+        "COMMIT;"
       ]
       |> Enum.join("\n")
 

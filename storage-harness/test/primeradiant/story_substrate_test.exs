@@ -206,7 +206,7 @@ defmodule Primeradiant.StorySubstrateTest do
     ack_log_path =
       Path.join(
         System.tmp_dir!(),
-        "primeradiant-soup-ack-#{System.unique_integer([:positive])}.jsonl"
+        "primeradiant-soup-ack-#{System.system_time(:nanosecond)}-#{System.unique_integer([:positive])}.jsonl"
       )
 
     body =
@@ -246,7 +246,7 @@ defmodule Primeradiant.StorySubstrateTest do
     db_path =
       Path.join(
         System.tmp_dir!(),
-        "primeradiant-soup-#{System.unique_integer([:positive])}.sqlite3"
+        "primeradiant-soup-#{System.system_time(:nanosecond)}-#{System.unique_integer([:positive])}.sqlite3"
       )
 
     DurableSoupDb.persist!(db_path, state, %{

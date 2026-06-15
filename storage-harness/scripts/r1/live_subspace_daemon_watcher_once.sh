@@ -4,7 +4,7 @@ set -euo pipefail
 usage() {
   cat <<'USAGE'
 Usage:
-  live_subspace_daemon_watcher_once.sh --source-db PATH --tenant TENANT --state-root DIR --eurisko-target USER@HOST --eurisko-repo DIR [--actor ACTOR] [--story-agents true|false] [--ssh-key PATH] [--eurisko-mix PATH] [--eurisko-erlang-bin DIR] [--eurisko-sqlite-bin DIR] [--limit N] [--timeout-seconds N] [--poll-interval-seconds N] [--debounce-seconds N] [--run-id ID]
+  live_subspace_daemon_watcher_once.sh --source-db PATH --tenant TENANT --state-root DIR --eurisko-target USER@HOST --eurisko-repo DIR [--actor ACTOR] [--story-agents true|false] [--ssh-key PATH] [--eurisko-mix PATH] [--eurisko-erlang-bin DIR] [--eurisko-sqlite-bin DIR] [--limit N] [--timeout-seconds N] [--poll-interval-seconds N] [--debounce-seconds N] [--run-id ID] [--eurisko-soup-db PATH]
 
 Runs one live Subspace daemon SQLite DB/WAL wakeup pass on the source host,
 ships bounded Primeradiant event packages to EURISKO, and consumes them there
@@ -29,6 +29,7 @@ TIMEOUT_SECONDS="300"
 POLL_INTERVAL_SECONDS="2"
 DEBOUNCE_SECONDS="2"
 RUN_ID=""
+EURISKO_SOUP_DB=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -48,6 +49,7 @@ while [[ $# -gt 0 ]]; do
     --poll-interval-seconds) POLL_INTERVAL_SECONDS="$2"; shift 2 ;;
     --debounce-seconds) DEBOUNCE_SECONDS="$2"; shift 2 ;;
     --run-id) RUN_ID="$2"; shift 2 ;;
+    --eurisko-soup-db) EURISKO_SOUP_DB="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown argument: $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -81,7 +83,9 @@ PACKAGE_ROOT="$STATE_ROOT/packages/$RUN_ID"
 LOCAL_RUN_ROOT="$STATE_ROOT/local-consume-placeholder/$RUN_ID"
 EURISKO_HANDOFF_ROOT="/home/clu/primeradiant-handoffs/$RUN_ID"
 EURISKO_RUN_ROOT="/home/clu/primeradiant-runs/$RUN_ID"
-EURISKO_SOUP_DB="$EURISKO_RUN_ROOT/soup.sqlite3"
+if [[ -z "$EURISKO_SOUP_DB" ]]; then
+  EURISKO_SOUP_DB="/home/clu/.local/state/primeradiant/soup-api/soup.sqlite3"
+fi
 
 mkdir -p "$STATE_ROOT" "$PACKAGE_ROOT" "$LOCAL_RUN_ROOT"
 
@@ -199,6 +203,7 @@ jq -s \
   --arg eurisko_repo "$EURISKO_REPO" \
   --arg eurisko_handoff_root "$EURISKO_HANDOFF_ROOT" \
   --arg eurisko_run_root "$EURISKO_RUN_ROOT" \
+  --arg eurisko_soup_db "$EURISKO_SOUP_DB" \
   '{
     run_id: $run_id,
     source_db_path: $source_db,
@@ -212,7 +217,7 @@ jq -s \
     eurisko_repo: $eurisko_repo,
     eurisko_handoff_root: $eurisko_handoff_root,
     eurisko_run_root: $eurisko_run_root,
-    eurisko_soup_db: ($eurisko_run_root + "/soup.sqlite3"),
+    eurisko_soup_db: $eurisko_soup_db,
     cursor_catchup_before_wait_count: $catchup_count,
     local_watch_report: $watch_report,
     consumed: .

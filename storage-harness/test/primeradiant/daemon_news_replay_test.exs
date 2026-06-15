@@ -1333,7 +1333,12 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert source =~ "--actor '$ACTOR' --story-agents --soup-db '$EURISKO_SOUP_DB'"
     assert source =~ "--actor '$ACTOR' --soup-db '$EURISKO_SOUP_DB'"
     assert source =~ "--consume-packages false"
-    assert source =~ "EURISKO_SOUP_DB=\"$EURISKO_RUN_ROOT/soup.sqlite3\""
+    assert source =~ "--eurisko-soup-db PATH"
+
+    assert source =~
+             "EURISKO_SOUP_DB=\"/home/clu/.local/state/primeradiant/soup-api/soup.sqlite3\""
+
+    assert source =~ "eurisko_soup_db: $eurisko_soup_db"
     assert emitter_source =~ ~s(sqlite3 -readonly -cmd ".timeout 10000" -json "$SOURCE_DB")
   end
 
@@ -1715,11 +1720,20 @@ defmodule Primeradiant.DaemonNewsReplayTest do
   defp stub_story_agent_with_nonmaterial_deltas(%{role: :meaning_update}, packet, _ctx) do
     {classification, changed_facts} =
       case packet.external_id do
-        "event-agent-news-1" -> {"substantive_update", %{"service" => "triage", "state" => "open"}}
-        "event-agent-news-2" -> {"duplicate", %{}}
-        "event-agent-news-3" -> {"no_op", %{}}
-        "event-agent-news-4" -> {"stale", %{}}
-        "event-agent-news-5" -> {"adds_color", %{}}
+        "event-agent-news-1" ->
+          {"substantive_update", %{"service" => "triage", "state" => "open"}}
+
+        "event-agent-news-2" ->
+          {"duplicate", %{}}
+
+        "event-agent-news-3" ->
+          {"no_op", %{}}
+
+        "event-agent-news-4" ->
+          {"stale", %{}}
+
+        "event-agent-news-5" ->
+          {"adds_color", %{}}
       end
 
     %{
