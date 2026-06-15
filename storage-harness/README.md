@@ -78,6 +78,24 @@ as a wakeup bell. It then runs the normal read-only cursor importer; cursoring,
 dedupe, row reads, raw digest checks, and story decisions remain Primeradiant
 work. The file event is not a story payload and is not trusted as story fact.
 
+Reporter-facing Prime Radiant soup API:
+
+```sh
+mix primeradiant.soup_api \
+  --soup-db /home/clu/primeradiant-runs/live-<run-id>/soup.sqlite3 \
+  --tenant 00000000-0000-0000-0000-00000000t328 \
+  --token <internal-service-token> \
+  --ack-log /home/clu/.local/state/primeradiant/soup-api/acks.jsonl \
+  --ip 0.0.0.0 \
+  --port 4084
+```
+
+The canonical internal HTTP JSON surface is `/api/v1/soup` with Bearer service
+auth. It exposes `ready`, `feed`, `delta`, and `ack` for Reporter/News to read
+Prime Radiant-owned soup material without binding to run directories, SQLite
+internals, proof harness artifacts, daemon-news cursors, or authored projection
+framing.
+
 Any launchd, systemd, cron, autostart, or permanent service registration remains
 a separate deploy step unless a supported product deploy path explicitly owns
 that runtime shape.

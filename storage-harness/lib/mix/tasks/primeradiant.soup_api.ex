@@ -1,11 +1,11 @@
-defmodule Mix.Tasks.Primeradiant.StorySubstrateApi do
+defmodule Mix.Tasks.Primeradiant.SoupApi do
   @moduledoc false
 
   use Mix.Task
 
   alias Primeradiant.StorySubstrate.Router
 
-  @shortdoc "Run the internal story-substrate HTTP JSON API"
+  @shortdoc "Run the internal Prime Radiant soup HTTP JSON API"
 
   @impl Mix.Task
   def run(args) do
@@ -34,12 +34,12 @@ defmodule Mix.Tasks.Primeradiant.StorySubstrateApi do
       Plug.Cowboy.http(
         Router,
         [state: {:durable_soup_db, soup_db, tenant}, token: token, ack_log_path: ack_log],
-        ref: :"primeradiant_story_substrate_#{port}",
+        ref: :"primeradiant_soup_api_#{port}",
         ip: ip,
         port: port
       )
 
-    Mix.shell().info("story-substrate API listening on #{port}")
+    Mix.shell().info("Prime Radiant soup API listening on #{port}")
     Process.sleep(:infinity)
   end
 

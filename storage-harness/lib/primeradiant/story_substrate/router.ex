@@ -10,33 +10,10 @@ defmodule Primeradiant.StorySubstrate.Router do
   plug(Plug.Parsers, parsers: [:json], pass: ["application/json"], json_decoder: Jason)
   plug(:dispatch)
 
-  get "/api/v1/story-substrate/ready" do
-    conn
-    |> authorize()
-    |> respond(fn state, _assigns -> StorySubstrate.ready(state, conn.params) end)
-  end
-
-  get "/api/v1/story-substrate/feed" do
-    conn
-    |> authorize()
-    |> respond(fn state, _assigns -> StorySubstrate.feed(state, conn.params) end)
-  end
-
-  get "/api/v1/story-substrate/delta" do
-    conn
-    |> authorize()
-    |> respond(fn state, _assigns -> StorySubstrate.delta(state, conn.params) end)
-  end
-
-  post "/api/v1/story-substrate/ack" do
-    conn
-    |> authorize()
-    |> respond(fn state, assigns ->
-      StorySubstrate.ack(state, conn.body_params,
-        ack_log_path: assigns.story_substrate_ack_log_path
-      )
-    end)
-  end
+  get("/api/v1/soup/ready", do: ready(conn))
+  get("/api/v1/soup/feed", do: feed(conn))
+  get("/api/v1/soup/delta", do: delta(conn))
+  post("/api/v1/soup/ack", do: ack(conn))
 
   match _ do
     send_json(conn, 404, %{error: "not_found"})
@@ -57,6 +34,34 @@ defmodule Primeradiant.StorySubstrate.Router do
       ["Bearer " <> ^token] -> conn
       _ -> conn |> send_json(401, %{error: "unauthorized"}) |> halt()
     end
+  end
+
+  defp ready(conn) do
+    conn
+    |> authorize()
+    |> respond(fn state, _assigns -> StorySubstrate.ready(state, conn.params) end)
+  end
+
+  defp feed(conn) do
+    conn
+    |> authorize()
+    |> respond(fn state, _assigns -> StorySubstrate.feed(state, conn.params) end)
+  end
+
+  defp delta(conn) do
+    conn
+    |> authorize()
+    |> respond(fn state, _assigns -> StorySubstrate.delta(state, conn.params) end)
+  end
+
+  defp ack(conn) do
+    conn
+    |> authorize()
+    |> respond(fn state, assigns ->
+      StorySubstrate.ack(state, conn.body_params,
+        ack_log_path: assigns.story_substrate_ack_log_path
+      )
+    end)
   end
 
   defp respond(%Plug.Conn{halted: true} = conn, _fun), do: conn

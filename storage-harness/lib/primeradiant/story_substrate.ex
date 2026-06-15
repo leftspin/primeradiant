@@ -1,7 +1,7 @@
 defmodule Primeradiant.StorySubstrate do
   @moduledoc false
 
-  @contract_version "story_substrate.v1"
+  @contract_version "soup.v1"
   @retained_event_window 100
 
   alias Primeradiant.StorageHarness.State
@@ -118,7 +118,7 @@ defmodule Primeradiant.StorySubstrate do
   end
 
   def epoch(%State{} = state) do
-    :crypto.hash(:sha256, "#{state.tenant_id}:story-substrate:v1")
+    :crypto.hash(:sha256, "#{state.tenant_id}:soup:v1")
     |> Base.url_encode64(padding: false)
   end
 

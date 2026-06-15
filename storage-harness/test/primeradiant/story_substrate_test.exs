@@ -8,7 +8,7 @@ defmodule Primeradiant.StorySubstrateTest do
   alias Primeradiant.StorageHarness.{DurableSoupDb, FixtureImporter}
 
   @fixture_path Path.expand("../../../proof-harness/priv/fixtures/primeradiant_golden", __DIR__)
-  @ack_log_path Path.join(System.tmp_dir!(), "primeradiant-story-substrate-test-ack.jsonl")
+  @ack_log_path Path.join(System.tmp_dir!(), "primeradiant-soup-test-ack.jsonl")
   @opts [token: "internal-token", ack_log_path: @ack_log_path]
 
   setup_all do
@@ -16,15 +16,15 @@ defmodule Primeradiant.StorySubstrateTest do
     {:ok, state: state}
   end
 
-  test "ready returns ready substrate metadata for Reporter news morning", %{state: state} do
+  test "ready returns ready soup metadata for Reporter news morning", %{state: state} do
     body =
       :get
-      |> conn("/api/v1/story-substrate/ready?consumer=reporter&projection=news-morning")
+      |> conn("/api/v1/soup/ready?consumer=reporter&projection=news-morning")
       |> put_req_header("authorization", "Bearer internal-token")
       |> Router.call(Keyword.put(@opts, :state, state))
       |> json()
 
-    assert body["contract_version"] == "story_substrate.v1"
+    assert body["contract_version"] == "soup.v1"
     assert body["status"] in ["ready", "degraded"]
     assert is_binary(body["substrate_cursor"])
     assert is_binary(body["substrate_epoch"])
@@ -35,7 +35,7 @@ defmodule Primeradiant.StorySubstrateTest do
   test "ready blocks unsupported projection instead of allowing render", %{state: state} do
     body =
       :get
-      |> conn("/api/v1/story-substrate/ready?consumer=reporter&projection=other")
+      |> conn("/api/v1/soup/ready?consumer=reporter&projection=other")
       |> put_req_header("authorization", "Bearer internal-token")
       |> Router.call(Keyword.put(@opts, :state, state))
       |> json()
@@ -44,17 +44,28 @@ defmodule Primeradiant.StorySubstrateTest do
     assert [%{"code" => "unsupported_projection"}] = body["blockers"]
   end
 
+  test "legacy story-substrate route is not exposed", %{state: state} do
+    conn =
+      :get
+      |> conn("/api/v1/story-substrate/ready?consumer=reporter&projection=news-morning")
+      |> put_req_header("authorization", "Bearer internal-token")
+      |> Router.call(Keyword.put(@opts, :state, state))
+
+    assert conn.status == 404
+    assert json(conn)["error"] == "not_found"
+  end
+
   test "feed returns required story item fields without authored projection framing", %{
     state: state
   } do
     body =
       :get
-      |> conn("/api/v1/story-substrate/feed?consumer=reporter&projection=news-morning&limit=2")
+      |> conn("/api/v1/soup/feed?consumer=reporter&projection=news-morning&limit=2")
       |> put_req_header("authorization", "Bearer internal-token")
       |> Router.call(Keyword.put(@opts, :state, state))
       |> json()
 
-    assert body["contract_version"] == "story_substrate.v1"
+    assert body["contract_version"] == "soup.v1"
     assert length(body["items"]) == 2
     assert body["blockers"] == []
 
@@ -75,7 +86,7 @@ defmodule Primeradiant.StorySubstrateTest do
   test "feed does not return material for blocked readiness params", %{state: state} do
     body =
       :get
-      |> conn("/api/v1/story-substrate/feed?consumer=reporter&projection=other&limit=2")
+      |> conn("/api/v1/soup/feed?consumer=reporter&projection=other&limit=2")
       |> put_req_header("authorization", "Bearer internal-token")
       |> Router.call(Keyword.put(@opts, :state, state))
       |> json()
@@ -87,9 +98,7 @@ defmodule Primeradiant.StorySubstrateTest do
   test "delta returns explicit gap for unknown cursor and no silent gap", %{state: state} do
     body =
       :get
-      |> conn(
-        "/api/v1/story-substrate/delta?consumer=reporter&projection=news-morning&after=unknown"
-      )
+      |> conn("/api/v1/soup/delta?consumer=reporter&projection=news-morning&after=unknown")
       |> put_req_header("authorization", "Bearer internal-token")
       |> Router.call(Keyword.put(@opts, :state, state))
       |> json()
@@ -105,7 +114,7 @@ defmodule Primeradiant.StorySubstrateTest do
     body =
       :get
       |> conn(
-        "/api/v1/story-substrate/delta?consumer=reporter&projection=news-morning&after=#{expired_cursor}"
+        "/api/v1/soup/delta?consumer=reporter&projection=news-morning&after=#{expired_cursor}"
       )
       |> put_req_header("authorization", "Bearer internal-token")
       |> Router.call(Keyword.put(@opts, :state, state))
@@ -125,7 +134,7 @@ defmodule Primeradiant.StorySubstrateTest do
     body =
       :get
       |> conn(
-        "/api/v1/story-substrate/delta?consumer=reporter&projection=news-morning&after=#{malformed_cursor}"
+        "/api/v1/soup/delta?consumer=reporter&projection=news-morning&after=#{malformed_cursor}"
       )
       |> put_req_header("authorization", "Bearer internal-token")
       |> Router.call(Keyword.put(@opts, :state, state))
@@ -142,7 +151,7 @@ defmodule Primeradiant.StorySubstrateTest do
     body =
       :get
       |> conn(
-        "/api/v1/story-substrate/delta?consumer=reporter&projection=news-morning&after=#{after_cursor}&limit=3"
+        "/api/v1/soup/delta?consumer=reporter&projection=news-morning&after=#{after_cursor}&limit=3"
       )
       |> put_req_header("authorization", "Bearer internal-token")
       |> Router.call(Keyword.put(@opts, :state, state))
@@ -159,7 +168,7 @@ defmodule Primeradiant.StorySubstrateTest do
     body =
       :get
       |> conn(
-        "/api/v1/story-substrate/delta?consumer=reporter&projection=other&after=#{after_cursor}&limit=3"
+        "/api/v1/soup/delta?consumer=reporter&projection=other&after=#{after_cursor}&limit=3"
       )
       |> put_req_header("authorization", "Bearer internal-token")
       |> Router.call(Keyword.put(@opts, :state, state))
@@ -179,7 +188,7 @@ defmodule Primeradiant.StorySubstrateTest do
     body =
       :get
       |> conn(
-        "/api/v1/story-substrate/delta?consumer=reporter&projection=news-morning&after=#{rotated_cursor}"
+        "/api/v1/soup/delta?consumer=reporter&projection=news-morning&after=#{rotated_cursor}"
       )
       |> put_req_header("authorization", "Bearer internal-token")
       |> Router.call(Keyword.put(@opts, :state, state))
@@ -197,13 +206,13 @@ defmodule Primeradiant.StorySubstrateTest do
     ack_log_path =
       Path.join(
         System.tmp_dir!(),
-        "primeradiant-story-substrate-ack-#{System.unique_integer([:positive])}.jsonl"
+        "primeradiant-soup-ack-#{System.unique_integer([:positive])}.jsonl"
       )
 
     body =
       :post
       |> conn(
-        "/api/v1/story-substrate/ack",
+        "/api/v1/soup/ack",
         Jason.encode!(%{
           consumer: "reporter",
           projection: "news-morning",
@@ -237,7 +246,7 @@ defmodule Primeradiant.StorySubstrateTest do
     db_path =
       Path.join(
         System.tmp_dir!(),
-        "primeradiant-story-substrate-#{System.unique_integer([:positive])}.sqlite3"
+        "primeradiant-soup-#{System.unique_integer([:positive])}.sqlite3"
       )
 
     DurableSoupDb.persist!(db_path, state, %{
@@ -248,7 +257,7 @@ defmodule Primeradiant.StorySubstrateTest do
 
     body =
       :get
-      |> conn("/api/v1/story-substrate/feed?consumer=reporter&projection=news-morning&limit=1")
+      |> conn("/api/v1/soup/feed?consumer=reporter&projection=news-morning&limit=1")
       |> put_req_header("authorization", "Bearer internal-token")
       |> Router.call(Keyword.put(@opts, :state, {:durable_soup_db, db_path, state.tenant_id}))
       |> json()
@@ -261,7 +270,7 @@ defmodule Primeradiant.StorySubstrateTest do
   test "internal service auth rejects missing bearer token", %{state: state} do
     conn =
       :get
-      |> conn("/api/v1/story-substrate/feed?consumer=reporter&projection=news-morning")
+      |> conn("/api/v1/soup/feed?consumer=reporter&projection=news-morning")
       |> Router.call(Keyword.put(@opts, :state, state))
 
     assert conn.status == 401
