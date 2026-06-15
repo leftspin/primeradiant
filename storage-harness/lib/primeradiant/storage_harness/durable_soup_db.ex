@@ -26,8 +26,10 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
 
     sql =
       [
+        ".bail on",
         "PRAGMA foreign_keys = ON;",
         "BEGIN IMMEDIATE;",
+        "PRAGMA defer_foreign_keys = ON;",
         schema_sql(),
         clear_tenant_sql(state.tenant_id),
         replay_run_sql(state, attrs),
