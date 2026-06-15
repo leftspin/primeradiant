@@ -1,10 +1,10 @@
-defmodule Primeradiant.StorySubstrate.Router do
+defmodule Primeradiant.Soup.Router do
   @moduledoc false
 
   use Plug.Router
 
   alias Primeradiant.StorageHarness.{DurableSoupDb, State}
-  alias Primeradiant.StorySubstrate
+  alias Primeradiant.Soup
 
   plug(:match)
   plug(Plug.Parsers, parsers: [:json], pass: ["application/json"], json_decoder: Jason)
@@ -23,13 +23,13 @@ defmodule Primeradiant.StorySubstrate.Router do
 
   def call(conn, opts) do
     conn
-    |> assign(:story_substrate_state, Keyword.fetch!(opts, :state))
-    |> assign(:story_substrate_token, Keyword.fetch!(opts, :token))
-    |> assign(:story_substrate_ack_log_path, Keyword.fetch!(opts, :ack_log_path))
+    |> assign(:soup_state, Keyword.fetch!(opts, :state))
+    |> assign(:soup_token, Keyword.fetch!(opts, :token))
+    |> assign(:soup_ack_log_path, Keyword.fetch!(opts, :ack_log_path))
     |> super(opts)
   end
 
-  defp authorize(%Plug.Conn{assigns: %{story_substrate_token: token}} = conn) do
+  defp authorize(%Plug.Conn{assigns: %{soup_token: token}} = conn) do
     case get_req_header(conn, "authorization") do
       ["Bearer " <> ^token] -> conn
       _ -> conn |> send_json(401, %{error: "unauthorized"}) |> halt()
@@ -39,35 +39,33 @@ defmodule Primeradiant.StorySubstrate.Router do
   defp ready(conn) do
     conn
     |> authorize()
-    |> respond(fn state, _assigns -> StorySubstrate.ready(state, conn.params) end)
+    |> respond(fn state, _assigns -> Soup.ready(state, conn.params) end)
   end
 
   defp feed(conn) do
     conn
     |> authorize()
-    |> respond(fn state, _assigns -> StorySubstrate.feed(state, conn.params) end)
+    |> respond(fn state, _assigns -> Soup.feed(state, conn.params) end)
   end
 
   defp delta(conn) do
     conn
     |> authorize()
-    |> respond(fn state, _assigns -> StorySubstrate.delta(state, conn.params) end)
+    |> respond(fn state, _assigns -> Soup.delta(state, conn.params) end)
   end
 
   defp ack(conn) do
     conn
     |> authorize()
     |> respond(fn state, assigns ->
-      StorySubstrate.ack(state, conn.body_params,
-        ack_log_path: assigns.story_substrate_ack_log_path
-      )
+      Soup.ack(state, conn.body_params, ack_log_path: assigns.soup_ack_log_path)
     end)
   end
 
   defp respond(%Plug.Conn{halted: true} = conn, _fun), do: conn
 
   defp respond(conn, fun) do
-    conn.assigns.story_substrate_state
+    conn.assigns.soup_state
     |> load_state()
     |> fun.(conn.assigns)
     |> then(&send_json(conn, 200, &1))

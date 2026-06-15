@@ -1,10 +1,10 @@
-defmodule Primeradiant.StorySubstrateTest do
+defmodule Primeradiant.SoupApiTest do
   use ExUnit.Case, async: false
   import Plug.Conn
   import Plug.Test
 
-  alias Primeradiant.StorySubstrate
-  alias Primeradiant.StorySubstrate.Router
+  alias Primeradiant.Soup
+  alias Primeradiant.Soup.Router
   alias Primeradiant.StorageHarness.{DurableSoupDb, FixtureImporter}
 
   @fixture_path Path.expand("../../../proof-harness/priv/fixtures/primeradiant_golden", __DIR__)
@@ -42,17 +42,6 @@ defmodule Primeradiant.StorySubstrateTest do
 
     assert body["status"] == "blocked"
     assert [%{"code" => "unsupported_projection"}] = body["blockers"]
-  end
-
-  test "legacy story-substrate route is not exposed", %{state: state} do
-    conn =
-      :get
-      |> conn("/api/v1/story-substrate/ready?consumer=reporter&projection=news-morning")
-      |> put_req_header("authorization", "Bearer internal-token")
-      |> Router.call(Keyword.put(@opts, :state, state))
-
-    assert conn.status == 404
-    assert json(conn)["error"] == "not_found"
   end
 
   test "feed returns required story item fields without authored projection framing", %{
@@ -109,7 +98,7 @@ defmodule Primeradiant.StorySubstrateTest do
   end
 
   test "delta returns explicit gap for expired cursor", %{state: state} do
-    expired_cursor = StorySubstrate.cursor_for(state, -1)
+    expired_cursor = Soup.cursor_for(state, -1)
 
     body =
       :get
@@ -127,7 +116,7 @@ defmodule Primeradiant.StorySubstrateTest do
 
   test "delta returns explicit gap for malformed decoded cursor", %{state: state} do
     malformed_cursor =
-      %{"v" => 1, "epoch" => StorySubstrate.epoch(state), "event_index" => "0"}
+      %{"v" => 1, "epoch" => Soup.epoch(state), "event_index" => "0"}
       |> Jason.encode!()
       |> Base.url_encode64(padding: false)
 
@@ -146,7 +135,7 @@ defmodule Primeradiant.StorySubstrateTest do
   end
 
   test "delta returns items after an opaque PR cursor", %{state: state} do
-    after_cursor = StorySubstrate.cursor_for(state, 0)
+    after_cursor = Soup.cursor_for(state, 0)
 
     body =
       :get
@@ -163,7 +152,7 @@ defmodule Primeradiant.StorySubstrateTest do
   end
 
   test "delta does not return material for blocked readiness params", %{state: state} do
-    after_cursor = StorySubstrate.cursor_for(state, 0)
+    after_cursor = Soup.cursor_for(state, 0)
 
     body =
       :get
@@ -200,7 +189,7 @@ defmodule Primeradiant.StorySubstrateTest do
   end
 
   test "ack records consumption semantics without mutating story truth", %{state: state} do
-    cursor = StorySubstrate.cursor_for(state)
+    cursor = Soup.cursor_for(state)
     story_count = length(state.stories)
 
     ack_log_path =
@@ -217,7 +206,7 @@ defmodule Primeradiant.StorySubstrateTest do
           consumer: "reporter",
           projection: "news-morning",
           substrate_cursor: cursor,
-          substrate_epoch: StorySubstrate.epoch(state),
+          substrate_epoch: Soup.epoch(state),
           rendered_at: "2026-06-14T12:00:00Z",
           projection_id: "news-morning-2026-06-14",
           status: "rendered",
@@ -250,7 +239,7 @@ defmodule Primeradiant.StorySubstrateTest do
       )
 
     DurableSoupDb.persist!(db_path, state, %{
-      source_kind: "story_substrate_test",
+      source_kind: "soup_api_test",
       source_db_path: "fixture_importer",
       source_row_count: length(state.inputs)
     })

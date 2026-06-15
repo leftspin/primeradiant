@@ -1,4 +1,4 @@
-defmodule Primeradiant.StorySubstrate do
+defmodule Primeradiant.Soup do
   @moduledoc false
 
   @contract_version "soup.v1"

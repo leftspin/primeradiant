@@ -3,7 +3,7 @@ defmodule Mix.Tasks.Primeradiant.SoupApi do
 
   use Mix.Task
 
-  alias Primeradiant.StorySubstrate.Router
+  alias Primeradiant.Soup.Router
 
   @shortdoc "Run the internal Prime Radiant soup HTTP JSON API"
 
