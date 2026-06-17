@@ -414,6 +414,24 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert event_row["proposal_op_id"] == chain.proposal_op_id
     assert event_row["graph_commit_id"] == chain.graph_commit_id
 
+    [edge_row] =
+      sqlite_json_rows!(
+        soup_db_path,
+        "SELECT attrs FROM edges WHERE proposal_op_id = '#{chain.proposal_op_id}';"
+      )
+
+    edge_attrs = Jason.decode!(edge_row["attrs"])
+    assert edge_attrs["edge_contract"] == "article_story_contribution"
+    assert edge_attrs["source_ref"] == chain.source_ref
+    assert edge_attrs["agent_run_id"] == chain.meaning_agent_run_id
+    assert edge_attrs["agent_prompt_version"] == "meaning-update.v1.t1269.live-loop"
+    assert edge_attrs["packet_hash"]
+    assert edge_attrs["agent_output_hash"]
+    assert edge_attrs["link_basis"] =~ "packet supports"
+
+    assert [%{"input_ref" => "evidence:news_article:event-agent-news-1:body_text:0:97"}] =
+             edge_attrs["evidence_refs"]
+
     evidence_labels =
       sqlite_json_rows!(soup_db_path, "SELECT evidence_label FROM evidence_refs;")
       |> Enum.map(& &1["evidence_label"])
@@ -614,7 +632,7 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     end)
   end
 
-  test "live story overlap hint preserves nonmaterial no-op when model overstates update" do
+  test "live story overlap hint does not override agent material classification" do
     tmp =
       Path.join(
         System.tmp_dir!(),
@@ -673,23 +691,11 @@ defmodule Primeradiant.DaemonNewsReplayTest do
         """
       )
 
-    assert Enum.map(events, & &1["classification"]) == ["split", "no_op"]
-    assert Jason.decode!(List.last(events)["changed_facts"]) == %{}
+    assert Enum.map(events, & &1["classification"]) == ["split", "attach"]
 
-    [unit] =
-      sqlite_json_rows!(
-        soup_db_path,
-        """
-        SELECT content, claim_refs
-        FROM authored_output_units
-        WHERE tenant_id = '#{@tenant}' AND position = 0
-        ORDER BY inserted_at DESC
-        LIMIT 1;
-        """
-      )
-
-    assert String.contains?(unit["content"], "no material new update")
-    assert Jason.decode!(unit["claim_refs"]) == []
+    assert Jason.decode!(List.last(events)["changed_facts"]) == %{
+             "strategy" => "exclusive-content-case-by-case"
+           }
   end
 
   test "live story-agent loop does not claim story proof with zero admissions" do

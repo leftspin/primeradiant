@@ -27,6 +27,29 @@ defmodule Primeradiant.StorageHarness.Schema do
           add_error(changeset, field, "must be a non-empty list")
         end
       end
+
+      defp validate_required_map_keys(changeset, field, keys) do
+        value = get_field(changeset, field) || %{}
+        missing = Enum.reject(keys, &present_map_value?(value, &1))
+
+        if missing == [] do
+          changeset
+        else
+          add_error(changeset, field, "missing required keys: #{Enum.join(missing, ", ")}")
+        end
+      end
+
+      defp present_map_value?(value, key) when is_map(value) do
+        case Map.get(value, key) || Map.get(value, to_string(key)) do
+          nil -> false
+          "" -> false
+          [] -> false
+          %{} = map when map_size(map) == 0 -> false
+          _ -> true
+        end
+      end
+
+      defp present_map_value?(_value, _key), do: false
     end
   end
 end
@@ -180,6 +203,8 @@ end
 defmodule Primeradiant.StorageHarness.Story do
   use Primeradiant.StorageHarness.Schema
 
+  @placeholder_story_keys ~w(new-story new_story newstory story news-story)
+
   schema "stories" do
     field(:tenant_id, :binary_id)
     field(:story_key, :string)
@@ -235,6 +260,13 @@ defmodule Primeradiant.StorageHarness.Story do
     ])
     |> validate_inclusion(:state, ["active", "background", "stale", "resolved"])
     |> validate_number(:version, greater_than_or_equal_to: 0)
+    |> validate_change(:story_key, fn :story_key, story_key ->
+      if String.downcase(story_key || "") in @placeholder_story_keys do
+        [story_key: "cannot be a placeholder durable story identity"]
+      else
+        []
+      end
+    end)
   end
 end
 
@@ -511,6 +543,7 @@ defmodule Primeradiant.StorageHarness.Edge do
   use Primeradiant.StorageHarness.Schema
 
   @types ~w(supports updates duplicates contradicts adds_color part_of watch_applies_to)
+  @article_story_edge_metadata ~w(edge_contract link_basis contribution_type source_ref evidence_refs agent_run_id agent_prompt_version agent_output_hash packet_hash correlation_id)
 
   schema "edges" do
     field(:tenant_id, :binary_id)
@@ -558,6 +591,18 @@ defmodule Primeradiant.StorageHarness.Edge do
     |> validate_exclusion(:edge_type, ["related"])
     |> validate_inclusion(:status, ["committed"])
     |> validate_confidence()
+    |> validate_article_story_edge_metadata()
+  end
+
+  defp validate_article_story_edge_metadata(changeset) do
+    attrs = get_field(changeset, :attrs) || %{}
+
+    if Map.get(attrs, "edge_contract") == "article_story_contribution" do
+      changeset
+      |> validate_required_map_keys(:attrs, @article_story_edge_metadata)
+    else
+      changeset
+    end
   end
 end
 

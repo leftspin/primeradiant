@@ -2,7 +2,7 @@ defmodule Primeradiant.RealIngestionTest do
   use ExUnit.Case, async: false
 
   alias Primeradiant.Ingestion.Admission
-  alias Primeradiant.StorageHarness.{RealIngestion, State}
+  alias Primeradiant.StorageHarness.{LiveStoryAgentLoop, RealIngestion, State}
 
   @tenant Ecto.UUID.generate()
 
@@ -122,6 +122,49 @@ defmodule Primeradiant.RealIngestionTest do
              ["harbor-repeat-1", "harbor-repeat-2"]
   end
 
+  test "T1326 polluted story hint remains context and does not override agent story identity" do
+    {:ok, state, report} = RealIngestion.ingest_items(polluted_hint_items())
+
+    {state, loop_report} =
+      LiveStoryAgentLoop.run(state, report.admissions, "flynn",
+        adapter: &polluted_hint_story_agent/3
+      )
+
+    assert loop_report.story_meaning_proof
+
+    assert Enum.map(state.stories, & &1.story_key) |> Enum.sort() == [
+             "forgotlings-ps5-launch",
+             "trump-israel-newsweek"
+           ]
+
+    assert Enum.count(state.story_events) == 3
+
+    [_first_chain, second_chain, third_chain] = loop_report.correlation_chains
+    assert second_chain.story_key == "forgotlings-ps5-launch"
+
+    second_op =
+      Enum.find(state.proposal_ops, &(&1.id == second_chain.proposal_op_id))
+
+    assert get_in(second_op.payload, ["soup_candidate_hint", :suggested_story_key]) ==
+             "trump-israel-newsweek"
+
+    second_edge =
+      Enum.find(state.edges, &(&1.proposal_op_id == second_chain.proposal_op_id))
+
+    assert second_edge.attrs["edge_contract"] == "article_story_contribution"
+    assert second_edge.attrs["link_basis"] =~ "agent selected"
+    assert second_edge.attrs["source_ref"] == "news_article:forgotlings-ps5"
+
+    assert third_chain.story_key == "forgotlings-ps5-launch"
+    assert third_chain.classification == "attach"
+
+    third_op =
+      Enum.find(state.proposal_ops, &(&1.id == third_chain.proposal_op_id))
+
+    assert get_in(third_op.payload, ["soup_candidate_hint", :suggested_story_key]) ==
+             "trump-israel-newsweek"
+  end
+
   test "T1223 direct ingestion enforces tenant boundary" do
     other_tenant = Ecto.UUID.generate()
     state = State.new(tenant_id: @tenant)
@@ -188,5 +231,83 @@ defmodule Primeradiant.RealIngestionTest do
           body_text: "Harbor Ferry service is halted for current route is harbor"
       }
     ]
+  end
+
+  defp polluted_hint_items do
+    shared =
+      "analysis report update officials readers today market international security statement details"
+
+    [
+      %{
+        base_item("trump-israel-newsweek")
+        | title: "Trump says Israel would not exist without him - Newsweek",
+          body_text:
+            "Trump Israel Newsweek #{shared} election diplomacy quote campaign government regional alliance"
+      },
+      %{
+        base_item("forgotlings-ps5")
+        | observed_at: "2026-05-17T10:05:00Z",
+          title: "Forgotlings for PS5 launches next month",
+          body_text:
+            "Forgotlings PS5 game launches next month #{shared} developer trailer console preorder platform release"
+      },
+      %{
+        base_item("forgotlings-ps5-update")
+        | observed_at: "2026-05-17T10:10:00Z",
+          title: "Forgotlings PS5 update adds preorder details",
+          body_text:
+            "Trump Israel Newsweek election diplomacy quote campaign government regional alliance #{shared} preorder details"
+      }
+    ]
+  end
+
+  defp polluted_hint_story_agent(%{role: :story_identity}, packet, _ctx) do
+    story_key =
+      case packet.external_id do
+        "trump-israel-newsweek" -> "trump-israel-newsweek"
+        "forgotlings-ps5" -> "forgotlings-ps5-launch"
+        "forgotlings-ps5-update" -> "forgotlings-ps5-launch"
+      end
+
+    classification =
+      if packet.external_id == "forgotlings-ps5-update",
+        do: "substantive_update",
+        else: "new_story"
+
+    %{
+      output: %{
+        "story_key" => story_key,
+        "classification" => classification,
+        "confidence" => 0.82,
+        "rationale" => "agent selected #{story_key} from the bounded packet"
+      },
+      model: "stub-story-agent",
+      model_route: "test://story-identity",
+      producer_kind: "test_stub",
+      decision_source: "test_stub",
+      invocation_transport_id: "stub-story-identity",
+      duration_ms: 1
+    }
+  end
+
+  defp polluted_hint_story_agent(%{role: :meaning_update}, packet, _ctx) do
+    story_key = packet.story_identity.story_key
+
+    %{
+      output: %{
+        "story_key" => story_key,
+        "operation_family" => "commit_story_meaning",
+        "classification" => packet.story_identity.classification,
+        "changed_facts" => %{"source" => packet.external_id},
+        "confidence" => 0.79,
+        "rationale" => "agent selected #{story_key}; hint is context only"
+      },
+      model: "stub-meaning-agent",
+      model_route: "test://meaning-update",
+      producer_kind: "test_stub",
+      decision_source: "test_stub",
+      invocation_transport_id: "stub-meaning-update",
+      duration_ms: 1
+    }
   end
 end

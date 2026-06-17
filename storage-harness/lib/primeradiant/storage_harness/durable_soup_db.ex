@@ -737,11 +737,12 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
       colors TEXT NOT NULL,
       questions TEXT NOT NULL,
       topic_tokens TEXT NOT NULL,
-      attrs TEXT NOT NULL,
-      inserted_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
-      UNIQUE (tenant_id, story_key)
-    );
+       attrs TEXT NOT NULL,
+       inserted_at TEXT NOT NULL,
+       updated_at TEXT NOT NULL,
+       CHECK (lower(story_key) NOT IN ('new-story', 'new_story', 'newstory', 'story', 'news-story')),
+       UNIQUE (tenant_id, story_key)
+     );
 
     CREATE TABLE IF NOT EXISTS agent_runs (
       id TEXT PRIMARY KEY,
@@ -905,12 +906,29 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
       confidence TEXT NOT NULL,
       proposal_id TEXT NOT NULL REFERENCES proposals(id),
       proposal_op_id TEXT NOT NULL REFERENCES proposal_ops(id),
-      graph_commit_id TEXT NOT NULL REFERENCES graph_commits(id),
-      attrs TEXT NOT NULL,
-      inserted_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
-      UNIQUE (proposal_op_id)
-    );
+       graph_commit_id TEXT NOT NULL REFERENCES graph_commits(id),
+       attrs TEXT NOT NULL,
+       inserted_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        CHECK (
+          json_extract(attrs, '$.edge_contract') IS NULL
+          OR json_extract(attrs, '$.edge_contract') != 'article_story_contribution'
+          OR (
+            json_extract(attrs, '$.edge_contract') = 'article_story_contribution'
+           AND coalesce(length(json_extract(attrs, '$.link_basis')), 0) > 0
+           AND coalesce(length(json_extract(attrs, '$.contribution_type')), 0) > 0
+           AND coalesce(length(json_extract(attrs, '$.source_ref')), 0) > 0
+           AND json_extract(attrs, '$.evidence_refs') IS NOT NULL
+           AND coalesce(json_array_length(json_extract(attrs, '$.evidence_refs')), 0) > 0
+           AND coalesce(length(json_extract(attrs, '$.agent_run_id')), 0) > 0
+           AND coalesce(length(json_extract(attrs, '$.agent_prompt_version')), 0) > 0
+           AND coalesce(length(json_extract(attrs, '$.agent_output_hash')), 0) > 0
+           AND coalesce(length(json_extract(attrs, '$.packet_hash')), 0) > 0
+           AND coalesce(length(json_extract(attrs, '$.correlation_id')), 0) > 0
+         )
+       ),
+       UNIQUE (proposal_op_id)
+     );
 
     CREATE TABLE IF NOT EXISTS story_fact_versions (
       id TEXT PRIMARY KEY,

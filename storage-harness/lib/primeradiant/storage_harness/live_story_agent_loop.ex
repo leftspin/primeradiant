@@ -34,9 +34,8 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
   @identity_prompt """
   Decide story identity/shape for the admitted source evidence. Choose a stable story_key from the packet text.
   Compare the packet to visible_story_refs. Reuse an existing story_key only when source evidence is about the same story.
-  If a visible story already covers the same named company, product, person, event, place, or incident family,
-  you must reuse that story_key. Use the soup_candidate_hint when present; it is computed from committed
-  story/input overlap in this packet, not from source-provided labels.
+  If a visible story already covers the same named company, product, person, event, place, or incident family, reuse that story_key.
+  Treat soup_candidate_hint as bounded context only; do not copy its suggested story key unless your packet-grounded judgment agrees.
   Do not use source-provided story labels. Return new_story or substantive_update with rationale.
   """
 
@@ -136,7 +135,7 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
         correlation_id
       )
 
-    story_key = story_key(identity.output, input, soup_candidate_hint)
+    story_key = story_key(identity.output, input)
 
     {state, meaning_run, meaning} =
       invoke_agent(
@@ -273,8 +272,8 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
     raw_changed_facts = changed_facts(meaning.output, input)
     title = story_title(meaning.output, input)
     existing_story? = Enum.any?(state.stories, &(&1.story_key == story_key))
-    event_classification =
-      event_classification(meaning.output, not existing_story?, soup_candidate_hint)
+
+    event_classification = event_classification(meaning.output, not existing_story?)
 
     changed_facts =
       if material_event_classification?(event_classification), do: raw_changed_facts, else: %{}
@@ -292,6 +291,7 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
       )
 
     story_version = story.version
+
     event_classification =
       if story_inserted?,
         do: "split",
@@ -391,7 +391,15 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
         proposal_id: proposal.id,
         proposal_op_id: proposal_op.id,
         graph_commit_id: commit.id,
-        attrs: %{"correlation_id" => correlation_id}
+        attrs:
+          article_story_edge_attrs(
+            source_ref,
+            event_classification,
+            evidence_refs,
+            identity,
+            meaning,
+            correlation_id
+          )
       })
 
     event =
@@ -545,17 +553,15 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
             updated_at_story: input.observed_at,
             last_material_at:
               if(
-                material_event_classification?(
-                  event_classification(meaning.output, false, nil)
-                ) and changed_facts != %{},
+                material_event_classification?(event_classification(meaning.output, false)) and
+                  changed_facts != %{},
                 do: input.observed_at,
                 else: existing.last_material_at
               ),
             structural_facts:
               if(
-                material_event_classification?(
-                  event_classification(meaning.output, false, nil)
-                ) and changed_facts != %{},
+                material_event_classification?(event_classification(meaning.output, false)) and
+                  changed_facts != %{},
                 do: Map.merge(existing.structural_facts || %{}, changed_facts),
                 else: existing.structural_facts || %{}
               ),
@@ -760,7 +766,8 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
         Map.merge(candidate, %{
           suggested_story_key: candidate.story_key,
           suggested_classification: "no_op",
-          rationale: "committed story/input token overlap indicates repeated nonmaterial source pressure"
+          rationale:
+            "committed story/input token overlap indicates repeated nonmaterial source pressure"
         })
     end
   end
@@ -776,7 +783,8 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
         structural_facts: story.structural_facts || %{},
         updated_at_story: story.updated_at_story && DateTime.to_iso8601(story.updated_at_story),
         last_material_at: story.last_material_at && DateTime.to_iso8601(story.last_material_at),
-        evidence_input_refs: Enum.map(visible_story_inputs(state, story, actor_id), &Admission.input_ref/1)
+        evidence_input_refs:
+          Enum.map(visible_story_inputs(state, story, actor_id), &Admission.input_ref/1)
       }
     end)
   end
@@ -817,7 +825,8 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
   defp config(:meaning_update) do
     config(:meaning_update, "meaning-update.v1.t1269.live-loop", @meaning_prompt, %{
       operation_family: "commit_story_meaning | mark_no_op",
-      classification: "new_story | substantive_update | repeated_noop_input | duplicate | no_op | adds_color | stale",
+      classification:
+        "new_story | substantive_update | repeated_noop_input | duplicate | no_op | adds_color | stale",
       story_key: "stable story key",
       changed_facts: "object",
       confidence: "0.0-1.0",
@@ -842,16 +851,34 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
 
   defp normalize_output(output), do: Admission.normalize_keys(output || %{})
 
-  defp story_key(output, input, nil), do: slug(output["story_key"] || input.title || input.external_id)
+  defp story_key(output, input) do
+    slug(output["story_key"] || input.title || input.external_id)
+  end
 
-  defp story_key(output, input, hint) do
-    output_key = slug(output["story_key"] || input.title || input.external_id)
-
-    case hint do
-      %{suggested_story_key: key} when is_binary(key) and key != "" -> key
-      %{"suggested_story_key" => key} when is_binary(key) and key != "" -> key
-      _ -> output_key
-    end
+  defp article_story_edge_attrs(
+         source_ref,
+         event_classification,
+         evidence_refs,
+         identity,
+         meaning,
+         correlation_id
+       ) do
+    %{
+      "edge_contract" => "article_story_contribution",
+      "link_basis" => rationale(meaning.output),
+      "contribution_type" => event_classification,
+      "source_ref" => source_ref,
+      "evidence_refs" => ChangesetStore.evidence_maps(evidence_refs),
+      "agent_run_id" => meaning.run.id,
+      "agent_prompt_version" => meaning.run.prompt_version,
+      "agent_output_hash" => meaning.run.scope["output_hash"],
+      "packet_hash" => meaning.packet_hash,
+      "identity_agent_run_id" => identity.run.id,
+      "identity_prompt_version" => identity.run.prompt_version,
+      "identity_output_hash" => identity.run.scope["output_hash"],
+      "identity_packet_hash" => identity.packet_hash,
+      "correlation_id" => correlation_id
+    }
   end
 
   defp story_title(output, input), do: output["title"] || input.title || input.external_id
@@ -874,24 +901,18 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
     end
   end
 
-  defp event_classification(_output, true, _hint), do: "split"
+  defp event_classification(_output, true), do: "split"
 
-  defp event_classification(output, false, hint) do
+  defp event_classification(output, false) do
     case classification(output, "substantive_update") do
       "duplicate" -> "duplicate"
       "no_op" -> "no_op"
       "repeated_noop_input" -> "no_op"
       "adds_color" -> "color"
       "stale" -> "stale"
-      _ -> hinted_event_classification(hint)
+      _ -> "attach"
     end
   end
-
-  defp hinted_event_classification(%{suggested_classification: "no_op"}), do: "no_op"
-
-  defp hinted_event_classification(%{"suggested_classification" => "no_op"}), do: "no_op"
-
-  defp hinted_event_classification(_hint), do: "attach"
 
   defp edge_type_for_event("duplicate"), do: "duplicates"
   defp edge_type_for_event("no_op"), do: "duplicates"
@@ -899,7 +920,8 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
   defp edge_type_for_event("conflict"), do: "contradicts"
   defp edge_type_for_event(_classification), do: "supports"
 
-  defp material_event_classification?(classification), do: classification in ["split", "attach", "conflict"]
+  defp material_event_classification?(classification),
+    do: classification in ["split", "attach", "conflict"]
 
   defp operation_family(output) do
     case to_string(output["operation_family"] || "commit_story_meaning") do

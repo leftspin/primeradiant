@@ -1073,7 +1073,7 @@ defmodule Primeradiant.StorageHarness.FixtureImporter do
         proposal_id: proposal.id,
         proposal_op_id: op.id,
         graph_commit_id: commit.id,
-        attrs: %{}
+        attrs: edge_attrs(from_key, to_key, edge_type, from_type, to_type, op, proposal)
       })
 
     state
@@ -1084,6 +1084,26 @@ defmodule Primeradiant.StorageHarness.FixtureImporter do
       edge_id: edge.id
     })
   end
+
+  defp edge_attrs(from_key, to_key, edge_type, "input", "story", op, proposal) do
+    %{
+      "edge_contract" => "article_story_contribution",
+      "link_basis" => "fixture proposal op #{op_name(op)} links #{from_key} to #{to_key}",
+      "contribution_type" => Atom.to_string(edge_type),
+      "source_ref" => from_key,
+      "evidence_refs" => ChangesetStore.evidence_maps(evidence_input_refs(op)),
+      "agent_run_id" => proposal.actor_id,
+      "agent_prompt_version" => "fixture_importer",
+      "agent_output_hash" => proposal.id,
+      "packet_hash" => proposal.id,
+      "correlation_id" => "#{proposal.id}:#{from_key}:#{to_key}"
+    }
+  end
+
+  defp edge_attrs(_from_key, _to_key, _edge_type, _from_type, _to_type, _op, _proposal), do: %{}
+
+  defp op_name(%{op: op}), do: op
+  defp op_name(%{payload: %{"op" => op}}), do: op
 
   defp record_output!(state, authored_output) do
     validate_authored_output_for_seen!(state, authored_output)

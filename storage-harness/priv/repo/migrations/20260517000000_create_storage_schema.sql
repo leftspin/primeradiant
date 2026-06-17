@@ -39,7 +39,8 @@ CREATE TABLE stories (
   topic_tokens text[] NOT NULL DEFAULT '{}',
   attrs jsonb NOT NULL DEFAULT '{}'::jsonb,
   inserted_at timestamptz NOT NULL,
-  updated_at timestamptz NOT NULL
+  updated_at timestamptz NOT NULL,
+  CHECK (lower(story_key) NOT IN ('new-story', 'new_story', 'newstory', 'story', 'news-story'))
 );
 
 CREATE TABLE watches (
@@ -233,7 +234,25 @@ CREATE TABLE edges (
   graph_commit_id uuid NOT NULL REFERENCES graph_commits(id),
   attrs jsonb NOT NULL DEFAULT '{}'::jsonb,
   inserted_at timestamptz NOT NULL,
-  updated_at timestamptz NOT NULL
+  updated_at timestamptz NOT NULL,
+  CHECK (
+    attrs->>'edge_contract' IS NULL
+    OR attrs->>'edge_contract' <> 'article_story_contribution'
+    OR (
+      attrs->>'edge_contract' = 'article_story_contribution'
+      AND coalesce(length(attrs->>'link_basis'), 0) > 0
+      AND coalesce(length(attrs->>'contribution_type'), 0) > 0
+      AND coalesce(length(attrs->>'source_ref'), 0) > 0
+      AND attrs ? 'evidence_refs'
+      AND jsonb_typeof(attrs->'evidence_refs') = 'array'
+      AND jsonb_array_length(attrs->'evidence_refs') > 0
+      AND coalesce(length(attrs->>'agent_run_id'), 0) > 0
+      AND coalesce(length(attrs->>'agent_prompt_version'), 0) > 0
+      AND coalesce(length(attrs->>'agent_output_hash'), 0) > 0
+      AND coalesce(length(attrs->>'packet_hash'), 0) > 0
+      AND coalesce(length(attrs->>'correlation_id'), 0) > 0
+    )
+  )
 );
 
 CREATE TABLE story_fact_versions (

@@ -11,7 +11,8 @@ defmodule Primeradiant.StorageHarnessTest do
     Edge,
     EvidenceRef,
     FixtureImporter,
-    ProposalOp
+    ProposalOp,
+    Story
   }
 
   @fixture_path Path.expand("../../../proof-harness/priv/fixtures/primeradiant_golden", __DIR__)
@@ -192,6 +193,75 @@ defmodule Primeradiant.StorageHarnessTest do
              proposal_id: Ecto.UUID.generate(),
              proposal_op_id: Ecto.UUID.generate(),
              graph_commit_id: Ecto.UUID.generate(),
+             attrs: %{}
+           }).valid?
+
+    refute Edge.changeset(%Edge{}, %{
+             tenant_id: state.tenant_id,
+             from_node_id: Ecto.UUID.generate(),
+             to_node_id: Ecto.UUID.generate(),
+             edge_type: "supports",
+             status: "committed",
+             confidence: Decimal.new("0.9"),
+             proposal_id: Ecto.UUID.generate(),
+             proposal_op_id: Ecto.UUID.generate(),
+             graph_commit_id: Ecto.UUID.generate(),
+             attrs: %{
+               "edge_contract" => "article_story_contribution",
+               "correlation_id" => "correlation:only"
+             }
+           }).valid?
+
+    assert Edge.changeset(%Edge{}, %{
+             tenant_id: state.tenant_id,
+             from_node_id: Ecto.UUID.generate(),
+             to_node_id: Ecto.UUID.generate(),
+             edge_type: "supports",
+             status: "committed",
+             confidence: Decimal.new("0.9"),
+             proposal_id: Ecto.UUID.generate(),
+             proposal_op_id: Ecto.UUID.generate(),
+             graph_commit_id: Ecto.UUID.generate(),
+             attrs: %{"correlation_id" => "non-article-edge"}
+           }).valid?
+
+    assert Edge.changeset(%Edge{}, %{
+             tenant_id: state.tenant_id,
+             from_node_id: Ecto.UUID.generate(),
+             to_node_id: Ecto.UUID.generate(),
+             edge_type: "supports",
+             status: "committed",
+             confidence: Decimal.new("0.9"),
+             proposal_id: Ecto.UUID.generate(),
+             proposal_op_id: Ecto.UUID.generate(),
+             graph_commit_id: Ecto.UUID.generate(),
+             attrs: %{
+               "edge_contract" => "article_story_contribution",
+               "link_basis" => "agent packet rationale",
+               "contribution_type" => "attach",
+               "source_ref" => "news_article:example",
+               "evidence_refs" => [%{"input_ref" => "news_article:example"}],
+               "agent_run_id" => Ecto.UUID.generate(),
+               "agent_prompt_version" => "meaning-update.v1",
+               "agent_output_hash" => "hash",
+               "packet_hash" => "packet-hash",
+               "correlation_id" => "correlation:example"
+             }
+           }).valid?
+
+    refute Story.changeset(%Story{}, %{
+             tenant_id: state.tenant_id,
+             story_key: "new-story",
+             title: "Placeholder identity",
+             state: "active",
+             version: 1,
+             first_observed_at: DateTime.utc_now(),
+             updated_at_story: DateTime.utc_now(),
+             structural_facts: %{},
+             background_facts: %{},
+             colors: [],
+             questions: %{},
+             topic_tokens: [],
              attrs: %{}
            }).valid?
 
@@ -428,6 +498,8 @@ defmodule Primeradiant.StorageHarnessTest do
 
     assert sql =~ "CHECK (jsonb_array_length(evidence_refs) > 0)"
     assert sql =~ "edge_type <> 'related'"
+    assert sql =~ "coalesce(length(attrs->>'link_basis'), 0) > 0"
+    assert sql =~ "jsonb_array_length(attrs->'evidence_refs') > 0"
     assert sql =~ "seen_states_verified_output_trigger"
 
     assert sql =~
