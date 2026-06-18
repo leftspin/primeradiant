@@ -5,7 +5,13 @@ defmodule Primeradiant.SoupApiTest do
 
   alias Primeradiant.Soup
   alias Primeradiant.Soup.Router
-  alias Primeradiant.StorageHarness.{DurableSoupDb, FixtureImporter}
+
+  alias Primeradiant.StorageHarness.{
+    DurableSoupDb,
+    FixtureImporter,
+    LiveStoryAgentLoop,
+    RealIngestion
+  }
 
   @fixture_path Path.expand("../../../proof-harness/priv/fixtures/primeradiant_golden", __DIR__)
   @ack_log_path Path.join(System.tmp_dir!(), "primeradiant-soup-test-ack.jsonl")
@@ -60,16 +66,345 @@ defmodule Primeradiant.SoupApiTest do
 
     item = hd(body["items"])
     assert item["story_id"]
+    assert is_integer(item["story_version"])
+
+    assert item["story_card_version_id"] ==
+             "story_card:#{item["story_id"]}:v#{item["story_version"]}"
+
+    assert item["change_kind"]
     assert is_list(item["admitted_item_ids"])
     assert %{"text" => _, "source" => _, "evidence_refs" => refs} = item["title"]
     assert is_list(refs)
     assert item["summary"]["source"] == "primeradiant_facts"
+    assert Map.has_key?(item["summary"], "no_summary_reason")
+    assert item["deck"]["source"] == "primeradiant_facts"
+    assert is_list(item["key_claims"])
+    assert is_list(item["source_coverage"])
+    assert item["source_links"] == item["source_coverage"]
+    assert item["refresh_reason"]
+    assert is_map(item["field_completeness"])
+    assert item["projection_provenance"]["story_card_version_id"] == item["story_card_version_id"]
+    assert item["projection_provenance"]["projection_id"] == "news-morning"
+    assert is_map(item["projection_provenance"]["field_provenance"])
+    assert item["changed_since_seen"]["status"] == "unavailable"
+    assert item["topic_salience"]["status"] == "unavailable"
     assert item["timestamps"]["last_material_change_at"]
     assert [%{"source_domain" => _, "evidence_refs" => _} | _] = item["provenance"]
     assert item["confidence"]["label"] in ["high", "medium", "low"]
     assert item["freshness"]["state"] in ["active", "background", "stale", "resolved"]
     assert item["change"]["kind"]
     assert is_number(item["ranking"]["score"])
+    assert is_integer(item["ranking"]["hints"]["source_count"])
+    assert item["ranking"]["hints"]["seen_state"]["status"] == "unavailable"
+
+    assert %{
+             "summary_text" => _,
+             "deck_text" => _,
+             "no_summary_reason" => _,
+             "no_deck_reason" => _,
+             "source_domains" => source_domains,
+             "no_source_domains_reason" => _,
+             "sources" => sources
+           } = item["magazine_contract"]
+
+    assert is_list(source_domains)
+
+    assert [
+             %{
+               "source_ref" => _,
+               "article_ref" => _,
+               "article_title" => _,
+               "article_name" => _,
+               "no_article_title_reason" => _,
+               "source_label" => _,
+               "no_source_label_reason" => _,
+               "publication" => _,
+               "no_publication_reason" => _,
+               "source_domain" => _,
+               "no_source_domain_reason" => _,
+               "link_status" => _,
+               "no_summary_reason" => _,
+               "favicon_url" => _,
+               "no_favicon_reason" => _,
+               "image_url" => _,
+               "no_image_reason" => _,
+               "contribution_summary" => _,
+               "contribution_type" => _,
+               "contribution_link_basis" => _,
+               "no_contribution_summary_reason" => _,
+               "edge_provenance" => _
+             }
+             | _
+           ] = sources
+  end
+
+  test "feed exposes unavailable field reasons when only raw archive refs are committed", %{
+    state: state
+  } do
+    item =
+      :get
+      |> conn("/api/v1/soup/feed?consumer=reporter&projection=news-morning&limit=1")
+      |> put_req_header("authorization", "Bearer internal-token")
+      |> Router.call(Keyword.put(@opts, :state, state))
+      |> json()
+      |> get_in(["items"])
+      |> hd()
+
+    source = hd(item["magazine_contract"]["sources"])
+
+    assert item["magazine_contract"]["summary_text"] == nil
+    assert item["magazine_contract"]["deck_text"] == nil
+    assert item["magazine_contract"]["no_summary_reason"] == "no_committed_story_summary"
+    assert item["magazine_contract"]["no_deck_reason"] == "no_committed_story_deck"
+
+    assert item["magazine_contract"]["source_domains"] == []
+
+    assert item["magazine_contract"]["no_source_domains_reason"] ==
+             "no_public_canonical_source_domains_committed"
+
+    assert source["canonical_public_url"] == nil
+    assert source["url"] == nil
+    assert source["url_kind"] == nil
+    assert source["link_status"] == "unavailable"
+
+    assert source["unavailable_reason"] in [
+             "only_raw_archive_reference_available",
+             "no_source_url_committed"
+           ]
+
+    assert source["source_domain"] == nil
+
+    assert source["no_source_domain_reason"] in [
+             "no_canonical_uri_committed",
+             "canonical_uri_is_not_public_http_url"
+           ]
+
+    assert source["source_label"] == nil
+    assert source["no_source_label_reason"] == "no_source_label_committed"
+    assert source["publication"] == nil
+    assert source["no_publication_reason"] == "no_publication_committed"
+    assert source["favicon_url"] == nil
+    assert source["no_favicon_reason"] == "no_favicon_metadata_committed"
+    assert source["image_url"] == nil
+    assert source["no_image_reason"] == "no_image_metadata_committed"
+  end
+
+  test "feed exposes public source URL fields without raw archive links when canonical URLs exist",
+       %{
+         state: _state
+       } do
+    state =
+      source_ready_state([
+        source_item("story-one",
+          canonical_uri: "https://example.test/news/story",
+          source_name: "Example Daily"
+        )
+      ])
+
+    item =
+      :get
+      |> conn("/api/v1/soup/feed?consumer=reporter&projection=news-morning&limit=1")
+      |> put_req_header("authorization", "Bearer internal-token")
+      |> Router.call(Keyword.put(@opts, :state, state))
+      |> json()
+      |> get_in(["items"])
+      |> hd()
+
+    source =
+      Enum.find(item["magazine_contract"]["sources"], fn source ->
+        source["canonical_public_url"] == "https://example.test/news/story"
+      end)
+
+    assert source["canonical_public_url"] =~ ~r/^https?:\/\//
+    assert source["url"] == source["canonical_public_url"]
+    assert source["url_kind"] == "canonical_public_url"
+    assert source["link_status"] == "public"
+    assert source["source_domain"] in item["magazine_contract"]["source_domains"]
+    assert source["source_domain"] == "example.test"
+    refute source["url"] =~ "#offset="
+  end
+
+  test "feed exposes article title, source label, media metadata, and contribution summaries",
+       %{state: _state} do
+    state =
+      source_ready_state([
+        source_item("story-one",
+          title: "Reporter-ready source article",
+          canonical_uri: "https://example.test/news/story",
+          source_name: "Example Daily",
+          metadata: %{
+            "favicon_url" => "https://example.test/favicon.ico",
+            "image_url" => "https://example.test/images/story.jpg"
+          }
+        )
+      ])
+
+    [input] = state.inputs
+
+    item =
+      :get
+      |> conn("/api/v1/soup/feed?consumer=reporter&projection=news-morning&limit=1")
+      |> put_req_header("authorization", "Bearer internal-token")
+      |> Router.call(Keyword.put(@opts, :state, state))
+      |> json()
+      |> get_in(["items"])
+      |> hd()
+
+    source =
+      Enum.find(item["magazine_contract"]["sources"], fn source ->
+        source["canonical_public_url"] == "https://example.test/news/story"
+      end)
+
+    assert source["source_ref"] == "#{input.source_type}:#{input.external_id}"
+    assert source["article_ref"] == input.id
+    assert source["article_external_id"] == input.external_id
+    assert source["article_title"] == "Reporter-ready source article"
+    assert source["article_name"] == "Reporter-ready source article"
+    assert source["source_label"] == "Example Daily"
+    assert source["publication"] == "Example Daily"
+    assert source["favicon_url"] == "https://example.test/favicon.ico"
+    assert source["image_url"] == "https://example.test/images/story.jpg"
+    assert is_binary(source["contribution_summary"])
+    assert source["contribution_summary"] =~ source["contribution_type"]
+    assert is_binary(source["contribution_link_basis"])
+    assert source["no_contribution_summary_reason"] == nil
+    assert source["edge_provenance"]["edge_id"]
+    assert source["edge_provenance"]["agent_prompt_version"]
+  end
+
+  test "feed preserves separate same-domain article source rows", %{state: _state} do
+    state =
+      source_ready_state([
+        source_item("story-one",
+          canonical_uri: "https://same.example.test/news/one",
+          source_name: "Same Example"
+        ),
+        source_item("story-two",
+          canonical_uri: "https://same.example.test/news/two",
+          source_name: "Same Example",
+          observed_at: "2026-05-17T10:05:00Z"
+        )
+      ])
+
+    item =
+      :get
+      |> conn("/api/v1/soup/feed?consumer=reporter&projection=news-morning&limit=1")
+      |> put_req_header("authorization", "Bearer internal-token")
+      |> Router.call(Keyword.put(@opts, :state, state))
+      |> json()
+      |> get_in(["items"])
+      |> hd()
+
+    same_domain_sources =
+      Enum.filter(item["magazine_contract"]["sources"], fn source ->
+        source["source_domain"] == "same.example.test"
+      end)
+
+    assert length(same_domain_sources) == 2
+
+    assert Enum.map(same_domain_sources, & &1["canonical_public_url"]) |> Enum.sort() == [
+             "https://same.example.test/news/one",
+             "https://same.example.test/news/two"
+           ]
+
+    assert item["magazine_contract"]["source_domains"] == ["same.example.test"]
+  end
+
+  test "feed normalizes source domains from canonical URLs", %{state: _state} do
+    state =
+      source_ready_state([
+        source_item("story-one", canonical_uri: "https://Example.TEST/news/story")
+      ])
+
+    item =
+      :get
+      |> conn("/api/v1/soup/feed?consumer=reporter&projection=news-morning&limit=1")
+      |> put_req_header("authorization", "Bearer internal-token")
+      |> Router.call(Keyword.put(@opts, :state, state))
+      |> json()
+      |> get_in(["items"])
+      |> hd()
+
+    source =
+      Enum.find(item["magazine_contract"]["sources"], fn source ->
+        source["canonical_public_url"] == "https://Example.TEST/news/story"
+      end)
+
+    assert source["source_domain"] == "example.test"
+    assert "example.test" in item["magazine_contract"]["source_domains"]
+  end
+
+  test "feed does not promote source-envelope fragments as public article URLs", %{
+    state: state
+  } do
+    [input | rest] = state.inputs
+
+    input = %{
+      input
+      | normalized:
+          Map.put(
+            input.normalized,
+            "canonical_uri",
+            "https://example.test/raw/source-envelope.json#offset=10&length=20"
+          )
+    }
+
+    state = %{state | inputs: [input | rest]}
+
+    item =
+      :get
+      |> conn("/api/v1/soup/feed?consumer=reporter&projection=news-morning&limit=1")
+      |> put_req_header("authorization", "Bearer internal-token")
+      |> Router.call(Keyword.put(@opts, :state, state))
+      |> json()
+      |> get_in(["items"])
+      |> hd()
+
+    source =
+      Enum.find(item["magazine_contract"]["sources"], fn source ->
+        source["unavailable_reason"] == "canonical_uri_is_raw_archive_reference"
+      end)
+
+    assert source["canonical_public_url"] == nil
+    assert source["url"] == nil
+    assert source["link_status"] == "unavailable"
+    assert source["no_source_domain_reason"] == "canonical_uri_is_raw_archive_reference"
+  end
+
+  test "feed does not promote private provenance or error URLs as public article URLs", %{
+    state: state
+  } do
+    [input | rest] = state.inputs
+
+    input = %{
+      input
+      | normalized:
+          Map.put(
+            input.normalized,
+            "canonical_uri",
+            "https://example.test/provenance/story-source#error"
+          )
+    }
+
+    state = %{state | inputs: [input | rest]}
+
+    item =
+      :get
+      |> conn("/api/v1/soup/feed?consumer=reporter&projection=news-morning&limit=1")
+      |> put_req_header("authorization", "Bearer internal-token")
+      |> Router.call(Keyword.put(@opts, :state, state))
+      |> json()
+      |> get_in(["items"])
+      |> hd()
+
+    source =
+      Enum.find(item["magazine_contract"]["sources"], fn source ->
+        source["unavailable_reason"] == "canonical_uri_is_raw_archive_reference"
+      end)
+
+    assert source["canonical_public_url"] == nil
+    assert source["url"] == nil
+    assert source["link_status"] == "unavailable"
   end
 
   test "feed does not return material for blocked readiness params", %{state: state} do
@@ -264,6 +599,79 @@ defmodule Primeradiant.SoupApiTest do
 
     assert conn.status == 401
     assert json(conn)["error"] == "unauthorized"
+  end
+
+  defp source_ready_state(items) do
+    {:ok, state, report} = RealIngestion.ingest_items(items)
+
+    {state, _story_report} =
+      LiveStoryAgentLoop.run(state, report.admissions, "flynn", adapter: &stub_story_agent/3)
+
+    state
+  end
+
+  defp source_item(external_id, overrides) do
+    %{
+      tenant_id: "tenant-t1311-soup-api",
+      ingestion_run_key: "run-t1311-soup-api",
+      source_type: "news_article",
+      source_mode: "manual_real_ingest_v1",
+      external_id: external_id,
+      observed_at: Keyword.get(overrides, :observed_at, "2026-05-17T10:00:00Z"),
+      retrieved_at: Keyword.get(overrides, :retrieved_at, "2026-05-17T10:01:00Z"),
+      occurred_at: nil,
+      canonical_uri:
+        Keyword.get(overrides, :canonical_uri, "https://example.test/#{external_id}"),
+      raw_object_uri: nil,
+      source_name: Keyword.get(overrides, :source_name, "Example"),
+      source_actor: %{
+        kind: "publisher",
+        name: Keyword.get(overrides, :source_name, "Example"),
+        stable_id: "example"
+      },
+      title: Keyword.get(overrides, :title, "Reporter-ready source #{external_id}"),
+      body_text: Keyword.get(overrides, :body_text, "Harbor Ferry service is halted today."),
+      extracted_text: nil,
+      metadata: Keyword.get(overrides, :metadata, %{}),
+      acl: %{"privacy" => "public"}
+    }
+  end
+
+  defp stub_story_agent(%{role: :story_identity}, packet, _ctx) do
+    %{
+      output: %{
+        "story_key" => "reporter-ready-source-story",
+        "classification" =>
+          if(packet.external_id == "story-one", do: "new_story", else: "substantive_update"),
+        "confidence" => 0.82,
+        "rationale" => "agent selected story identity from bounded packet"
+      },
+      model: "stub-story-agent",
+      model_route: "test://story-identity",
+      producer_kind: "test_stub",
+      decision_source: "test_stub",
+      invocation_transport_id: "stub-story-identity",
+      duration_ms: 1
+    }
+  end
+
+  defp stub_story_agent(%{role: :meaning_update}, packet, _ctx) do
+    %{
+      output: %{
+        "story_key" => packet.story_identity.story_key,
+        "operation_family" => "commit_story_meaning",
+        "classification" => packet.story_identity.classification,
+        "changed_facts" => %{"source" => packet.external_id},
+        "confidence" => 0.79,
+        "rationale" => "article adds sourced evidence to the reporter-ready story"
+      },
+      model: "stub-meaning-agent",
+      model_route: "test://meaning-update",
+      producer_kind: "test_stub",
+      decision_source: "test_stub",
+      invocation_transport_id: "stub-meaning-update",
+      duration_ms: 1
+    }
   end
 
   defp json(conn), do: Jason.decode!(conn.resp_body)
