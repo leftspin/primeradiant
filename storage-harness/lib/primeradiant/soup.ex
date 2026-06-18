@@ -51,23 +51,8 @@ defmodule Primeradiant.Soup do
          {:ok, requested} <- decode_cursor(after_cursor),
          :ok <- cursor_epoch_ok(state, requested, after_cursor),
          :ok <- cursor_known(state, requested, after_cursor) do
-      events = ordered_events(state)
       limit = parse_limit(params["limit"] || params[:limit], 100)
-      next_events = events |> Enum.drop(requested["event_index"]) |> Enum.take(limit)
-      story_ids = next_events |> Enum.map(& &1.story_id) |> MapSet.new()
-
-      items =
-        state
-        |> visible_stories()
-        |> Enum.filter(&MapSet.member?(story_ids, &1.id))
-        |> Enum.map(&item(state, &1))
-
-      %{
-        contract_version: @contract_version,
-        items: items,
-        next_cursor: cursor_for(state, requested["event_index"] + length(next_events)),
-        gap: nil
-      }
+      delta_projection(state, requested, limit)
     else
       [_ | _] ->
         %{
@@ -109,7 +94,7 @@ defmodule Primeradiant.Soup do
   end
 
   def cursor_for(%State{} = state, event_index \\ nil) do
-    index = event_index || length(ordered_events(state))
+    index = event_index || length(ordered_card_changes(state))
     payload = %{"v" => 1, "epoch" => epoch(state), "event_index" => index}
 
     payload
@@ -127,8 +112,13 @@ defmodule Primeradiant.Soup do
       (params["consumer"] || params[:consumer]) != "reporter" ->
         [%{code: "unsupported_consumer", message: "consumer must be reporter"}]
 
-      (params["projection"] || params[:projection]) != "news-morning" ->
-        [%{code: "unsupported_projection", message: "projection must be news-morning"}]
+      (params["projection"] || params[:projection]) != "story_cards" ->
+        [
+          %{
+            code: "unsupported_projection",
+            message: "projection must be story_cards"
+          }
+        ]
 
       state.stories == [] ->
         [
@@ -164,118 +154,252 @@ defmodule Primeradiant.Soup do
   defp freshness_status(%{is_stale: true}), do: "degraded"
   defp freshness_status(_), do: "ready"
 
+  defp delta_projection(state, requested, limit) do
+    changes = ordered_card_changes(state)
+    next_changes = changes |> Enum.drop(requested["event_index"]) |> Enum.take(limit)
+    story_ids = next_changes |> Enum.map(& &1.story_id) |> MapSet.new()
+
+    items =
+      state
+      |> visible_stories()
+      |> Enum.filter(&MapSet.member?(story_ids, &1.id))
+      |> Enum.map(&item(state, &1))
+
+    %{
+      contract_version: @contract_version,
+      items: items,
+      next_cursor: cursor_for(state, requested["event_index"] + length(next_changes)),
+      gap: nil
+    }
+  end
+
   defp item(state, story) do
-    events = state.story_events |> Enum.filter(&(&1.story_id == story.id))
-    inputs = story_inputs(state, story.id)
-    evidence_refs = evidence_refs(state, story.id)
-    latest_event = List.last(Enum.sort_by(events, &event_sort_key/1))
-    score = confidence_score(state, story.id)
+    case current_story_card_version(state, story.id) do
+      nil -> incomplete_story_card_item(state, story)
+      card -> story_card_item(state, story, card)
+    end
+  end
+
+  defp story_card_item(state, story, card) do
+    coverage = source_coverage_for(state, card.id)
+    claims = key_claims_for(state, card.id)
+    change_set = change_set_for(state, card.id)
+    reader_delta = reader_delta_for(state, card.id)
 
     %{
       story_id: story.id,
-      admitted_item_ids: Enum.map(inputs, & &1.id),
-      title: %{text: story.title, source: "primeradiant_story", evidence_refs: evidence_refs},
-      summary: %{
-        text: summary_text(story),
-        source: "primeradiant_facts",
-        evidence_refs: evidence_refs
-      },
+      story_version: story.version,
+      story_card_version_id: card.id,
+      card_version: card.card_version,
+      change_kind: if(change_set, do: change_set.refresh_reason, else: card.refresh_reason),
+      section: "story_card",
+      title: card.title,
+      deck: card.deck,
+      summary: card.summary,
+      key_claims: Enum.map(claims, &claim_projection/1),
+      source_coverage: Enum.map(coverage, &coverage_projection/1),
+      source_links: Enum.map(coverage, &source_link_projection/1),
+      provenance:
+        Map.merge(card.provenance || %{}, %{
+          "projection_id" => projection_id(state),
+          "soup_cursor" => cursor_for(state),
+          "story_card_version_id" => card.id,
+          "producing_agent_run_ids" => [card.producing_agent_run_id]
+        }),
+      freshness: card.freshness,
+      status: card.status,
+      refresh_reason: card.refresh_reason,
       timestamps: %{
-        first_seen_at: iso(story.first_observed_at),
-        last_source_at: iso(max_time(Enum.map(inputs, & &1.observed_at))),
-        last_material_change_at: iso(story.last_material_at),
-        last_agent_review_at: iso(max_time(Enum.map(state.agent_runs, & &1.ended_at)))
+        story_first_seen_at: iso(story.first_observed_at),
+        story_updated_at: iso(story.updated_at_story),
+        card_created_at: iso(card.inserted_at)
       },
-      provenance: Enum.map(inputs, &provenance_for(state, &1, evidence_refs)),
-      confidence: %{
-        score: score,
-        label: confidence_label(score),
-        reasons: ["accepted_pr_proposal_confidence"]
-      },
-      freshness: freshness_for(story),
-      change: %{
-        kind: if(latest_event, do: latest_event.classification, else: "new_story"),
-        signals: change_signals(latest_event),
-        evidence_refs: evidence_refs
-      },
+      field_completeness: card.field_completeness,
+      changed_since_seen: changed_since_seen_projection(reader_delta),
+      topic_salience: card.topic_salience,
       ranking: %{
-        score: ranking_score(story, events),
-        reasons: ["story_version", "material_recency"]
-      }
+        score: ranking_score(story, state.story_events),
+        reasons: ["story_card_version", "source_breadth", "material_recency"]
+      },
+      change_set:
+        change_set &&
+          %{
+            changed_field_keys: change_set.changed_field_keys,
+            added_claim_refs: change_set.added_claim_refs,
+            removed_claim_refs: change_set.removed_claim_refs,
+            changed_claim_refs: change_set.changed_claim_refs,
+            changed_source_coverage_refs: change_set.changed_source_coverage_refs,
+            refresh_reason: change_set.refresh_reason,
+            change_summary: change_set.change_summary
+          }
     }
   end
+
+  defp incomplete_story_card_item(state, story) do
+    provenance_refs = ["story-card:unavailable:#{story.id}"]
+
+    %{
+      story_id: story.id,
+      story_version: story.version,
+      story_card_version_id: nil,
+      card_version: nil,
+      change_kind: "story_card_unavailable",
+      section: "story_card",
+      title: unavailable_text_field("story_card_not_synthesized", provenance_refs),
+      deck: unavailable_text_field("story_card_not_synthesized", provenance_refs),
+      summary: unavailable_text_field("story_card_not_synthesized", provenance_refs),
+      key_claims: [],
+      source_coverage: [],
+      source_links: [],
+      provenance: %{
+        "projection_id" => projection_id(state),
+        "soup_cursor" => cursor_for(state),
+        "story_card_version_id" => nil,
+        "producing_agent_run_ids" => [],
+        "state" => "incomplete",
+        "reason" => "story_card_not_synthesized"
+      },
+      freshness: freshness_for(story),
+      status: "incomplete",
+      refresh_reason: "story_card_not_synthesized",
+      timestamps: %{
+        story_first_seen_at: iso(story.first_observed_at),
+        story_updated_at: iso(story.updated_at_story),
+        card_created_at: nil
+      },
+      field_completeness: %{
+        "title" => "unavailable",
+        "deck" => "unavailable",
+        "summary" => "unavailable",
+        "key_claims" => "unavailable",
+        "overall" => "incomplete"
+      },
+      changed_since_seen: changed_since_seen_projection(nil),
+      topic_salience: %{
+        "state" => "unavailable",
+        "reason" => "story_card_not_synthesized"
+      },
+      ranking: %{
+        score: ranking_score(story, state.story_events),
+        reasons: ["story_card_unavailable"]
+      },
+      change_set: nil
+    }
+  end
+
+  defp unavailable_text_field(reason, provenance_refs) do
+    %{
+      "text" => nil,
+      "state" => "unavailable",
+      "reason" => reason,
+      "provenance_refs" => provenance_refs
+    }
+  end
+
+  defp current_story_card_version(state, story_id) do
+    state.story_card_versions
+    |> Enum.filter(&(&1.story_id == story_id))
+    |> Enum.sort_by(& &1.card_version, :desc)
+    |> List.first()
+  end
+
+  defp source_coverage_for(state, card_id),
+    do: Enum.filter(state.story_source_coverage, &(&1.story_card_version_id == card_id))
+
+  defp key_claims_for(state, card_id),
+    do: Enum.filter(state.story_key_claims, &(&1.story_card_version_id == card_id))
+
+  defp change_set_for(state, card_id),
+    do: Enum.find(state.story_card_change_sets, &(&1.new_card_version_id == card_id))
+
+  defp reader_delta_for(state, card_id),
+    do: Enum.find(state.story_reader_deltas, &(&1.current_card_version_id == card_id))
+
+  defp claim_projection(claim) do
+    %{
+      claim_ref: claim.claim_ref,
+      text: claim.text,
+      status: claim.status,
+      materiality: claim.materiality,
+      evidence_refs: claim.evidence_refs,
+      conflict_refs: claim.conflict_refs,
+      uncertainty: claim.uncertainty,
+      appears_in_current_card: claim.appears_in_current_card
+    }
+  end
+
+  defp coverage_projection(row) do
+    %{
+      source_ref: row.source_ref,
+      article_ref: row.article_ref,
+      canonical_public_url: row.canonical_public_url,
+      source_domain: row.source_domain,
+      source_label: row.source_label,
+      publication: row.publication,
+      source_posture: row.source_posture,
+      contribution_reason: row.contribution_reason,
+      materiality: row.materiality,
+      source_weight: row.source_weight,
+      first_observed_at: iso(row.first_observed_at),
+      last_observed_at: iso(row.last_observed_at),
+      evidence_refs: row.evidence_refs,
+      provenance_refs: row.provenance_refs
+    }
+  end
+
+  defp source_link_projection(row) do
+    %{
+      source_ref: row.source_ref,
+      article_ref: row.article_ref,
+      canonical_public_url: row.canonical_public_url,
+      source_domain: row.source_domain,
+      source_label: row.source_label,
+      publication: row.publication,
+      contribution_reason: row.contribution_reason,
+      evidence_refs: row.evidence_refs
+    }
+  end
+
+  defp changed_since_seen_projection(nil) do
+    %{
+      state: "unavailable",
+      reason: "reader_delta_not_requested",
+      material_unseen_deltas: [],
+      nonmaterial_exclusions: []
+    }
+  end
+
+  defp changed_since_seen_projection(delta) do
+    %{
+      state: "complete",
+      user_id: delta.user_id,
+      seen_state_id: delta.seen_state_id,
+      prior_seen_story_version: delta.prior_seen_story_version,
+      prior_seen_card_version_id: delta.prior_seen_card_version_id,
+      current_story_version: delta.current_story_version,
+      current_card_version_id: delta.current_card_version_id,
+      material_unseen_deltas: delta.material_unseen_deltas,
+      nonmaterial_exclusions: delta.nonmaterial_exclusions,
+      producing_agent_run_id: delta.producing_agent_run_id,
+      evidence_refs: delta.evidence_refs,
+      provenance_refs: delta.provenance_refs
+    }
+  end
+
+  defp projection_id(state), do: "story-cards:#{state.tenant_id}:#{epoch(state)}"
 
   defp visible_stories(state),
     do: Enum.sort_by(state.stories, & &1.updated_at_story, {:desc, DateTime})
-
-  defp story_inputs(state, story_id) do
-    input_ids =
-      state.story_events
-      |> Enum.filter(&(&1.story_id == story_id))
-      |> Enum.map(& &1.input_id)
-      |> MapSet.new()
-
-    Enum.filter(state.inputs, &MapSet.member?(input_ids, &1.id))
-  end
-
-  defp evidence_refs(state, story_id) do
-    subject_ids =
-      (state.story_events ++ state.story_fact_versions)
-      |> Enum.filter(&(&1.story_id == story_id))
-      |> Enum.map(& &1.id)
-      |> MapSet.new()
-
-    state.evidence_refs
-    |> Enum.filter(&MapSet.member?(subject_ids, &1.subject_id))
-    |> Enum.map(& &1.evidence_label)
-    |> Enum.uniq()
-  end
-
-  defp provenance_for(_state, input, refs) do
-    uri = input.object_uri || ""
-    host = if uri == "", do: input.source_type, else: URI.parse(uri).host
-
-    %{
-      source_domain: host,
-      url: input.object_uri,
-      published_at: iso(input.observed_at),
-      admitted_at: iso(input.inserted_at),
-      evidence_refs: refs
-    }
-  end
-
-  defp summary_text(story) do
-    story.structural_facts
-    |> Enum.sort()
-    |> Enum.map_join(", ", fn {key, value} -> "#{key}=#{value}" end)
-  end
-
-  defp confidence_score(state, story_id) do
-    scores =
-      state.proposals
-      |> Enum.filter(&(&1.story_id == story_id))
-      |> Enum.map(&Decimal.to_float(&1.confidence))
-
-    if scores == [], do: 0.0, else: Enum.sum(scores) / length(scores)
-  end
-
-  defp confidence_label(score) when score >= 0.8, do: "high"
-  defp confidence_label(score) when score >= 0.5, do: "medium"
-  defp confidence_label(_), do: "low"
 
   defp freshness_for(story) do
     age = DateTime.diff(parse_time!(now()), story.updated_at_story)
     %{state: story.state, age_seconds: age}
   end
 
-  defp change_signals(nil), do: []
-  defp change_signals(event), do: event.changed_facts |> Map.keys() |> Enum.sort()
-
   defp ranking_score(story, events), do: story.version + length(events)
 
-  defp ordered_events(state), do: Enum.sort_by(state.story_events, &event_sort_key/1)
-
-  defp event_sort_key(event), do: {DateTime.to_iso8601(event.observed_at), event.id}
+  defp ordered_card_changes(state),
+    do: Enum.sort_by(state.story_card_change_sets, &{iso(&1.inserted_at) || "", &1.id})
 
   defp decode_cursor(nil), do: {:gap, cursor_gap("cursor_unknown", nil)}
 
@@ -298,7 +422,7 @@ defmodule Primeradiant.Soup do
   end
 
   defp cursor_known(state, %{"event_index" => index}, raw_cursor) do
-    event_count = length(ordered_events(state))
+    event_count = length(ordered_card_changes(state))
     retained_floor = max(event_count - @retained_event_window, 0)
 
     cond do
@@ -325,9 +449,6 @@ defmodule Primeradiant.Soup do
     path |> Path.dirname() |> File.mkdir_p!()
     File.write!(path, Jason.encode!(ack) <> "\n", [:append])
   end
-
-  defp max_time([]), do: nil
-  defp max_time(times), do: times |> Enum.reject(&is_nil/1) |> Enum.max(DateTime, fn -> nil end)
 
   defp iso(nil), do: nil
   defp iso(%DateTime{} = dt), do: DateTime.to_iso8601(dt)

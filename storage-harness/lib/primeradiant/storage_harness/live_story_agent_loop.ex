@@ -17,8 +17,12 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
     SoupNode,
     State,
     Story,
+    StoryCardChangeSet,
+    StoryCardVersion,
     StoryEvent,
-    StoryFactVersion
+    StoryFactVersion,
+    StoryKeyClaim,
+    StorySourceCoverage
   }
 
   @candidate_stopwords MapSet.new(
@@ -47,6 +51,12 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
   If evidence is insufficient, return operation_family mark_no_op with a refusal_reason.
   """
 
+  @synthesis_prompt """
+  Maintain the current living story card from committed story state and linked source evidence.
+  Return deck, summary, key_claims, source_coverage, contribution explanations, salience hints, and changed fields.
+  If any required source display or story-card field is unavailable, return explicit unavailable/refused/incomplete field state with reason and provenance.
+  """
+
   def run(%State{} = state, admissions, actor_id, opts \\ []) when is_list(admissions) do
     adapter = Keyword.get(opts, :adapter, &__MODULE__.invoke_live_agent/3)
 
@@ -62,7 +72,7 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
        substrate_proof_only: not story_meaning_proof?(state, chains),
        story_meaning_proof: story_meaning_proof?(state, chains),
        correlation_chains: chains,
-       agent_families: [:story_identity, :meaning_update],
+       agent_families: [:story_identity, :meaning_update, :story_synthesis],
        activations: Enum.count(state.audit_events, &(&1.event == :story_agent_activation)),
        packets: Enum.count(state.audit_events, &(&1.event == :story_agent_packet)),
        agent_runs: length(state.agent_runs),
@@ -72,15 +82,24 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
        proposal_decisions: length(state.proposal_decisions),
        graph_commits: length(state.graph_commits),
        story_events: length(state.story_events),
+       story_card_versions: length(state.story_card_versions),
+       story_source_coverage: length(state.story_source_coverage),
+       story_key_claims: length(state.story_key_claims),
        zero_agent_zero_story_shape_nonconforming?: zero_agent_zero_story_shape?(state)
      }}
   end
 
   defp story_meaning_proof?(state, chains) do
+    production_agent_runs =
+      Enum.filter(state.agent_runs, fn run ->
+        get_in(run.scope, ["producer_kind"]) == "live_model_inference"
+      end)
+
     chains != [] and
-      length(state.agent_runs) >= 2 and
+      length(production_agent_runs) >= 3 and
       length(state.proposals) > 0 and
-      (length(state.graph_commits) > 0 or length(state.story_events) > 0)
+      (length(state.graph_commits) > 0 or length(state.story_events) > 0) and
+      length(state.story_card_versions) > 0
   end
 
   defp zero_agent_zero_story_shape?(state) do
@@ -169,14 +188,52 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
         correlation_id
       )
 
+    story = Enum.find(state.stories, &(&1.id == write_chain.story_id))
+
+    {state, synthesis_run, synthesis} =
+      invoke_agent(
+        state,
+        config(:story_synthesis),
+        packet(state, input, admission, :story_synthesis, correlation_id, actor_id, %{
+          story_id: story.id,
+          story_key: story.story_key,
+          story_version: story.version,
+          story_event_id: write_chain.story_event_id,
+          refresh_reason: refresh_reason(write_chain.classification),
+          committed_story_state: story_packet_state(state, story, actor_id),
+          prior_story_card_version: current_story_card_version(state, story.id)
+        }),
+        actor_id,
+        adapter,
+        correlation_id
+      )
+
+    {state, card_chain} =
+      write_story_card(
+        state,
+        story,
+        input,
+        admission,
+        write_chain,
+        synthesis,
+        actor_id,
+        correlation_id
+      )
+
     chain =
-      Map.merge(write_chain, %{
+      write_chain
+      |> Map.merge(card_chain)
+      |> Map.merge(%{
         correlation_id: correlation_id,
         source_ref: source_ref,
         activation_id: activation.activation_id,
-        packet_ids: [identity.packet_id, meaning.packet_id],
-        agent_run_ids: [identity_run.id, meaning_run.id],
-        agent_families: [identity_run.agent_type, meaning_run.agent_type],
+        packet_ids: [identity.packet_id, meaning.packet_id, synthesis.packet_id],
+        agent_run_ids: [identity_run.id, meaning_run.id, synthesis_run.id],
+        agent_families: [
+          identity_run.agent_type,
+          meaning_run.agent_type,
+          synthesis_run.agent_type
+        ],
         evidence_refs: evidence_refs
       })
 
@@ -189,7 +246,8 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
         source_ref: source_ref,
         proposal_id: chain.proposal_id,
         graph_commit_id: chain.graph_commit_id,
-        story_event_id: chain.story_event_id
+        story_event_id: chain.story_event_id,
+        story_card_version_id: chain.story_card_version_id
       })
 
     {state, chain}
@@ -214,8 +272,8 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
           "prompt_version_hash" => config.prompt_version_hash,
           "output_hash" => output_hash,
           "model_route" => output[:model_route],
-          "producer_kind" => output[:producer_kind],
-          "decision_source" => output[:decision_source],
+          "producer_kind" => output[:producer_kind] || "unrecorded",
+          "decision_source" => output[:decision_source] || "unrecorded",
           "invocation_transport_id" => output[:invocation_transport_id],
           "evidence_refs" => packet.evidence_refs
         },
@@ -273,6 +331,7 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
     raw_changed_facts = changed_facts(meaning.output, input)
     title = story_title(meaning.output, input)
     existing_story? = Enum.any?(state.stories, &(&1.story_key == story_key))
+
     event_classification =
       event_classification(meaning.output, not existing_story?, soup_candidate_hint)
 
@@ -292,6 +351,7 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
       )
 
     story_version = story.version
+
     event_classification =
       if story_inserted?,
         do: "split",
@@ -493,6 +553,114 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
      }}
   end
 
+  defp write_story_card(
+         state,
+         story,
+         input,
+         admission,
+         write_chain,
+         synthesis,
+         _actor_id,
+         _correlation_id
+       ) do
+    prior_card = current_story_card_version(state, story.id)
+    refresh_reason = refresh_reason(write_chain.classification)
+    card_version = card_version_for(state, story.id)
+    field_provenance_manifest_id = "fieldprov:#{story.story_key}:card-v#{card_version}"
+    provenance_refs = [field_provenance_manifest_id]
+    card_status = card_status(synthesis.output)
+
+    card =
+      ChangesetStore.insert!(StoryCardVersion, %{
+        tenant_id: state.tenant_id,
+        story_id: story.id,
+        story_version: story.version,
+        card_version: card_version,
+        status: card_status,
+        supersedes_id: prior_card && prior_card.id,
+        refresh_reason: refresh_reason,
+        producing_agent_run_id: synthesis.run.id,
+        packet_hash: synthesis.packet_hash,
+        prompt_config_hash: synthesis.run.scope["prompt_version_hash"],
+        output_hash: synthesis.run.scope["output_hash"],
+        field_provenance_manifest_id: field_provenance_manifest_id,
+        title: field_value(synthesis.output["title"], story.title, provenance_refs),
+        deck: field_value(synthesis.output["deck"], nil, provenance_refs),
+        summary: field_value(synthesis.output["summary"], nil, provenance_refs),
+        freshness: %{
+          "status" => story.state,
+          "story_updated_at" =>
+            story.updated_at_story && DateTime.to_iso8601(story.updated_at_story)
+        },
+        field_completeness: field_completeness(synthesis.output, card_status),
+        topic_salience: salience_hints(synthesis.output, state, story),
+        provenance: %{
+          "agent_run_ids" => [synthesis.run.id],
+          "packet_hash" => synthesis.packet_hash,
+          "prompt_config_hash" => synthesis.run.scope["prompt_version_hash"],
+          "output_hash" => synthesis.run.scope["output_hash"],
+          "evidence_refs" => admission.evidence_refs,
+          "source_refs" => [admission.source_ref],
+          "story_event_refs" => [write_chain.story_event_id],
+          "prior_card_version_id" => prior_card && prior_card.id
+        }
+      })
+
+    coverage_rows =
+      source_coverage_rows(
+        state,
+        story,
+        card,
+        input,
+        admission,
+        synthesis.output,
+        provenance_refs
+      )
+
+    claim_rows =
+      key_claim_rows(state, story, card, synthesis.output, admission.evidence_refs)
+
+    change_set =
+      ChangesetStore.insert!(StoryCardChangeSet, %{
+        tenant_id: state.tenant_id,
+        story_id: story.id,
+        prior_card_version_id: prior_card && prior_card.id,
+        new_card_version_id: card.id,
+        changed_field_keys: changed_field_keys(synthesis.output, prior_card),
+        added_claim_refs: Enum.map(claim_rows, & &1.claim_ref),
+        removed_claim_refs: [],
+        changed_claim_refs: Enum.map(claim_rows, & &1.claim_ref),
+        changed_source_coverage_refs: Enum.map(coverage_rows, & &1.source_ref),
+        refresh_reason: refresh_reason,
+        change_summary: field_value(synthesis.output["change_summary"], nil, provenance_refs)
+      })
+
+    state =
+      state
+      |> State.append(:story_card_versions, card)
+      |> append_rows(:story_source_coverage, coverage_rows)
+      |> append_rows(:story_key_claims, claim_rows)
+      |> State.append(:story_card_change_sets, change_set)
+      |> State.audit(%{
+        event: :story_card_synthesized,
+        story_id: story.id,
+        story_version: story.version,
+        story_card_version_id: card.id,
+        refresh_reason: refresh_reason,
+        producing_agent_run_id: synthesis.run.id,
+        field_provenance_manifest_id: field_provenance_manifest_id,
+        status: card.status
+      })
+
+    {state,
+     %{
+       story_card_version_id: card.id,
+       story_synthesis_agent_run_id: synthesis.run.id,
+       story_card_status: card.status,
+       refresh_reason: refresh_reason
+     }}
+  end
+
   defp upsert_story(
          state,
          story_key,
@@ -545,17 +713,15 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
             updated_at_story: input.observed_at,
             last_material_at:
               if(
-                material_event_classification?(
-                  event_classification(meaning.output, false, nil)
-                ) and changed_facts != %{},
+                material_event_classification?(event_classification(meaning.output, false, nil)) and
+                  changed_facts != %{},
                 do: input.observed_at,
                 else: existing.last_material_at
               ),
             structural_facts:
               if(
-                material_event_classification?(
-                  event_classification(meaning.output, false, nil)
-                ) and changed_facts != %{},
+                material_event_classification?(event_classification(meaning.output, false, nil)) and
+                  changed_facts != %{},
                 do: Map.merge(existing.structural_facts || %{}, changed_facts),
                 else: existing.structural_facts || %{}
               ),
@@ -760,7 +926,8 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
         Map.merge(candidate, %{
           suggested_story_key: candidate.story_key,
           suggested_classification: "no_op",
-          rationale: "committed story/input token overlap indicates repeated nonmaterial source pressure"
+          rationale:
+            "committed story/input token overlap indicates repeated nonmaterial source pressure"
         })
     end
   end
@@ -776,7 +943,8 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
         structural_facts: story.structural_facts || %{},
         updated_at_story: story.updated_at_story && DateTime.to_iso8601(story.updated_at_story),
         last_material_at: story.last_material_at && DateTime.to_iso8601(story.last_material_at),
-        evidence_input_refs: Enum.map(visible_story_inputs(state, story, actor_id), &Admission.input_ref/1)
+        evidence_input_refs:
+          Enum.map(visible_story_inputs(state, story, actor_id), &Admission.input_ref/1)
       }
     end)
   end
@@ -805,6 +973,336 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
     |> MapSet.new()
   end
 
+  defp append_rows(state, field, rows), do: Enum.reduce(rows, state, &State.append(&2, field, &1))
+
+  defp current_story_card_version(state, story_id) do
+    state.story_card_versions
+    |> Enum.filter(&(&1.story_id == story_id))
+    |> Enum.sort_by(& &1.card_version, :desc)
+    |> List.first()
+  end
+
+  defp card_version_for(state, story_id) do
+    case current_story_card_version(state, story_id) do
+      nil -> 1
+      card -> card.card_version + 1
+    end
+  end
+
+  defp story_packet_state(state, story, actor_id) do
+    %{
+      title: story.title,
+      state: story.state,
+      version: story.version,
+      structural_facts: story.structural_facts || %{},
+      background_facts: story.background_facts || %{},
+      topic_tokens: story.topic_tokens || [],
+      linked_sources:
+        state
+        |> visible_story_inputs(story, actor_id)
+        |> Enum.map(&source_packet_state/1)
+    }
+  end
+
+  defp source_packet_state(input) do
+    %{
+      source_ref: Admission.input_ref(input),
+      article_ref: input.external_id,
+      canonical_uri: get_in(input.normalized || %{}, ["canonical_uri"]),
+      source_name: get_in(input.normalized || %{}, ["source_name"]),
+      source_actor: get_in(input.normalized || %{}, ["source_actor"]),
+      observed_at: input.observed_at && DateTime.to_iso8601(input.observed_at)
+    }
+  end
+
+  defp card_status(output) do
+    status = to_string(output["status"] || "incomplete")
+
+    cond do
+      status in ["refused", "unavailable"] ->
+        status
+
+      missing_agent_key_claims?(output) or missing_durable_topic_nodes?(output) ->
+        "incomplete"
+
+      status == "complete" ->
+        "complete"
+
+      true ->
+        "incomplete"
+    end
+  end
+
+  defp missing_agent_key_claims?(output), do: output["key_claims"] in [nil, []]
+
+  defp missing_durable_topic_nodes?(output) do
+    case get_in(output, ["topic_salience", "durable_topic_nodes"]) do
+      %{"state" => state} when state in ["complete", "refused"] -> false
+      _ -> true
+    end
+  end
+
+  defp field_value(%{} = value, _fallback, _provenance_refs), do: value
+
+  defp field_value(value, _fallback, provenance_refs) when is_binary(value) and value != "",
+    do: %{"text" => value, "state" => "complete", "provenance_refs" => provenance_refs}
+
+  defp field_value(_value, _fallback, provenance_refs) do
+    %{
+      "text" => nil,
+      "state" => "unavailable",
+      "reason" => "story_synthesis_agent_did_not_supply_field",
+      "provenance_refs" => provenance_refs
+    }
+  end
+
+  defp field_completeness(output, status) do
+    supplied = output["field_completeness"] || %{}
+
+    %{
+      "title" => Map.get(supplied, "title", completeness_for(output["title"])),
+      "deck" => Map.get(supplied, "deck", completeness_for(output["deck"])),
+      "summary" => Map.get(supplied, "summary", completeness_for(output["summary"])),
+      "key_claims" =>
+        Map.get(
+          supplied,
+          "key_claims",
+          if(missing_agent_key_claims?(output), do: "unavailable", else: "complete")
+        ),
+      "topic_salience" =>
+        Map.get(
+          supplied,
+          "topic_salience",
+          if(missing_durable_topic_nodes?(output), do: "unavailable", else: "complete")
+        ),
+      "canonical_public_url" => Map.get(supplied, "canonical_public_url", "source_level"),
+      "source_label" => Map.get(supplied, "source_label", "source_level"),
+      "publication" => Map.get(supplied, "publication", "source_level"),
+      "overall" => status
+    }
+  end
+
+  defp completeness_for(%{"state" => state}), do: state
+  defp completeness_for(value) when is_binary(value) and value != "", do: "complete"
+  defp completeness_for(_), do: "unavailable"
+
+  defp salience_hints(output, state, story) do
+    source_count =
+      state.story_events
+      |> Enum.filter(&(&1.story_id == story.id))
+      |> Enum.map(& &1.input_id)
+      |> Enum.uniq()
+      |> length()
+
+    agent_salience = output["topic_salience"] || %{}
+
+    Map.merge(agent_salience, %{
+      "related_source_count" => source_count,
+      "distinct_source_count" => source_count,
+      "material_update_count" =>
+        Enum.count(
+          state.story_events,
+          &(&1.story_id == story.id and material_event_classification?(&1.classification))
+        ),
+      "freshness" => story.state,
+      "user_priority_affinity" =>
+        if(watched_story?(state, story), do: "flynn_priority", else: "unavailable")
+    })
+    |> Map.put_new("durable_topic_nodes", %{
+      "state" => "unavailable",
+      "reason" => "story_synthesis_topic_node_model_not_committed"
+    })
+  end
+
+  defp source_coverage_rows(state, story, card, input, admission, output, provenance_refs) do
+    output_coverage = output["source_coverage"] || []
+    linked_inputs = story_inputs_for_card(state, story.id)
+
+    linked_inputs
+    |> Enum.uniq_by(&Admission.input_ref/1)
+    |> Enum.map(fn linked_input ->
+      source_ref = Admission.input_ref(linked_input)
+      agent_row = Enum.find(output_coverage, &(Map.get(&1, "source_ref") == source_ref)) || %{}
+      normalized = linked_input.normalized || %{}
+      canonical = normalized["canonical_uri"]
+      source_name = normalized["source_name"]
+      host = if is_binary(canonical) and canonical != "", do: URI.parse(canonical).host, else: nil
+
+      evidence_refs =
+        evidence_refs_for_input(state, story.id, linked_input.id, admission.evidence_refs)
+
+      ChangesetStore.insert!(StorySourceCoverage, %{
+        tenant_id: state.tenant_id,
+        story_id: story.id,
+        story_card_version_id: card.id,
+        source_ref: source_ref,
+        article_ref: linked_input.external_id,
+        canonical_public_url:
+          availability_field(canonical, "canonical_public_url_unavailable", provenance_refs),
+        source_domain: availability_field(host, "source_domain_unavailable", provenance_refs),
+        source_label:
+          availability_field(source_name, "source_label_unavailable", provenance_refs),
+        publication: availability_field(source_name, "publication_unavailable", provenance_refs),
+        source_posture:
+          Map.get(agent_row, "source_posture", %{
+            "state" => "unavailable",
+            "reason" => "not_supplied"
+          }),
+        contribution_reason:
+          field_value(
+            Map.get(agent_row, "contribution_reason"),
+            nil,
+            provenance_refs
+          ),
+        materiality: Map.get(agent_row, "materiality", "unavailable"),
+        source_weight:
+          Map.get(agent_row, "source_weight", %{
+            "state" => "unavailable",
+            "reason" => "not_supplied"
+          }),
+        first_observed_at: linked_input.observed_at,
+        last_observed_at: linked_input.observed_at,
+        evidence_refs: evidence_refs,
+        provenance_refs: provenance_refs
+      })
+    end)
+    |> case do
+      [] ->
+        [
+          ChangesetStore.insert!(StorySourceCoverage, %{
+            tenant_id: state.tenant_id,
+            story_id: story.id,
+            story_card_version_id: card.id,
+            source_ref: admission.source_ref,
+            article_ref: input.external_id,
+            canonical_public_url:
+              availability_field(nil, "canonical_public_url_unavailable", provenance_refs),
+            source_domain: availability_field(nil, "source_domain_unavailable", provenance_refs),
+            source_label: availability_field(nil, "source_label_unavailable", provenance_refs),
+            publication: availability_field(nil, "publication_unavailable", provenance_refs),
+            source_posture: %{"state" => "unavailable", "reason" => "not_supplied"},
+            contribution_reason: field_value(nil, nil, provenance_refs),
+            materiality: "unavailable",
+            source_weight: %{"state" => "unavailable", "reason" => "not_supplied"},
+            first_observed_at: input.observed_at,
+            last_observed_at: input.observed_at,
+            evidence_refs: admission.evidence_refs,
+            provenance_refs: provenance_refs
+          })
+        ]
+
+      rows ->
+        rows
+    end
+  end
+
+  defp key_claim_rows(state, story, card, output, _fallback_evidence_refs) do
+    output_claims = output["key_claims"] || []
+
+    output_claims
+    |> Enum.filter(&valid_agent_claim?/1)
+    |> Enum.map(fn claim ->
+      ChangesetStore.insert!(StoryKeyClaim, %{
+        tenant_id: state.tenant_id,
+        story_id: story.id,
+        story_card_version_id: card.id,
+        claim_ref: claim["claim_ref"],
+        text: claim["text"] || claim["value"] || claim["claim_ref"],
+        status: claim_status(claim["status"]),
+        materiality: claim["materiality"] || "material",
+        evidence_refs: claim["evidence_refs"],
+        conflict_refs: claim["conflict_refs"] || [],
+        uncertainty:
+          claim["uncertainty"] || %{"state" => "unavailable", "reason" => "not_supplied"},
+        appears_in_current_card: Map.get(claim, "appears_in_current_card", true)
+      })
+    end)
+  end
+
+  defp valid_agent_claim?(%{"claim_ref" => ref, "evidence_refs" => [_ | _]} = claim)
+       when is_binary(ref) and ref != "" do
+    text = claim["text"] || claim["value"] || claim["claim_ref"]
+    is_binary(text) and text != ""
+  end
+
+  defp valid_agent_claim?(_claim), do: false
+
+  defp availability_field(value, _unavailable_reason, provenance_refs)
+       when is_binary(value) and value != "" do
+    %{"value" => value, "state" => "complete", "provenance_refs" => provenance_refs}
+  end
+
+  defp availability_field(_value, unavailable_reason, provenance_refs) do
+    %{
+      "value" => nil,
+      "state" => "unavailable",
+      "reason" => unavailable_reason,
+      "provenance_refs" => provenance_refs
+    }
+  end
+
+  defp story_inputs_for_card(state, story_id) do
+    state.story_events
+    |> Enum.filter(&(&1.story_id == story_id))
+    |> Enum.map(fn event -> Enum.find(state.inputs, &(&1.id == event.input_id)) end)
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp evidence_refs_for_input(state, story_id, input_id, fallback) do
+    story_subjects =
+      (state.story_events ++ state.story_fact_versions)
+      |> Enum.filter(&(&1.story_id == story_id))
+      |> Enum.map(& &1.id)
+      |> MapSet.new()
+
+    state.evidence_refs
+    |> Enum.filter(&(&1.input_id == input_id and MapSet.member?(story_subjects, &1.subject_id)))
+    |> Enum.map(& &1.evidence_label)
+    |> Enum.uniq()
+    |> non_empty_list(fallback)
+  end
+
+  defp changed_field_keys(output, nil),
+    do:
+      Map.get(output, "changed_field_keys", [
+        "title",
+        "deck",
+        "summary",
+        "source_coverage",
+        "key_claims"
+      ])
+
+  defp changed_field_keys(output, _prior),
+    do:
+      Map.get(output, "changed_field_keys", ["deck", "summary", "source_coverage", "key_claims"])
+
+  defp refresh_reason("split"), do: "story_created"
+  defp refresh_reason("attach"), do: "source_linked"
+  defp refresh_reason("no_op"), do: "source_linked"
+  defp refresh_reason("duplicate"), do: "source_linked"
+  defp refresh_reason("color"), do: "source_linked"
+  defp refresh_reason("stale"), do: "stale_recheck"
+  defp refresh_reason(_), do: "source_content_changed"
+
+  defp claim_status(status)
+       when status in ["current", "disputed", "stale", "background", "unresolved"], do: status
+
+  defp claim_status(_), do: "current"
+
+  defp non_empty_list([], fallback), do: non_empty_list(nil, fallback)
+
+  defp non_empty_list(nil, fallback), do: fallback
+
+  defp non_empty_list(list, _fallback) when is_list(list), do: list
+
+  defp watched_story?(state, story) do
+    story_node_id = Map.get(state.source_ids, {:node, story.story_key})
+
+    Enum.any?(state.edges, fn edge ->
+      edge.edge_type == "watch_applies_to" and edge.to_node_id == story_node_id
+    end)
+  end
+
   defp config(:story_identity) do
     config(:story_identity, "story-identity.v1.t1269.live-loop", @identity_prompt, %{
       story_key: "stable story key",
@@ -817,12 +1315,69 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
   defp config(:meaning_update) do
     config(:meaning_update, "meaning-update.v1.t1269.live-loop", @meaning_prompt, %{
       operation_family: "commit_story_meaning | mark_no_op",
-      classification: "new_story | substantive_update | repeated_noop_input | duplicate | no_op | adds_color | stale",
+      classification:
+        "new_story | substantive_update | repeated_noop_input | duplicate | no_op | adds_color | stale",
       story_key: "stable story key",
       changed_facts: "object",
       confidence: "0.0-1.0",
       rationale: "string",
       refusal_reason: "string or null"
+    })
+  end
+
+  defp config(:story_synthesis) do
+    config(:story_synthesis, "story-synthesis.v1.t1312.story-cards", @synthesis_prompt, %{
+      status: "complete | incomplete | refused | unavailable",
+      title: %{text: "string", state: "complete | unavailable", provenance_refs: ["string"]},
+      deck: %{
+        text: "string or null",
+        state: "complete | unavailable",
+        reason: "string or null",
+        provenance_refs: ["string"]
+      },
+      summary: %{
+        text: "string or null",
+        state: "complete | unavailable",
+        reason: "string or null",
+        provenance_refs: ["string"]
+      },
+      key_claims: [
+        %{
+          claim_ref: "claim ref",
+          text: "claim text",
+          status: "current | disputed | stale | background | unresolved",
+          materiality: "material | background | unresolved",
+          evidence_refs: ["evidence ref"],
+          conflict_refs: ["conflict ref"],
+          uncertainty: %{state: "known | unavailable", reason: "string or null"},
+          appears_in_current_card: true
+        }
+      ],
+      source_coverage: [
+        %{
+          source_ref: "source ref",
+          contribution_reason: %{
+            text: "why this article belongs to the story",
+            state: "complete",
+            provenance_refs: ["string"]
+          },
+          materiality: "material | nonmaterial | unavailable",
+          source_posture: %{state: "complete | unavailable", value: "string or null"},
+          source_weight: %{state: "complete | unavailable", value: "number or null"}
+        }
+      ],
+      topic_salience: %{
+        salience_explanation: "story-to-topic salience explanation or unavailable state",
+        global_salience: "hint",
+        flynn_priority: "hint"
+      },
+      changed_field_keys: ["field_key"],
+      change_summary: %{
+        text: "story-agent-authored change summary",
+        state: "complete",
+        provenance_refs: ["string"]
+      },
+      field_completeness: %{}
     })
   end
 
@@ -842,7 +1397,8 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
 
   defp normalize_output(output), do: Admission.normalize_keys(output || %{})
 
-  defp story_key(output, input, nil), do: slug(output["story_key"] || input.title || input.external_id)
+  defp story_key(output, input, nil),
+    do: slug(output["story_key"] || input.title || input.external_id)
 
   defp story_key(output, input, hint) do
     output_key = slug(output["story_key"] || input.title || input.external_id)
@@ -899,7 +1455,8 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
   defp edge_type_for_event("conflict"), do: "contradicts"
   defp edge_type_for_event(_classification), do: "supports"
 
-  defp material_event_classification?(classification), do: classification in ["split", "attach", "conflict"]
+  defp material_event_classification?(classification),
+    do: classification in ["split", "attach", "conflict"]
 
   defp operation_family(output) do
     case to_string(output["operation_family"] || "commit_story_meaning") do

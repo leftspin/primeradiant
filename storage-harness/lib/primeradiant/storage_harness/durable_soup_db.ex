@@ -2,6 +2,12 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
   @moduledoc false
 
   @tables [
+    :story_card_projection_audits,
+    :story_reader_deltas,
+    :story_card_change_sets,
+    :story_key_claims,
+    :story_source_coverage,
+    :story_card_versions,
     :evidence_refs,
     :conflicts,
     :story_events,
@@ -48,6 +54,12 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
         rows_sql(:edges, state.edges),
         rows_sql(:story_fact_versions, state.story_fact_versions),
         rows_sql(:story_events, state.story_events),
+        rows_sql(:story_card_versions, state.story_card_versions),
+        rows_sql(:story_source_coverage, state.story_source_coverage),
+        rows_sql(:story_key_claims, state.story_key_claims),
+        rows_sql(:story_card_change_sets, state.story_card_change_sets),
+        rows_sql(:story_reader_deltas, state.story_reader_deltas),
+        rows_sql(:story_card_projection_audits, state.story_card_projection_audits),
         rows_sql(:conflicts, state.conflicts),
         rows_sql(:evidence_refs, state.evidence_refs),
         "COMMIT;"
@@ -144,6 +156,60 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
         load_rows(db_path, "story_events", tenant_id, Primeradiant.StorageHarness.StoryEvent)
       )
       |> put_rows(
+        :story_card_versions,
+        load_rows(
+          db_path,
+          "story_card_versions",
+          tenant_id,
+          Primeradiant.StorageHarness.StoryCardVersion
+        )
+      )
+      |> put_rows(
+        :story_source_coverage,
+        load_rows(
+          db_path,
+          "story_source_coverage",
+          tenant_id,
+          Primeradiant.StorageHarness.StorySourceCoverage
+        )
+      )
+      |> put_rows(
+        :story_key_claims,
+        load_rows(
+          db_path,
+          "story_key_claims",
+          tenant_id,
+          Primeradiant.StorageHarness.StoryKeyClaim
+        )
+      )
+      |> put_rows(
+        :story_card_change_sets,
+        load_rows(
+          db_path,
+          "story_card_change_sets",
+          tenant_id,
+          Primeradiant.StorageHarness.StoryCardChangeSet
+        )
+      )
+      |> put_rows(
+        :story_reader_deltas,
+        load_rows(
+          db_path,
+          "story_reader_deltas",
+          tenant_id,
+          Primeradiant.StorageHarness.StoryReaderDelta
+        )
+      )
+      |> put_rows(
+        :story_card_projection_audits,
+        load_rows(
+          db_path,
+          "story_card_projection_audits",
+          tenant_id,
+          Primeradiant.StorageHarness.StoryCardProjectionAudit
+        )
+      )
+      |> put_rows(
         :conflicts,
         load_rows(db_path, "conflicts", tenant_id, Primeradiant.StorageHarness.Conflict)
       )
@@ -166,6 +232,12 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
     |> merge_rows(:inputs, current.inputs)
     |> merge_rows(:agent_runs, current.agent_runs)
     |> merge_rows(:evidence_refs, current.evidence_refs)
+    |> merge_rows(:story_card_versions, current.story_card_versions)
+    |> merge_rows(:story_source_coverage, current.story_source_coverage)
+    |> merge_rows(:story_key_claims, current.story_key_claims)
+    |> merge_rows(:story_card_change_sets, current.story_card_change_sets)
+    |> merge_rows(:story_reader_deltas, current.story_reader_deltas)
+    |> merge_rows(:story_card_projection_audits, current.story_card_projection_audits)
   end
 
   def changed_stories_report(db_path, tenant_id, source_summary, ingestion_report) do
@@ -204,6 +276,9 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
         proposal_decisions: count(db_path, "proposal_decisions", tenant_id),
         graph_commits: count(db_path, "graph_commits", tenant_id),
         story_events: count(db_path, "story_events", tenant_id),
+        story_card_versions: count(db_path, "story_card_versions", tenant_id),
+        story_source_coverage: count(db_path, "story_source_coverage", tenant_id),
+        story_key_claims: count(db_path, "story_key_claims", tenant_id),
         evidence_refs: count(db_path, "evidence_refs", tenant_id)
       },
       seen_state_delta: seen_state_delta_report(db_path, tenant_id),
@@ -515,6 +590,48 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
     )
   end
 
+  defp row_map(:story_card_versions, row) do
+    take(
+      row,
+      ~w(id tenant_id story_id story_version card_version status supersedes_id refresh_reason producing_agent_run_id packet_hash prompt_config_hash output_hash field_provenance_manifest_id title deck summary freshness field_completeness topic_salience provenance inserted_at updated_at)a
+    )
+  end
+
+  defp row_map(:story_source_coverage, row) do
+    take(
+      row,
+      ~w(id tenant_id story_id story_card_version_id source_ref article_ref canonical_public_url source_domain source_label publication source_posture contribution_reason materiality source_weight first_observed_at last_observed_at evidence_refs provenance_refs inserted_at updated_at)a
+    )
+  end
+
+  defp row_map(:story_key_claims, row) do
+    take(
+      row,
+      ~w(id tenant_id story_id story_card_version_id claim_ref text status materiality evidence_refs conflict_refs uncertainty appears_in_current_card inserted_at updated_at)a
+    )
+  end
+
+  defp row_map(:story_card_change_sets, row) do
+    take(
+      row,
+      ~w(id tenant_id story_id prior_card_version_id new_card_version_id changed_field_keys added_claim_refs removed_claim_refs changed_claim_refs changed_source_coverage_refs refresh_reason change_summary inserted_at updated_at)a
+    )
+  end
+
+  defp row_map(:story_reader_deltas, row) do
+    take(
+      row,
+      ~w(id tenant_id user_id story_id seen_state_id prior_seen_story_version prior_seen_card_version_id current_story_version current_card_version_id material_unseen_deltas nonmaterial_exclusions producing_agent_run_id evidence_refs provenance_refs inserted_at updated_at)a
+    )
+  end
+
+  defp row_map(:story_card_projection_audits, row) do
+    take(
+      row,
+      ~w(id tenant_id projection_id consumer query_time cursor story_card_version_ids omitted_story_reasons visibility_scope status inserted_at updated_at)a
+    )
+  end
+
   defp row_map(:conflicts, row) do
     take(
       row,
@@ -654,14 +771,15 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
   defp load_value(_key, nil), do: nil
   defp load_value("confidence", value), do: Decimal.new(to_string(value))
   defp load_value("verified", value), do: value in [1, true, "1"]
+  defp load_value("appears_in_current_card", value), do: value in [1, true, "1"]
 
   defp load_value(key, value)
-       when key in ~w(acl scope normalized facts background questions colors topic_tokens attrs payload evidence_refs changed_facts structural_facts background_facts evidence_packet claim_refs) and
+       when key in ~w(acl scope normalized facts background questions colors topic_tokens attrs payload evidence_refs changed_facts structural_facts background_facts evidence_packet claim_refs title deck summary freshness field_completeness topic_salience provenance canonical_public_url source_domain source_label publication source_posture contribution_reason source_weight provenance_refs conflict_refs uncertainty changed_field_keys added_claim_refs removed_claim_refs changed_claim_refs changed_source_coverage_refs change_summary material_unseen_deltas nonmaterial_exclusions story_card_version_ids omitted_story_reasons visibility_scope) and
               is_binary(value),
        do: decode_json(value, %{})
 
   defp load_value(key, value)
-       when key in ~w(inserted_at updated_at started_at ended_at committed_at observed_at first_observed_at updated_at_story last_material_at seen_at) and
+       when key in ~w(inserted_at updated_at started_at ended_at committed_at observed_at first_observed_at updated_at_story last_material_at seen_at first_observed_at last_observed_at query_time) and
               is_binary(value),
        do: Primeradiant.StorageHarness.ChangesetStore.iso!(value)
 
@@ -945,6 +1063,125 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
       graph_commit_id TEXT NOT NULL REFERENCES graph_commits(id),
       confidence TEXT NOT NULL,
       inserted_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS story_card_versions (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      story_id TEXT NOT NULL REFERENCES stories(id),
+      story_version INTEGER NOT NULL,
+      card_version INTEGER NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('complete', 'incomplete', 'refused', 'unavailable')),
+      supersedes_id TEXT,
+      refresh_reason TEXT NOT NULL CHECK (refresh_reason IN ('story_created', 'source_linked', 'source_content_changed', 'source_weight_changed', 'reader_delta_requested', 'repair_backfill', 'stale_recheck', 'manual_review')),
+      producing_agent_run_id TEXT NOT NULL REFERENCES agent_runs(id),
+      packet_hash TEXT NOT NULL,
+      prompt_config_hash TEXT NOT NULL,
+      output_hash TEXT NOT NULL,
+      field_provenance_manifest_id TEXT NOT NULL,
+      title TEXT NOT NULL,
+      deck TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      freshness TEXT NOT NULL,
+      field_completeness TEXT NOT NULL,
+      topic_salience TEXT NOT NULL,
+      provenance TEXT NOT NULL,
+      inserted_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE (tenant_id, story_id, card_version)
+    );
+
+    CREATE TABLE IF NOT EXISTS story_source_coverage (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      story_id TEXT NOT NULL REFERENCES stories(id),
+      story_card_version_id TEXT NOT NULL REFERENCES story_card_versions(id),
+      source_ref TEXT NOT NULL,
+      article_ref TEXT,
+      canonical_public_url TEXT NOT NULL,
+      source_domain TEXT NOT NULL,
+      source_label TEXT NOT NULL,
+      publication TEXT NOT NULL,
+      source_posture TEXT NOT NULL,
+      contribution_reason TEXT NOT NULL,
+      materiality TEXT NOT NULL,
+      source_weight TEXT NOT NULL,
+      first_observed_at TEXT NOT NULL,
+      last_observed_at TEXT NOT NULL,
+      evidence_refs TEXT NOT NULL,
+      provenance_refs TEXT NOT NULL,
+      inserted_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE (story_card_version_id, source_ref, article_ref)
+    );
+
+    CREATE TABLE IF NOT EXISTS story_key_claims (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      story_id TEXT NOT NULL REFERENCES stories(id),
+      story_card_version_id TEXT NOT NULL REFERENCES story_card_versions(id),
+      claim_ref TEXT NOT NULL,
+      text TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('current', 'disputed', 'stale', 'background', 'unresolved')),
+      materiality TEXT NOT NULL,
+      evidence_refs TEXT NOT NULL,
+      conflict_refs TEXT NOT NULL,
+      uncertainty TEXT NOT NULL,
+      appears_in_current_card INTEGER NOT NULL,
+      inserted_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE (story_card_version_id, claim_ref)
+    );
+
+    CREATE TABLE IF NOT EXISTS story_card_change_sets (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      story_id TEXT NOT NULL REFERENCES stories(id),
+      prior_card_version_id TEXT,
+      new_card_version_id TEXT NOT NULL REFERENCES story_card_versions(id),
+      changed_field_keys TEXT NOT NULL,
+      added_claim_refs TEXT NOT NULL,
+      removed_claim_refs TEXT NOT NULL,
+      changed_claim_refs TEXT NOT NULL,
+      changed_source_coverage_refs TEXT NOT NULL,
+      refresh_reason TEXT NOT NULL,
+      change_summary TEXT NOT NULL,
+      inserted_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS story_reader_deltas (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      story_id TEXT NOT NULL REFERENCES stories(id),
+      seen_state_id TEXT,
+      prior_seen_story_version INTEGER NOT NULL,
+      prior_seen_card_version_id TEXT,
+      current_story_version INTEGER NOT NULL,
+      current_card_version_id TEXT NOT NULL REFERENCES story_card_versions(id),
+      material_unseen_deltas TEXT NOT NULL,
+      nonmaterial_exclusions TEXT NOT NULL,
+      producing_agent_run_id TEXT NOT NULL REFERENCES agent_runs(id),
+      evidence_refs TEXT NOT NULL,
+      provenance_refs TEXT NOT NULL,
+      inserted_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS story_card_projection_audits (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      projection_id TEXT NOT NULL,
+      consumer TEXT NOT NULL,
+      query_time TEXT NOT NULL,
+      cursor TEXT NOT NULL,
+      story_card_version_ids TEXT NOT NULL,
+      omitted_story_reasons TEXT NOT NULL,
+      visibility_scope TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('complete', 'partial', 'stale')),
+      inserted_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
     );
 
     CREATE TABLE IF NOT EXISTS conflicts (

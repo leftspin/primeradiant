@@ -673,6 +673,360 @@ defmodule Primeradiant.StorageHarness.StoryEvent do
   end
 end
 
+defmodule Primeradiant.StorageHarness.StoryCardVersion do
+  use Primeradiant.StorageHarness.Schema
+
+  @refresh_reasons ~w(story_created source_linked source_content_changed source_weight_changed reader_delta_requested repair_backfill stale_recheck manual_review)
+  @statuses ~w(complete incomplete refused unavailable)
+
+  schema "story_card_versions" do
+    field(:tenant_id, :binary_id)
+    field(:story_id, :binary_id)
+    field(:story_version, :integer)
+    field(:card_version, :integer)
+    field(:status, :string)
+    field(:supersedes_id, :binary_id)
+    field(:refresh_reason, :string)
+    field(:producing_agent_run_id, :binary_id)
+    field(:packet_hash, :string)
+    field(:prompt_config_hash, :string)
+    field(:output_hash, :string)
+    field(:field_provenance_manifest_id, :string)
+    field(:title, :map, default: %{})
+    field(:deck, :map, default: %{})
+    field(:summary, :map, default: %{})
+    field(:freshness, :map, default: %{})
+    field(:field_completeness, :map, default: %{})
+    field(:topic_salience, :map, default: %{})
+    field(:provenance, :map, default: %{})
+    timestamps(type: :utc_datetime_usec)
+  end
+
+  def changeset(struct \\ %__MODULE__{}, attrs) do
+    struct
+    |> cast(attrs, [
+      :id,
+      :tenant_id,
+      :story_id,
+      :story_version,
+      :card_version,
+      :status,
+      :supersedes_id,
+      :refresh_reason,
+      :producing_agent_run_id,
+      :packet_hash,
+      :prompt_config_hash,
+      :output_hash,
+      :field_provenance_manifest_id,
+      :title,
+      :deck,
+      :summary,
+      :freshness,
+      :field_completeness,
+      :topic_salience,
+      :provenance
+    ])
+    |> put_id()
+    |> validate_required([
+      :tenant_id,
+      :story_id,
+      :story_version,
+      :card_version,
+      :status,
+      :refresh_reason,
+      :producing_agent_run_id,
+      :packet_hash,
+      :prompt_config_hash,
+      :output_hash,
+      :field_provenance_manifest_id,
+      :title,
+      :deck,
+      :summary,
+      :freshness,
+      :field_completeness,
+      :topic_salience,
+      :provenance
+    ])
+    |> validate_inclusion(:status, @statuses)
+    |> validate_inclusion(:refresh_reason, @refresh_reasons)
+    |> validate_number(:story_version, greater_than_or_equal_to: 1)
+    |> validate_number(:card_version, greater_than_or_equal_to: 1)
+  end
+end
+
+defmodule Primeradiant.StorageHarness.StorySourceCoverage do
+  use Primeradiant.StorageHarness.Schema
+
+  schema "story_source_coverage" do
+    field(:tenant_id, :binary_id)
+    field(:story_id, :binary_id)
+    field(:story_card_version_id, :binary_id)
+    field(:source_ref, :string)
+    field(:article_ref, :string)
+    field(:canonical_public_url, :map, default: %{})
+    field(:source_domain, :map, default: %{})
+    field(:source_label, :map, default: %{})
+    field(:publication, :map, default: %{})
+    field(:source_posture, :map, default: %{})
+    field(:contribution_reason, :map, default: %{})
+    field(:materiality, :string)
+    field(:source_weight, :map, default: %{})
+    field(:first_observed_at, :utc_datetime_usec)
+    field(:last_observed_at, :utc_datetime_usec)
+    field(:evidence_refs, {:array, :string}, default: [])
+    field(:provenance_refs, {:array, :string}, default: [])
+    timestamps(type: :utc_datetime_usec)
+  end
+
+  def changeset(struct \\ %__MODULE__{}, attrs) do
+    struct
+    |> cast(attrs, [
+      :id,
+      :tenant_id,
+      :story_id,
+      :story_card_version_id,
+      :source_ref,
+      :article_ref,
+      :canonical_public_url,
+      :source_domain,
+      :source_label,
+      :publication,
+      :source_posture,
+      :contribution_reason,
+      :materiality,
+      :source_weight,
+      :first_observed_at,
+      :last_observed_at,
+      :evidence_refs,
+      :provenance_refs
+    ])
+    |> put_id()
+    |> validate_required([
+      :tenant_id,
+      :story_id,
+      :story_card_version_id,
+      :source_ref,
+      :canonical_public_url,
+      :source_domain,
+      :source_label,
+      :publication,
+      :contribution_reason,
+      :materiality,
+      :first_observed_at,
+      :last_observed_at,
+      :evidence_refs,
+      :provenance_refs
+    ])
+    |> validate_non_empty_list(:evidence_refs)
+  end
+end
+
+defmodule Primeradiant.StorageHarness.StoryKeyClaim do
+  use Primeradiant.StorageHarness.Schema
+
+  @statuses ~w(current disputed stale background unresolved)
+
+  schema "story_key_claims" do
+    field(:tenant_id, :binary_id)
+    field(:story_id, :binary_id)
+    field(:story_card_version_id, :binary_id)
+    field(:claim_ref, :string)
+    field(:text, :string)
+    field(:status, :string)
+    field(:materiality, :string)
+    field(:evidence_refs, {:array, :string}, default: [])
+    field(:conflict_refs, {:array, :string}, default: [])
+    field(:uncertainty, :map, default: %{})
+    field(:appears_in_current_card, :boolean, default: true)
+    timestamps(type: :utc_datetime_usec)
+  end
+
+  def changeset(struct \\ %__MODULE__{}, attrs) do
+    struct
+    |> cast(attrs, [
+      :id,
+      :tenant_id,
+      :story_id,
+      :story_card_version_id,
+      :claim_ref,
+      :text,
+      :status,
+      :materiality,
+      :evidence_refs,
+      :conflict_refs,
+      :uncertainty,
+      :appears_in_current_card
+    ])
+    |> put_id()
+    |> validate_required([
+      :tenant_id,
+      :story_id,
+      :story_card_version_id,
+      :claim_ref,
+      :text,
+      :status,
+      :materiality,
+      :evidence_refs,
+      :conflict_refs,
+      :uncertainty,
+      :appears_in_current_card
+    ])
+    |> validate_inclusion(:status, @statuses)
+    |> validate_non_empty_list(:evidence_refs)
+  end
+end
+
+defmodule Primeradiant.StorageHarness.StoryCardChangeSet do
+  use Primeradiant.StorageHarness.Schema
+
+  schema "story_card_change_sets" do
+    field(:tenant_id, :binary_id)
+    field(:story_id, :binary_id)
+    field(:prior_card_version_id, :binary_id)
+    field(:new_card_version_id, :binary_id)
+    field(:changed_field_keys, {:array, :string}, default: [])
+    field(:added_claim_refs, {:array, :string}, default: [])
+    field(:removed_claim_refs, {:array, :string}, default: [])
+    field(:changed_claim_refs, {:array, :string}, default: [])
+    field(:changed_source_coverage_refs, {:array, :string}, default: [])
+    field(:refresh_reason, :string)
+    field(:change_summary, :map, default: %{})
+    timestamps(type: :utc_datetime_usec)
+  end
+
+  def changeset(struct \\ %__MODULE__{}, attrs) do
+    struct
+    |> cast(attrs, [
+      :id,
+      :tenant_id,
+      :story_id,
+      :prior_card_version_id,
+      :new_card_version_id,
+      :changed_field_keys,
+      :added_claim_refs,
+      :removed_claim_refs,
+      :changed_claim_refs,
+      :changed_source_coverage_refs,
+      :refresh_reason,
+      :change_summary
+    ])
+    |> put_id()
+    |> validate_required([
+      :tenant_id,
+      :story_id,
+      :new_card_version_id,
+      :changed_field_keys,
+      :added_claim_refs,
+      :removed_claim_refs,
+      :changed_claim_refs,
+      :changed_source_coverage_refs,
+      :refresh_reason,
+      :change_summary
+    ])
+  end
+end
+
+defmodule Primeradiant.StorageHarness.StoryReaderDelta do
+  use Primeradiant.StorageHarness.Schema
+
+  schema "story_reader_deltas" do
+    field(:tenant_id, :binary_id)
+    field(:user_id, :string)
+    field(:story_id, :binary_id)
+    field(:seen_state_id, :binary_id)
+    field(:prior_seen_story_version, :integer)
+    field(:prior_seen_card_version_id, :binary_id)
+    field(:current_story_version, :integer)
+    field(:current_card_version_id, :binary_id)
+    field(:material_unseen_deltas, {:array, :map}, default: [])
+    field(:nonmaterial_exclusions, {:array, :map}, default: [])
+    field(:producing_agent_run_id, :binary_id)
+    field(:evidence_refs, {:array, :string}, default: [])
+    field(:provenance_refs, {:array, :string}, default: [])
+    timestamps(type: :utc_datetime_usec)
+  end
+
+  def changeset(struct \\ %__MODULE__{}, attrs) do
+    struct
+    |> cast(attrs, [
+      :id,
+      :tenant_id,
+      :user_id,
+      :story_id,
+      :seen_state_id,
+      :prior_seen_story_version,
+      :prior_seen_card_version_id,
+      :current_story_version,
+      :current_card_version_id,
+      :material_unseen_deltas,
+      :nonmaterial_exclusions,
+      :producing_agent_run_id,
+      :evidence_refs,
+      :provenance_refs
+    ])
+    |> put_id()
+    |> validate_required([
+      :tenant_id,
+      :user_id,
+      :story_id,
+      :prior_seen_story_version,
+      :current_story_version,
+      :current_card_version_id,
+      :material_unseen_deltas,
+      :nonmaterial_exclusions,
+      :producing_agent_run_id,
+      :evidence_refs,
+      :provenance_refs
+    ])
+  end
+end
+
+defmodule Primeradiant.StorageHarness.StoryCardProjectionAudit do
+  use Primeradiant.StorageHarness.Schema
+
+  schema "story_card_projection_audits" do
+    field(:tenant_id, :binary_id)
+    field(:projection_id, :string)
+    field(:consumer, :string)
+    field(:query_time, :utc_datetime_usec)
+    field(:cursor, :string)
+    field(:story_card_version_ids, {:array, :string}, default: [])
+    field(:omitted_story_reasons, {:array, :map}, default: [])
+    field(:visibility_scope, :map, default: %{})
+    field(:status, :string)
+    timestamps(type: :utc_datetime_usec)
+  end
+
+  def changeset(struct \\ %__MODULE__{}, attrs) do
+    struct
+    |> cast(attrs, [
+      :id,
+      :tenant_id,
+      :projection_id,
+      :consumer,
+      :query_time,
+      :cursor,
+      :story_card_version_ids,
+      :omitted_story_reasons,
+      :visibility_scope,
+      :status
+    ])
+    |> put_id()
+    |> validate_required([
+      :tenant_id,
+      :projection_id,
+      :consumer,
+      :query_time,
+      :cursor,
+      :story_card_version_ids,
+      :omitted_story_reasons,
+      :visibility_scope,
+      :status
+    ])
+    |> validate_inclusion(:status, ["complete", "partial", "stale"])
+  end
+end
+
 defmodule Primeradiant.StorageHarness.Conflict do
   use Primeradiant.StorageHarness.Schema
 
