@@ -42,7 +42,8 @@ defmodule Primeradiant.StorageHarness.DaemonNewsEvent do
               story_agent_opts
             )
 
-          {:ok, state, delta_output} = KnowledgeWork.record_verified_delta(state, actor_id)
+          {:ok, state, delta_output} =
+            KnowledgeWork.record_verified_delta(state, actor_id, advance_seen?: false)
 
           {state, story_agent_report(state, summary, ingestion_report, story_agent_report)}
           |> then(fn {state, report_fun} ->

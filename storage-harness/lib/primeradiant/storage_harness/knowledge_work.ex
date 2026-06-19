@@ -15,6 +15,7 @@ defmodule Primeradiant.StorageHarness.KnowledgeWork do
     SeenState,
     SeenStateRef,
     SoupNode,
+    StoryReaderDelta,
     State,
     Watch
   }
@@ -54,26 +55,67 @@ defmodule Primeradiant.StorageHarness.KnowledgeWork do
     end)
   end
 
-  def record_verified_delta(%State{} = state, user_id \\ "flynn") do
+  def record_verified_delta(%State{} = state, user_id \\ "flynn", opts \\ []) do
     {state, agent_run} = ensure_delta_agent_run(state, user_id)
     output = render_delta(state, user_id) |> Map.put(:agent_run_key, agent_run.agent_run_key)
 
     if output.bullets == [] do
       {:ok, state, output}
     else
-      advance_seen? = Enum.any?(output.touched_story_keys, &unseen_story?(state, user_id, &1))
+      advance_seen? =
+        Keyword.get(opts, :advance_seen?, true) and
+          Enum.any?(output.touched_story_keys, &unseen_story?(state, user_id, &1))
 
       state =
-        if advance_seen? do
+        if Keyword.get(opts, :advance_seen?, true) do
           state
           |> record_output!(output)
-          |> mark_seen!(output)
+          |> record_story_reader_deltas!(output, agent_run)
+          |> maybe_mark_seen!(output, advance_seen?)
         else
-          record_output!(state, output)
+          record_story_reader_deltas!(state, output, agent_run)
         end
 
       {:ok, state, output}
     end
+  end
+
+  defp maybe_mark_seen!(state, output, true), do: mark_seen!(state, output)
+  defp maybe_mark_seen!(state, _output, false), do: state
+
+  defp record_story_reader_deltas!(state, output, agent_run) do
+    Enum.reduce(output.touched_story_keys, state, fn story_key, acc ->
+      story = Enum.find(acc.stories, &(&1.story_key == story_key))
+      card = story && current_story_card_version(acc, story.id)
+
+      if story && card do
+        seen =
+          Enum.find(acc.seen_states, &(&1.user_id == output.user_id and &1.story_id == story.id))
+
+        bullet_rows = Enum.filter(output.sentence_evidence, &(&1.story_key == story_key))
+
+        delta =
+          ChangesetStore.insert!(StoryReaderDelta, %{
+            tenant_id: acc.tenant_id,
+            user_id: output.user_id,
+            story_id: story.id,
+            seen_state_id: seen && seen.id,
+            prior_seen_story_version: if(seen, do: seen.seen_story_version, else: 0),
+            prior_seen_card_version_id: prior_seen_card_version_id(acc, story.id, seen),
+            current_story_version: story.version,
+            current_card_version_id: card.id,
+            material_unseen_deltas: material_delta_rows(bullet_rows),
+            nonmaterial_exclusions: nonmaterial_delta_rows(bullet_rows),
+            producing_agent_run_id: agent_run.id,
+            evidence_refs: output.evidence_refs,
+            provenance_refs: [card.field_provenance_manifest_id]
+          })
+
+        State.append(acc, :story_reader_deltas, delta)
+      else
+        acc
+      end
+    end)
   end
 
   defp ensure_delta_agent_run(state, user_id) do
@@ -621,7 +663,8 @@ defmodule Primeradiant.StorageHarness.KnowledgeWork do
     if material_event?(event), do: claim_refs_for_facts(state, story, facts), else: []
   end
 
-  defp claim_refs_for_event(state, story, nil, facts), do: claim_refs_for_facts(state, story, facts)
+  defp claim_refs_for_event(state, story, nil, facts),
+    do: claim_refs_for_facts(state, story, facts)
 
   defp story_changed_for_actor?(state, story, user_id) do
     seen_inputs = seen_input_refs(state, story, user_id) |> MapSet.new()
@@ -645,7 +688,8 @@ defmodule Primeradiant.StorageHarness.KnowledgeWork do
   defp nonmaterial_exclusion_event?(event),
     do: event.classification in ["duplicate", "no_op", "stale", "color"]
 
-  defp delta_visible_event?(event), do: material_event?(event) or nonmaterial_exclusion_event?(event)
+  defp delta_visible_event?(event),
+    do: material_event?(event) or nonmaterial_exclusion_event?(event)
 
   defp latest_visible_story_event(state, story, user_id) do
     events = visible_story_events(state, story, user_id)
@@ -825,8 +869,10 @@ defmodule Primeradiant.StorageHarness.KnowledgeWork do
     do: "no material new update; source adds color only"
 
   defp why_text(%{classification: "stale"}), do: "mostly background; no material change was found"
+
   defp why_text(%{classification: "no_op"}),
     do: "no material new update; repeated known facts without new material delta"
+
   defp why_text(%{classification: "duplicate"}), do: "duplicate evidence; no material new update"
 
   defp why_text(%{classification: "attach"}),
@@ -839,7 +885,8 @@ defmodule Primeradiant.StorageHarness.KnowledgeWork do
 
   defp verified_output?(bullet_records) do
     Enum.all?(bullet_records, fn unit ->
-      unit.evidence_refs != [] and (unit.claim_refs != [] or nonmaterial_classification?(unit.classification))
+      unit.evidence_refs != [] and
+        (unit.claim_refs != [] or nonmaterial_classification?(unit.classification))
     end)
   end
 
@@ -855,7 +902,7 @@ defmodule Primeradiant.StorageHarness.KnowledgeWork do
     Enum.each(output.sentence_evidence, fn unit ->
       if unit.evidence_refs == [] or
            (unit.claim_refs == [] and not nonmaterial_classification?(unit.classification)),
-        do: raise(ArgumentError, "authored output requires grounded units")
+         do: raise(ArgumentError, "authored output requires grounded units")
 
       validate_actor_evidence_refs!(state, output.user_id, unit.evidence_refs)
     end)
@@ -863,6 +910,48 @@ defmodule Primeradiant.StorageHarness.KnowledgeWork do
 
   defp nonmaterial_classification?(classification),
     do: classification in ["duplicate", "no_op", "stale", "color"]
+
+  defp current_story_card_version(state, story_id) do
+    state.story_card_versions
+    |> Enum.filter(&(&1.story_id == story_id))
+    |> Enum.sort_by(& &1.card_version, :desc)
+    |> List.first()
+  end
+
+  defp prior_seen_card_version_id(_state, _story_id, nil), do: nil
+
+  defp prior_seen_card_version_id(state, story_id, seen) do
+    state.story_card_versions
+    |> Enum.filter(&(&1.story_id == story_id and &1.story_version <= seen.seen_story_version))
+    |> Enum.sort_by(& &1.card_version, :desc)
+    |> List.first()
+    |> case do
+      nil -> nil
+      card -> card.id
+    end
+  end
+
+  defp material_delta_rows(rows) do
+    rows
+    |> Enum.reject(&nonmaterial_classification?(&1.classification))
+    |> Enum.map(&delta_row/1)
+  end
+
+  defp nonmaterial_delta_rows(rows) do
+    rows
+    |> Enum.filter(&nonmaterial_classification?(&1.classification))
+    |> Enum.map(&delta_row/1)
+  end
+
+  defp delta_row(row) do
+    %{
+      "story_key" => row.story_key,
+      "text" => row.text,
+      "classification" => row.classification,
+      "evidence_refs" => row.evidence_refs,
+      "claim_refs" => row.claim_refs
+    }
+  end
 
   defp add_evidence_refs(state, subject_type, subject_id, refs, attrs) do
     Enum.reduce(refs, state, fn ref, acc ->

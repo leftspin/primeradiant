@@ -22,10 +22,10 @@ defmodule Primeradiant.SoupApiTest do
     {:ok, state: state}
   end
 
-  test "ready returns ready soup metadata for Reporter news morning", %{state: state} do
+  test "ready returns ready soup metadata for Reporter story cards", %{state: state} do
     body =
       :get
-      |> conn("/api/v1/soup/ready?consumer=reporter&projection=news-morning")
+      |> conn("/api/v1/soup/ready?consumer=reporter&projection=story_cards")
       |> put_req_header("authorization", "Bearer internal-token")
       |> Router.call(Keyword.put(@opts, :state, state))
       |> json()
@@ -50,12 +50,12 @@ defmodule Primeradiant.SoupApiTest do
     assert [%{"code" => "unsupported_projection"}] = body["blockers"]
   end
 
-  test "feed returns required story item fields without authored projection framing", %{
+  test "feed returns explicit incomplete story-card fields without legacy projection framing", %{
     state: state
   } do
     body =
       :get
-      |> conn("/api/v1/soup/feed?consumer=reporter&projection=news-morning&limit=2")
+      |> conn("/api/v1/soup/feed?consumer=reporter&projection=story_cards&limit=2")
       |> put_req_header("authorization", "Bearer internal-token")
       |> Router.call(Keyword.put(@opts, :state, state))
       |> json()
@@ -67,32 +67,25 @@ defmodule Primeradiant.SoupApiTest do
     item = hd(body["items"])
     assert item["story_id"]
     assert is_integer(item["story_version"])
-
-    assert item["story_card_version_id"] ==
-             "story_card:#{item["story_id"]}:v#{item["story_version"]}"
-
     assert item["change_kind"]
     assert is_list(item["admitted_item_ids"])
-    assert %{"text" => _, "source" => _, "evidence_refs" => refs} = item["title"]
-    assert is_list(refs)
-    assert item["summary"]["source"] == "primeradiant_facts"
-    assert Map.has_key?(item["summary"], "no_summary_reason")
-    assert item["deck"]["source"] == "primeradiant_facts"
     assert is_list(item["key_claims"])
     assert is_list(item["source_coverage"])
-    assert item["source_links"] == item["source_coverage"]
     assert item["refresh_reason"]
     assert is_map(item["field_completeness"])
-    assert item["projection_provenance"]["story_card_version_id"] == item["story_card_version_id"]
+    assert item["projection_provenance"]["story_card_version_id"] == nil
     assert item["projection_provenance"]["projection_id"] == "news-morning"
     assert is_map(item["projection_provenance"]["field_provenance"])
-    assert item["changed_since_seen"]["status"] == "unavailable"
-    assert item["topic_salience"]["status"] == "unavailable"
-    assert item["timestamps"]["last_material_change_at"]
-    assert [%{"source_domain" => _, "evidence_refs" => _} | _] = item["provenance"]
-    assert item["confidence"]["label"] in ["high", "medium", "low"]
+    assert item["section"] == "story_card"
+    assert item["status"] == "incomplete"
+    assert item["refresh_reason"] == "story_card_not_synthesized"
+    assert item["story_card_version_id"] == nil
+    assert item["title"]["state"] == "unavailable"
+    assert item["deck"]["state"] == "unavailable"
+    assert item["summary"]["state"] == "unavailable"
+    assert item["provenance"]["reason"] == "story_card_not_synthesized"
     assert item["freshness"]["state"] in ["active", "background", "stale", "resolved"]
-    assert item["change"]["kind"]
+    assert item["changed_since_seen"]["state"] == "unavailable"
     assert is_number(item["ranking"]["score"])
     assert is_integer(item["ranking"]["hints"]["source_count"])
     assert item["ranking"]["hints"]["seen_state"]["status"] == "unavailable"
@@ -154,8 +147,8 @@ defmodule Primeradiant.SoupApiTest do
 
     assert item["magazine_contract"]["summary_text"] == nil
     assert item["magazine_contract"]["deck_text"] == nil
-    assert item["magazine_contract"]["no_summary_reason"] == "no_committed_story_summary"
-    assert item["magazine_contract"]["no_deck_reason"] == "no_committed_story_deck"
+    assert item["magazine_contract"]["no_summary_reason"] == "story_card_not_synthesized"
+    assert item["magazine_contract"]["no_deck_reason"] == "story_card_not_synthesized"
 
     assert item["magazine_contract"]["source_domains"] == []
 
@@ -422,7 +415,7 @@ defmodule Primeradiant.SoupApiTest do
   test "delta returns explicit gap for unknown cursor and no silent gap", %{state: state} do
     body =
       :get
-      |> conn("/api/v1/soup/delta?consumer=reporter&projection=news-morning&after=unknown")
+      |> conn("/api/v1/soup/delta?consumer=reporter&projection=story_cards&after=unknown")
       |> put_req_header("authorization", "Bearer internal-token")
       |> Router.call(Keyword.put(@opts, :state, state))
       |> json()
@@ -438,7 +431,7 @@ defmodule Primeradiant.SoupApiTest do
     body =
       :get
       |> conn(
-        "/api/v1/soup/delta?consumer=reporter&projection=news-morning&after=#{expired_cursor}"
+        "/api/v1/soup/delta?consumer=reporter&projection=story_cards&after=#{expired_cursor}"
       )
       |> put_req_header("authorization", "Bearer internal-token")
       |> Router.call(Keyword.put(@opts, :state, state))
@@ -458,7 +451,7 @@ defmodule Primeradiant.SoupApiTest do
     body =
       :get
       |> conn(
-        "/api/v1/soup/delta?consumer=reporter&projection=news-morning&after=#{malformed_cursor}"
+        "/api/v1/soup/delta?consumer=reporter&projection=story_cards&after=#{malformed_cursor}"
       )
       |> put_req_header("authorization", "Bearer internal-token")
       |> Router.call(Keyword.put(@opts, :state, state))
@@ -469,20 +462,20 @@ defmodule Primeradiant.SoupApiTest do
     assert body["gap"]["requested_cursor"] == malformed_cursor
   end
 
-  test "delta returns items after an opaque PR cursor", %{state: state} do
+  test "delta returns story-card changes after an opaque PR cursor", %{state: state} do
     after_cursor = Soup.cursor_for(state, 0)
 
     body =
       :get
       |> conn(
-        "/api/v1/soup/delta?consumer=reporter&projection=news-morning&after=#{after_cursor}&limit=3"
+        "/api/v1/soup/delta?consumer=reporter&projection=story_cards&after=#{after_cursor}&limit=3"
       )
       |> put_req_header("authorization", "Bearer internal-token")
       |> Router.call(Keyword.put(@opts, :state, state))
       |> json()
 
     assert body["gap"] == nil
-    assert body["items"] != []
+    assert body["items"] == []
     assert is_binary(body["next_cursor"])
   end
 
@@ -512,7 +505,7 @@ defmodule Primeradiant.SoupApiTest do
     body =
       :get
       |> conn(
-        "/api/v1/soup/delta?consumer=reporter&projection=news-morning&after=#{rotated_cursor}"
+        "/api/v1/soup/delta?consumer=reporter&projection=story_cards&after=#{rotated_cursor}"
       )
       |> put_req_header("authorization", "Bearer internal-token")
       |> Router.call(Keyword.put(@opts, :state, state))
@@ -539,11 +532,11 @@ defmodule Primeradiant.SoupApiTest do
         "/api/v1/soup/ack",
         Jason.encode!(%{
           consumer: "reporter",
-          projection: "news-morning",
+          projection: "story_cards",
           substrate_cursor: cursor,
           substrate_epoch: Soup.epoch(state),
           rendered_at: "2026-06-14T12:00:00Z",
-          projection_id: "news-morning-2026-06-14",
+          projection_id: "story_cards-2026-06-14",
           status: "rendered",
           reason: nil
         })
@@ -563,7 +556,7 @@ defmodule Primeradiant.SoupApiTest do
     assert length(state.stories) == story_count
 
     [ack_record] = ack_log_path |> File.read!() |> String.split("\n", trim: true)
-    assert Jason.decode!(ack_record)["projection_id"] == "news-morning-2026-06-14"
+    assert Jason.decode!(ack_record)["projection_id"] == "story_cards-2026-06-14"
   end
 
   test "feed can read from durable soup DB runtime source", %{state: state} do
@@ -581,7 +574,7 @@ defmodule Primeradiant.SoupApiTest do
 
     body =
       :get
-      |> conn("/api/v1/soup/feed?consumer=reporter&projection=news-morning&limit=1")
+      |> conn("/api/v1/soup/feed?consumer=reporter&projection=story_cards&limit=1")
       |> put_req_header("authorization", "Bearer internal-token")
       |> Router.call(Keyword.put(@opts, :state, {:durable_soup_db, db_path, state.tenant_id}))
       |> json()
@@ -594,7 +587,7 @@ defmodule Primeradiant.SoupApiTest do
   test "internal service auth rejects missing bearer token", %{state: state} do
     conn =
       :get
-      |> conn("/api/v1/soup/feed?consumer=reporter&projection=news-morning")
+      |> conn("/api/v1/soup/feed?consumer=reporter&projection=story_cards")
       |> Router.call(Keyword.put(@opts, :state, state))
 
     assert conn.status == 401
@@ -670,6 +663,83 @@ defmodule Primeradiant.SoupApiTest do
       producer_kind: "test_stub",
       decision_source: "test_stub",
       invocation_transport_id: "stub-meaning-update",
+      duration_ms: 1
+    }
+  end
+
+  defp stub_story_agent(%{role: :story_synthesis}, packet, _ctx) do
+    %{
+      output: %{
+        "status" => "complete",
+        "title" => %{
+          "text" => packet.committed_story_state.title,
+          "state" => "complete",
+          "provenance_refs" => packet.evidence_refs
+        },
+        "deck" => %{
+          "text" => "Reporter-ready deck for #{packet.external_id}",
+          "state" => "complete",
+          "provenance_refs" => packet.evidence_refs
+        },
+        "summary" => %{
+          "text" => "Reporter-ready summary for #{packet.external_id}",
+          "state" => "complete",
+          "provenance_refs" => packet.evidence_refs
+        },
+        "key_claims" => [
+          %{
+            "claim_ref" => "claim:#{packet.external_id}:service-halted",
+            "text" => packet.snippet,
+            "status" => "current",
+            "materiality" => "material",
+            "evidence_refs" => packet.evidence_refs,
+            "conflict_refs" => [],
+            "uncertainty" => %{"state" => "known", "reason" => nil},
+            "appears_in_current_card" => true
+          }
+        ],
+        "source_coverage" => [
+          %{
+            "source_ref" => packet.source_ref,
+            "materiality" => "material",
+            "source_posture" => %{"state" => "complete", "value" => "reported"},
+            "contribution_reason" => %{
+              "text" => "This article supplies the packet-grounded evidence for the story.",
+              "state" => "complete",
+              "provenance_refs" => packet.evidence_refs
+            },
+            "source_weight" => %{"state" => "complete", "value" => 1.0}
+          }
+        ],
+        "field_completeness" => %{
+          "title" => "complete",
+          "deck" => "complete",
+          "summary" => "complete",
+          "key_claims" => "complete",
+          "source_coverage" => "complete"
+        },
+        "topic_salience" => %{
+          "durable_topic_nodes" => %{"state" => "refused", "reason" => "test_stub"},
+          "salience_explanation" => %{
+            "state" => "complete",
+            "text" => "Reporter-ready test story.",
+            "provenance_refs" => packet.evidence_refs
+          },
+          "global_salience" => "test",
+          "flynn_priority" => "test"
+        },
+        "changed_field_keys" => ["deck", "summary", "source_coverage", "key_claims"],
+        "change_summary" => %{
+          "text" => "Story card synthesized by test stub.",
+          "state" => "complete",
+          "provenance_refs" => packet.evidence_refs
+        }
+      },
+      model: "stub-story-agent",
+      model_route: "test://story-synthesis",
+      producer_kind: "test_stub",
+      decision_source: "test_stub",
+      invocation_transport_id: "stub-story-synthesis",
       duration_ms: 1
     }
   end

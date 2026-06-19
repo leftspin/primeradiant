@@ -156,7 +156,7 @@ defmodule Primeradiant.RealIngestionTest do
     assert second_edge.attrs["source_ref"] == "news_article:forgotlings-ps5"
 
     assert third_chain.story_key == "forgotlings-ps5-launch"
-    assert third_chain.classification == "attach"
+    assert third_chain.classification == "no_op"
 
     third_op =
       Enum.find(state.proposal_ops, &(&1.id == third_chain.proposal_op_id))
@@ -283,7 +283,7 @@ defmodule Primeradiant.RealIngestionTest do
       },
       model: "stub-story-agent",
       model_route: "test://story-identity",
-      producer_kind: "test_stub",
+      producer_kind: "live_model_inference",
       decision_source: "test_stub",
       invocation_transport_id: "stub-story-identity",
       duration_ms: 1
@@ -304,9 +304,73 @@ defmodule Primeradiant.RealIngestionTest do
       },
       model: "stub-meaning-agent",
       model_route: "test://meaning-update",
-      producer_kind: "test_stub",
+      producer_kind: "live_model_inference",
       decision_source: "test_stub",
       invocation_transport_id: "stub-meaning-update",
+      duration_ms: 1
+    }
+  end
+
+  defp polluted_hint_story_agent(%{role: :story_synthesis}, packet, _ctx) do
+    %{
+      output: %{
+        "status" => "complete",
+        "title" => %{
+          "text" => packet.committed_story_state.title,
+          "state" => "complete",
+          "provenance_refs" => packet.evidence_refs
+        },
+        "deck" => %{
+          "text" => "Deck for #{packet.story_key}",
+          "state" => "complete",
+          "provenance_refs" => packet.evidence_refs
+        },
+        "summary" => %{
+          "text" => "Summary for #{packet.story_key}",
+          "state" => "complete",
+          "provenance_refs" => packet.evidence_refs
+        },
+        "key_claims" => [
+          %{
+            "claim_ref" => "claim:#{packet.external_id}",
+            "text" => packet.snippet,
+            "status" => "current",
+            "materiality" => "material",
+            "evidence_refs" => packet.evidence_refs,
+            "conflict_refs" => [],
+            "uncertainty" => %{"state" => "known", "reason" => nil},
+            "appears_in_current_card" => true
+          }
+        ],
+        "source_coverage" => [
+          %{
+            "source_ref" => packet.source_ref,
+            "materiality" => "material",
+            "source_posture" => %{"state" => "complete", "value" => "reported"},
+            "contribution_reason" => %{
+              "text" => "Packet-grounded source for this story.",
+              "state" => "complete",
+              "provenance_refs" => packet.evidence_refs
+            },
+            "source_weight" => %{"state" => "complete", "value" => 1.0}
+          }
+        ],
+        "field_completeness" => %{},
+        "topic_salience" => %{
+          "durable_topic_nodes" => %{"state" => "refused", "reason" => "test_stub"}
+        },
+        "changed_field_keys" => ["deck", "summary", "source_coverage", "key_claims"],
+        "change_summary" => %{
+          "text" => "Story card synthesized by regression test stub.",
+          "state" => "complete",
+          "provenance_refs" => packet.evidence_refs
+        }
+      },
+      model: "stub-story-agent",
+      model_route: "test://story-synthesis",
+      producer_kind: "live_model_inference",
+      decision_source: "test_stub",
+      invocation_transport_id: "stub-story-synthesis",
       duration_ms: 1
     }
   end

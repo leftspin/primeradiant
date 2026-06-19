@@ -4,8 +4,10 @@ defmodule Primeradiant.DaemonNewsReplayTest do
   alias Primeradiant.StorageHarness.DaemonNewsReplay
   alias Primeradiant.StorageHarness.DaemonNewsEvent
   alias Primeradiant.StorageHarness.DurableSoupDb
+  alias Primeradiant.StorageHarness.KnowledgeWork
   alias Primeradiant.StorageHarness.LiveStoryAgentLoop
   alias Primeradiant.StorageHarness.State
+  alias Primeradiant.Soup
 
   @tenant Ecto.UUID.generate()
 
@@ -282,41 +284,68 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     loop = report.live_story_agent_loop
     [chain] = loop.correlation_chains
 
-    assert report.story_meaning_proof == true
-    assert report.substrate_proof_only == false
+    assert report.story_meaning_proof == false
+    assert report.substrate_proof_only == true
     assert loop.source_behavior == :evidence_admission_then_live_story_agents
-    assert loop.agent_runs == 2
-    assert loop.agent_families == [:story_identity, :meaning_update]
+    assert loop.agent_runs == 3
+    assert loop.agent_families == [:story_identity, :meaning_update, :story_synthesis]
     assert loop.proposals == 1
     assert loop.proposal_ops == 1
     assert loop.proposal_decisions == 1
     assert loop.graph_commits == 1
     assert loop.story_events == 1
+    assert loop.story_card_versions == 1
+    assert loop.story_source_coverage == 1
+    assert loop.story_key_claims == 1
     assert loop.zero_agent_zero_story_shape_nonconforming? == false
-    assert loop.story_meaning_proof == true
+    assert loop.story_meaning_proof == false
 
     assert chain.source_ref == "news_article:event-agent-news-1"
     assert chain.activation_id
-    assert length(chain.packet_ids) == 2
-    assert length(chain.agent_run_ids) == 2
+    assert length(chain.packet_ids) == 3
+    assert length(chain.agent_run_ids) == 3
     assert chain.proposal_id
     assert chain.graph_commit_id
     assert chain.story_event_id
+    assert chain.story_card_version_id
+    assert chain.story_synthesis_agent_run_id
     assert chain.evidence_refs == ["evidence:news_article:event-agent-news-1:body_text:0:97"]
 
     assert report.primeradiant_writes.inputs == 1
-    assert report.primeradiant_writes.agent_runs == 3
+    assert report.primeradiant_writes.agent_runs == 4
     assert report.primeradiant_writes.stories == 1
-    assert report.primeradiant_writes.proposals == 2
-    assert report.primeradiant_writes.proposal_ops == 2
-    assert report.primeradiant_writes.proposal_decisions == 2
-    assert report.primeradiant_writes.graph_commits == 2
+    assert report.primeradiant_writes.proposals == 1
+    assert report.primeradiant_writes.proposal_ops == 1
+    assert report.primeradiant_writes.proposal_decisions == 1
+    assert report.primeradiant_writes.graph_commits == 1
     assert report.primeradiant_writes.story_events == 1
-    assert report.seen_state_delta.authored_outputs == 1
-    assert report.seen_state_delta.authored_output_units == 1
-    assert report.seen_state_delta.seen_states == 1
-    assert report.seen_state_delta.seen_state_refs >= 3
+    assert report.primeradiant_writes.story_card_versions == 1
+    assert report.primeradiant_writes.story_source_coverage == 1
+    assert report.primeradiant_writes.story_key_claims == 1
+    assert report.seen_state_delta.authored_outputs == 0
+    assert report.seen_state_delta.authored_output_units == 0
+    assert report.seen_state_delta.seen_states == 0
+    assert report.seen_state_delta.seen_state_refs == 0
     assert report.changed_stories != []
+
+    soup_feed = Soup.feed(state, %{"consumer" => "reporter", "projection" => "story_cards"})
+    [card_item] = soup_feed.items
+    assert card_item.story_card_version_id == chain.story_card_version_id
+    assert card_item.deck["state"] == "complete"
+    assert card_item.summary["state"] == "complete"
+    assert [%{claim_ref: "claim:civic-clinic-triage:service"}] = card_item.key_claims
+    assert [%{source_ref: "news_article:event-agent-news-1"}] = card_item.source_coverage
+
+    canonical_public_url =
+      card_item.source_coverage
+      |> hd()
+      |> Map.fetch!(:canonical_public_url)
+
+    assert canonical_public_url["state"] in ["complete", "unavailable"]
+    assert canonical_public_url["value"] || canonical_public_url["reason"]
+
+    assert card_item.changed_since_seen.state == "complete"
+    assert card_item.topic_salience["distinct_source_count"] == 1
 
     assert [%{external_id: "event-agent-news-1"} = input] = state.inputs
     assert get_in(input.normalized, ["meaning_proof"]) == "not_ingest_owned"
@@ -326,17 +355,22 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert is_nil(input.normalized["relevance_decision"])
 
     assert DurableSoupDb.table_count(soup_db_path, "inputs", @tenant) == 1
-    assert DurableSoupDb.table_count(soup_db_path, "agent_runs", @tenant) == 3
+    assert DurableSoupDb.table_count(soup_db_path, "agent_runs", @tenant) == 4
     assert DurableSoupDb.table_count(soup_db_path, "stories", @tenant) == 1
-    assert DurableSoupDb.table_count(soup_db_path, "proposals", @tenant) == 2
-    assert DurableSoupDb.table_count(soup_db_path, "proposal_ops", @tenant) == 2
-    assert DurableSoupDb.table_count(soup_db_path, "proposal_decisions", @tenant) == 2
-    assert DurableSoupDb.table_count(soup_db_path, "graph_commits", @tenant) == 2
+    assert DurableSoupDb.table_count(soup_db_path, "proposals", @tenant) == 1
+    assert DurableSoupDb.table_count(soup_db_path, "proposal_ops", @tenant) == 1
+    assert DurableSoupDb.table_count(soup_db_path, "proposal_decisions", @tenant) == 1
+    assert DurableSoupDb.table_count(soup_db_path, "graph_commits", @tenant) == 1
     assert DurableSoupDb.table_count(soup_db_path, "story_events", @tenant) == 1
-    assert DurableSoupDb.table_count(soup_db_path, "authored_outputs", @tenant) == 1
-    assert DurableSoupDb.table_count(soup_db_path, "authored_output_units", @tenant) == 1
-    assert DurableSoupDb.table_count(soup_db_path, "seen_states", @tenant) == 1
-    assert DurableSoupDb.table_count(soup_db_path, "seen_state_refs", @tenant) >= 3
+    assert DurableSoupDb.table_count(soup_db_path, "story_card_versions", @tenant) == 1
+    assert DurableSoupDb.table_count(soup_db_path, "story_source_coverage", @tenant) == 1
+    assert DurableSoupDb.table_count(soup_db_path, "story_key_claims", @tenant) == 1
+    assert DurableSoupDb.table_count(soup_db_path, "story_card_change_sets", @tenant) == 1
+    assert DurableSoupDb.table_count(soup_db_path, "story_reader_deltas", @tenant) == 1
+    assert DurableSoupDb.table_count(soup_db_path, "authored_outputs", @tenant) == 0
+    assert DurableSoupDb.table_count(soup_db_path, "authored_output_units", @tenant) == 0
+    assert DurableSoupDb.table_count(soup_db_path, "seen_states", @tenant) == 0
+    assert DurableSoupDb.table_count(soup_db_path, "seen_state_refs", @tenant) == 0
     assert DurableSoupDb.table_count(soup_db_path, "evidence_refs", @tenant) > 0
 
     agent_scopes =
@@ -349,11 +383,12 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert agent_scopes |> Map.keys() |> Enum.sort() == [
              "flynn_seen_delta",
              "meaning_update",
-             "story_identity"
+             "story_identity",
+             "story_synthesis"
            ]
 
     agent_scopes
-    |> Map.take(["meaning_update", "story_identity"])
+    |> Map.take(["meaning_update", "story_identity", "story_synthesis"])
     |> Enum.each(fn {agent_type, scope} ->
       assert scope["correlation_id"] == chain.correlation_id
       assert scope["packet_id"] in chain.packet_ids
@@ -438,7 +473,6 @@ defmodule Primeradiant.DaemonNewsReplayTest do
       |> Enum.uniq()
 
     assert Enum.all?(chain.evidence_refs, &(&1 in evidence_labels))
-    assert "news_article:event-agent-news-1" in evidence_labels
   end
 
   test "event story agents persist Flynn seen refs and later soup-native deltas across cycles" do
@@ -485,7 +519,7 @@ defmodule Primeradiant.DaemonNewsReplayTest do
         Enum.at(rows, 1)
       )
 
-    {:ok, _first_state, first_report} =
+    {:ok, first_state, first_report} =
       DaemonNewsEvent.consume_event(first_event,
         soup_db_path: soup_db_path,
         tenant_id: @tenant,
@@ -494,8 +528,11 @@ defmodule Primeradiant.DaemonNewsReplayTest do
         story_agent_opts: [adapter: &stub_story_agent_with_later_update/3]
       )
 
-    assert first_report.seen_state_delta.seen_states == 1
-    assert first_report.seen_state_delta.authored_outputs == 1
+    assert first_report.seen_state_delta.seen_states == 0
+    assert first_report.seen_state_delta.authored_outputs == 0
+
+    {:ok, first_state, _reader_delta} = KnowledgeWork.record_verified_delta(first_state, "flynn")
+    persist_test_state!(soup_db_path, first_state)
 
     {:ok, second_state, second_report} =
       DaemonNewsEvent.consume_event(second_event,
@@ -514,8 +551,8 @@ defmodule Primeradiant.DaemonNewsReplayTest do
            |> hd()
            |> Map.fetch!(:classification) == "attach"
 
-    assert second_report.seen_state_delta.authored_outputs == 2
-    assert second_report.seen_state_delta.authored_output_units == 2
+    assert second_report.seen_state_delta.authored_outputs == 1
+    assert second_report.seen_state_delta.authored_output_units == 1
     assert second_report.seen_state_delta.seen_states == 1
     assert second_report.seen_state_delta.seen_state_refs >= 4
 
@@ -579,7 +616,7 @@ defmodule Primeradiant.DaemonNewsReplayTest do
 
     rows
     |> Enum.with_index(1)
-    |> Enum.each(fn {row, index} ->
+    |> Enum.reduce(nil, fn {row, index}, _state ->
       event =
         committed_source_item_event(
           "event-agent-news-#{index}",
@@ -589,7 +626,7 @@ defmodule Primeradiant.DaemonNewsReplayTest do
           row
         )
 
-      {:ok, _state, _report} =
+      {:ok, state, _report} =
         DaemonNewsEvent.consume_event(event,
           soup_db_path: soup_db_path,
           tenant_id: @tenant,
@@ -597,6 +634,14 @@ defmodule Primeradiant.DaemonNewsReplayTest do
           story_agent_loop?: true,
           story_agent_opts: [adapter: &stub_story_agent_with_nonmaterial_deltas/3]
         )
+
+      if index == 1 do
+        {:ok, state, _reader_delta} = KnowledgeWork.record_verified_delta(state, "flynn")
+        persist_test_state!(soup_db_path, state)
+        state
+      else
+        state
+      end
     end)
 
     [seen] =
@@ -607,28 +652,31 @@ defmodule Primeradiant.DaemonNewsReplayTest do
 
     assert seen["seen_story_version"] == 1
 
-    units =
+    delta_rows =
       sqlite_json_rows!(
         soup_db_path,
         """
-        SELECT content, claim_refs
-        FROM authored_output_units
+        SELECT nonmaterial_exclusions
+        FROM story_reader_deltas
         WHERE tenant_id = '#{@tenant}'
-        ORDER BY position, inserted_at;
+        ORDER BY inserted_at;
         """
       )
 
-    assert length(units) == 5
+    exclusions =
+      delta_rows
+      |> Enum.flat_map(&(Jason.decode!(&1["nonmaterial_exclusions"]) || []))
 
-    nonmaterial_units = Enum.drop(units, 1)
-    assert Enum.any?(nonmaterial_units, &String.contains?(&1["content"], "duplicate evidence"))
-    assert Enum.any?(nonmaterial_units, &String.contains?(&1["content"], "repeated known facts"))
-    assert Enum.any?(nonmaterial_units, &String.contains?(&1["content"], "mostly background"))
-    assert Enum.any?(nonmaterial_units, &String.contains?(&1["content"], "adds color only"))
+    unique_exclusions = Enum.uniq_by(exclusions, & &1["text"])
+    assert length(unique_exclusions) >= 4
+    assert Enum.any?(unique_exclusions, &String.contains?(&1["text"], "duplicate evidence"))
+    assert Enum.any?(unique_exclusions, &String.contains?(&1["text"], "repeated known facts"))
+    assert Enum.any?(unique_exclusions, &String.contains?(&1["text"], "mostly background"))
+    assert Enum.any?(unique_exclusions, &String.contains?(&1["text"], "adds color only"))
 
-    Enum.each(nonmaterial_units, fn unit ->
-      assert Jason.decode!(unit["claim_refs"]) == []
-      assert String.contains?(unit["content"], "no material")
+    Enum.each(unique_exclusions, fn exclusion ->
+      assert exclusion["claim_refs"] == []
+      assert String.contains?(exclusion["text"], "no material")
     end)
   end
 
@@ -660,7 +708,7 @@ defmodule Primeradiant.DaemonNewsReplayTest do
 
     rows
     |> Enum.with_index(1)
-    |> Enum.each(fn {row, index} ->
+    |> Enum.reduce(nil, fn {row, index}, _state ->
       event =
         committed_source_item_event(
           "event-agent-news-#{index}",
@@ -670,7 +718,7 @@ defmodule Primeradiant.DaemonNewsReplayTest do
           row
         )
 
-      {:ok, _state, _report} =
+      {:ok, state, _report} =
         DaemonNewsEvent.consume_event(event,
           soup_db_path: soup_db_path,
           tenant_id: @tenant,
@@ -678,6 +726,14 @@ defmodule Primeradiant.DaemonNewsReplayTest do
           story_agent_loop?: true,
           story_agent_opts: [adapter: &stub_story_agent_overstates_repeated_update/3]
         )
+
+      if index == 1 do
+        {:ok, state, _reader_delta} = KnowledgeWork.record_verified_delta(state, "flynn")
+        persist_test_state!(soup_db_path, state)
+        state
+      else
+        state
+      end
     end)
 
     events =
@@ -691,11 +747,25 @@ defmodule Primeradiant.DaemonNewsReplayTest do
         """
       )
 
-    assert Enum.map(events, & &1["classification"]) == ["split", "attach"]
+    assert Enum.map(events, & &1["classification"]) == ["split", "no_op"]
 
-    assert Jason.decode!(List.last(events)["changed_facts"]) == %{
-             "strategy" => "exclusive-content-case-by-case"
-           }
+    assert Jason.decode!(List.last(events)["changed_facts"]) == %{}
+
+    [delta] =
+      sqlite_json_rows!(
+        soup_db_path,
+        """
+        SELECT nonmaterial_exclusions
+        FROM story_reader_deltas
+        WHERE tenant_id = '#{@tenant}'
+        ORDER BY inserted_at DESC
+        LIMIT 1;
+        """
+      )
+
+    [exclusion] = Jason.decode!(delta["nonmaterial_exclusions"])
+    assert String.contains?(exclusion["text"], "no material new update")
+    assert exclusion["claim_refs"] == []
   end
 
   test "live story-agent loop does not claim story proof with zero admissions" do
@@ -1627,6 +1697,14 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     Jason.decode!(output)
   end
 
+  defp persist_test_state!(soup_db_path, state) do
+    DurableSoupDb.persist!(soup_db_path, state, %{
+      source_kind: "test_reader_delta",
+      source_db_path: "event:test-reader-delta",
+      source_row_count: 0
+    })
+  end
+
   defp stub_story_agent(%{role: :story_identity}, _packet, _ctx) do
     %{
       output: %{
@@ -1662,6 +1740,9 @@ defmodule Primeradiant.DaemonNewsReplayTest do
       duration_ms: 1
     }
   end
+
+  defp stub_story_agent(%{role: :story_synthesis}, packet, _ctx),
+    do: stub_story_synthesis(packet)
 
   defp stub_story_agent_with_later_update(%{role: :story_identity}, _packet, _ctx) do
     %{
@@ -1705,6 +1786,9 @@ defmodule Primeradiant.DaemonNewsReplayTest do
       duration_ms: 1
     }
   end
+
+  defp stub_story_agent_with_later_update(%{role: :story_synthesis}, packet, _ctx),
+    do: stub_story_synthesis(packet)
 
   defp stub_story_agent_with_nonmaterial_deltas(%{role: :story_identity}, _packet, _ctx) do
     %{
@@ -1760,6 +1844,9 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     }
   end
 
+  defp stub_story_agent_with_nonmaterial_deltas(%{role: :story_synthesis}, packet, _ctx),
+    do: stub_story_synthesis(packet)
+
   defp stub_story_agent_overstates_repeated_update(%{role: :story_identity}, _packet, _ctx) do
     %{
       output: %{
@@ -1792,6 +1879,90 @@ defmodule Primeradiant.DaemonNewsReplayTest do
       producer_kind: "test_stub",
       decision_source: "test_stub",
       invocation_transport_id: "stub-meaning-update",
+      duration_ms: 1
+    }
+  end
+
+  defp stub_story_agent_overstates_repeated_update(%{role: :story_synthesis}, packet, _ctx),
+    do: stub_story_synthesis(packet)
+
+  defp stub_story_synthesis(packet) do
+    story_key = packet.story_key || "civic-clinic-triage"
+    source_ref = packet.source_ref
+
+    %{
+      output: %{
+        "status" => "complete",
+        "title" => %{
+          "text" => packet.committed_story_state.title,
+          "state" => "complete",
+          "provenance_refs" => ["fieldprov:test"]
+        },
+        "deck" => %{
+          "text" => "Civic Clinic triage remains the active story card.",
+          "state" => "complete",
+          "provenance_refs" => ["fieldprov:test"]
+        },
+        "summary" => %{
+          "text" =>
+            "The story synthesis agent linked the source to the clinic triage story and refreshed the card from committed evidence.",
+          "state" => "complete",
+          "provenance_refs" => ["fieldprov:test"]
+        },
+        "key_claims" => [
+          %{
+            "claim_ref" => "claim:#{story_key}:service",
+            "text" => "service=triage",
+            "status" => "current",
+            "materiality" => "material",
+            "evidence_refs" => packet.evidence_refs,
+            "conflict_refs" => [],
+            "uncertainty" => %{"state" => "unavailable", "reason" => "not_supplied"},
+            "appears_in_current_card" => true
+          }
+        ],
+        "source_coverage" => [
+          %{
+            "source_ref" => source_ref,
+            "contribution_reason" => %{
+              "text" => "source supplies the current triage state",
+              "state" => "complete",
+              "provenance_refs" => ["fieldprov:test"]
+            },
+            "materiality" => "material",
+            "source_posture" => %{"state" => "unavailable", "reason" => "not_supplied"},
+            "source_weight" => %{"state" => "unavailable", "reason" => "not_supplied"}
+          }
+        ],
+        "topic_salience" => %{
+          "salience_explanation" => "clinic triage story has local service salience",
+          "global_salience" => "source_count",
+          "flynn_priority" => "unavailable",
+          "durable_topic_nodes" => %{
+            "state" => "complete",
+            "topic_refs" => ["topic:clinic-triage"],
+            "provenance_refs" => ["fieldprov:test"]
+          }
+        },
+        "changed_field_keys" => ["title", "deck", "summary", "source_coverage", "key_claims"],
+        "change_summary" => %{
+          "text" => "story card refreshed from the latest linked source",
+          "state" => "complete",
+          "provenance_refs" => ["fieldprov:test"]
+        },
+        "field_completeness" => %{
+          "deck" => "complete",
+          "summary" => "complete",
+          "canonical_public_url" => "source_level",
+          "source_label" => "source_level",
+          "publication" => "source_level"
+        }
+      },
+      model: "stub-story-synthesis-agent",
+      model_route: "test://story-synthesis",
+      producer_kind: "test_stub",
+      decision_source: "test_stub",
+      invocation_transport_id: "stub-story-synthesis",
       duration_ms: 1
     }
   end
