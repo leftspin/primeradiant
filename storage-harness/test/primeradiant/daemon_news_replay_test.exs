@@ -475,6 +475,84 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert Enum.all?(chain.evidence_refs, &(&1 in evidence_labels))
   end
 
+  test "recurring cadence refreshes Reporter story cards over admitted soup without source admission" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-recurring-story-card-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    soup_db_path = Path.join(tmp, "primeradiant-event-soup.sqlite3")
+    raw_path = Path.join(tmp, "archive.jsonl")
+
+    [row] = [
+      envelope(
+        "Recurring Civic Clinic triage open",
+        "Recurring Civic Clinic triage is open venue is north speaker is desk."
+      )
+    ]
+
+    [{offset, length}] = write_archive!(raw_path, [row])
+    event = committed_source_item_event("event-recurring-news-1", raw_path, offset, length, row)
+
+    {:ok, _state, _report} =
+      DaemonNewsEvent.consume_event(event,
+        soup_db_path: soup_db_path,
+        tenant_id: @tenant,
+        actor_id: "flynn",
+        story_agent_loop?: true,
+        story_agent_opts: [adapter: &stub_story_agent/3]
+      )
+
+    before_inputs = DurableSoupDb.table_count(soup_db_path, "inputs", @tenant)
+    before_cards = DurableSoupDb.table_count(soup_db_path, "story_card_versions", @tenant)
+    loaded = DurableSoupDb.load_tenant(soup_db_path, @tenant)
+
+    {refreshed, cadence_report} =
+      LiveStoryAgentLoop.refresh_story_cards(loaded, "flynn",
+        cadence: :hourly_story_card_synthesis,
+        limit: 1,
+        adapter: &refusing_story_synthesis_agent/3
+      )
+
+    DurableSoupDb.persist!(soup_db_path, refreshed, %{
+      source_kind: "recurring-soup-cadence",
+      source_db_path: soup_db_path,
+      source_row_count: 0
+    })
+
+    assert cadence_report.source_behavior == :recurring_cadence_over_admitted_soup
+    assert cadence_report.source_admission_performed == false
+    assert cadence_report.cadence == :hourly_story_card_synthesis
+    assert cadence_report.candidate_count == 1
+    assert cadence_report.refreshed_count == 1
+    assert cadence_report.story_meaning_proof == false
+
+    [refresh] = cadence_report.refreshes
+    assert refresh.story_card_status == "refused"
+    assert refresh.refresh_reason == "story_card_hourly_synthesis"
+    assert refresh.model_route == "test://story-synthesis"
+
+    assert DurableSoupDb.table_count(soup_db_path, "inputs", @tenant) == before_inputs
+
+    assert DurableSoupDb.table_count(soup_db_path, "story_card_versions", @tenant) ==
+             before_cards + 1
+
+    [card] =
+      sqlite_json_rows!(
+        soup_db_path,
+        "SELECT status, refresh_reason, provenance FROM story_card_versions ORDER BY card_version DESC LIMIT 1;"
+      )
+
+    assert card["status"] == "refused"
+    assert card["refresh_reason"] == "story_card_hourly_synthesis"
+    provenance = Jason.decode!(card["provenance"])
+    assert provenance["source_refs"] == ["news_article:event-recurring-news-1"]
+  end
+
   test "event story agents persist Flynn seen refs and later soup-native deltas across cycles" do
     tmp =
       Path.join(
@@ -1885,6 +1963,49 @@ defmodule Primeradiant.DaemonNewsReplayTest do
 
   defp stub_story_agent_overstates_repeated_update(%{role: :story_synthesis}, packet, _ctx),
     do: stub_story_synthesis(packet)
+
+  defp refusing_story_synthesis_agent(%{role: :story_synthesis}, packet, _ctx) do
+    %{
+      output: %{
+        "status" => "refused",
+        "title" => %{
+          "text" => packet.committed_story_state.title,
+          "state" => "complete",
+          "provenance_refs" => ["fieldprov:refused-test"]
+        },
+        "deck" => %{
+          "text" => nil,
+          "state" => "unavailable",
+          "reason" => "insufficient_evidence_for_hourly_refresh",
+          "provenance_refs" => ["fieldprov:refused-test"]
+        },
+        "summary" => %{
+          "text" => nil,
+          "state" => "unavailable",
+          "reason" => "insufficient_evidence_for_hourly_refresh",
+          "provenance_refs" => ["fieldprov:refused-test"]
+        },
+        "key_claims" => [],
+        "source_coverage" => [],
+        "topic_salience" => %{
+          "durable_topic_nodes" => %{"state" => "refused", "reason" => "not_enough_new_soup"}
+        },
+        "changed_field_keys" => ["deck", "summary"],
+        "change_summary" => %{
+          "text" => "story synthesis refused to revise the card without enough new soup",
+          "state" => "complete",
+          "provenance_refs" => ["fieldprov:refused-test"]
+        },
+        "field_completeness" => %{"overall" => "refused"}
+      },
+      model: "stub-story-synthesis-agent",
+      model_route: "test://story-synthesis",
+      producer_kind: "test_stub",
+      decision_source: "test_stub",
+      invocation_transport_id: "stub-story-synthesis-refusal",
+      duration_ms: 1
+    }
+  end
 
   defp stub_story_synthesis(packet) do
     story_key = packet.story_key || "civic-clinic-triage"

@@ -57,6 +57,43 @@ This RB1 inventory is part of the T1275 artifact parity boundary: product proof
 must name the active runner, invoked source tree, marker SHA, service identity,
 and runtime DB/API target. A source checkout SHA alone is not deploy proof.
 
+## RB1A Recurring Soup Cadence One-Shot
+
+The recurring soup cadence runner is a one-shot command over the already-admitted
+Prime Radiant soup DB. It is not source ingest, source fetch, cursor replay, or a
+service installer. Do not add or modify systemd timers, cron, launchd, unit
+files, or environment files from this section unless a separate reviewed deploy
+ticket explicitly authorizes that exact scheduler change.
+
+After a reviewed cadence-capable source deploy, an operator may run one bounded
+pass from the active staged source tree:
+
+```sh
+ssh -i /Users/mike/.ssh/id_ed25519_clu clu@eurisko \
+  'set -a;
+   . /home/clu/.local/state/primeradiant/soup-api/env;
+   set +a;
+   cd /home/clu/src/primeradiant/storage-harness &&
+   export PATH=/home/clu/.local/share/mise/installs/elixir/1.19.5-otp-28/bin:/home/clu/.local/share/mise/installs/erlang/28.5/bin:/home/clu/.local/share/mise/installs/sqlite/3.45.1/bin:$PATH &&
+   mix primeradiant.soup_cadence_once \
+     --soup-db "$PRIMERADIANT_SOUP_API_SOUP_DB" \
+     --tenant "$PRIMERADIANT_SOUP_API_TENANT" \
+     --actor flynn \
+     --cadence hourly_story_card_synthesis \
+     --limit 8'
+```
+
+Expected proof from a conforming pass:
+
+- `source_admission_performed` is `false`.
+- `source_behavior` is `recurring_cadence_over_admitted_soup`.
+- New story-card rows, if any, carry refresh reason
+  `story_card_hourly_synthesis`, agent run provenance, packet hash,
+  prompt/config hash, output hash, model, model route, producer kind, and
+  decision source.
+- Runtime model route remains Gibson/Qwen unless a source-of-truth spec
+  explicitly authorizes another product soup-agent route.
+
 ## RB2 Copy, Build, And Release Steps
 
 Do not edit live DB rows. Do not modify the user-systemd unit or environment

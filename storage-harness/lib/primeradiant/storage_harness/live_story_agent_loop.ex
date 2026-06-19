@@ -123,6 +123,60 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
     }
   end
 
+  def refresh_story_cards(%State{} = state, actor_id, opts \\ []) do
+    adapter = Keyword.get(opts, :adapter, &__MODULE__.invoke_live_agent/3)
+    cadence = Keyword.get(opts, :cadence, :hourly_story_card_synthesis)
+    limit = Keyword.get(opts, :limit, 8)
+
+    candidates =
+      state.stories
+      |> Enum.filter(&(&1.state in ["active", "background"]))
+      |> Enum.sort_by(&{card_sort_key(current_story_card_version(state, &1.id)), &1.story_key})
+      |> Enum.take(limit)
+
+    {state, refreshes} =
+      Enum.reduce(candidates, {state, []}, fn story, {state, refreshes} ->
+        case latest_story_input(state, story, actor_id) do
+          nil ->
+            {state,
+             refreshes ++
+               [
+                 %{
+                   story_id: story.id,
+                   story_key: story.story_key,
+                   status: "refused",
+                   reason: "no_visible_linked_source"
+                 }
+               ]}
+
+          input ->
+            {state, refresh} =
+              refresh_story_card_for_story(state, story, input, actor_id, adapter, cadence)
+
+            {state, refreshes ++ [refresh]}
+        end
+      end)
+
+    {state,
+     %{
+       source_behavior: :recurring_cadence_over_admitted_soup,
+       source_admission_performed: false,
+       cadence: cadence,
+       candidate_count: length(candidates),
+       refreshed_count: Enum.count(refreshes, &Map.has_key?(&1, :story_card_version_id)),
+       refused_count: Enum.count(refreshes, &(&1[:status] == "refused")),
+       refreshes: refreshes,
+       agent_families: [:story_synthesis],
+       agent_runs: length(state.agent_runs),
+       story_card_versions: length(state.story_card_versions),
+       story_meaning_proof:
+         Enum.any?(refreshes, fn refresh ->
+           refresh[:producer_kind] == "live_model_inference" and
+             refresh[:story_card_status] in ["complete", "refused", "unavailable", "incomplete"]
+         end)
+     }}
+  end
+
   defp run_for_admission(state, admission, actor_id, adapter) do
     input = input_for!(state, admission)
     source_ref = Admission.input_ref(input)
@@ -312,6 +366,102 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
        packet_hash: packet_hash,
        run: run
      }}
+  end
+
+  defp refresh_story_card_for_story(state, story, input, actor_id, adapter, cadence) do
+    source_ref = Admission.input_ref(input)
+    latest_event = latest_story_event(state, story.id, input.id)
+
+    correlation_id =
+      "recurring:#{cadence}:#{story.story_key}:#{System.unique_integer([:positive])}"
+
+    evidence_refs =
+      evidence_refs_for_input(state, story.id, input.id, ["story:#{story.story_key}"])
+
+    activation = %{
+      event: :story_agent_activation,
+      activation_kind: cadence,
+      activation_id: "activation:#{correlation_id}",
+      source_ref: nil,
+      story_id: story.id,
+      story_key: story.story_key,
+      correlation_id: correlation_id,
+      scheduler_substrate: true,
+      story_meaning_proof: false,
+      eligible_agent_families: [:story_synthesis],
+      bounded_candidate_packet: true,
+      source_admission_performed: false
+    }
+
+    admission = %{
+      source_ref: source_ref,
+      evidence_refs: evidence_refs,
+      content_span_refs: [],
+      source_provenance: get_in(input.normalized || %{}, ["source_provenance"]) || %{}
+    }
+
+    {state, synthesis_run, synthesis} =
+      invoke_agent(
+        state,
+        config(:story_synthesis),
+        packet(state, input, admission, :story_synthesis, correlation_id, actor_id, %{
+          story_id: story.id,
+          story_key: story.story_key,
+          story_version: story.version,
+          story_event_id: latest_event && latest_event.id,
+          refresh_reason: refresh_reason_for_cadence(cadence),
+          committed_story_state: story_packet_state(state, story, actor_id),
+          prior_story_card_version: current_story_card_version(state, story.id),
+          cadence: cadence,
+          candidate_reason: refresh_reason_for_cadence(cadence)
+        }),
+        actor_id,
+        adapter,
+        correlation_id
+      )
+
+    write_chain = %{
+      story_event_id: latest_event && latest_event.id,
+      classification: refresh_reason_for_cadence(cadence)
+    }
+
+    {state, card_chain} =
+      write_story_card(
+        state,
+        story,
+        input,
+        admission,
+        write_chain,
+        synthesis,
+        actor_id,
+        correlation_id
+      )
+
+    state =
+      state
+      |> State.audit(activation)
+      |> State.audit(%{
+        event: :recurring_story_card_refresh_completed,
+        cadence: cadence,
+        correlation_id: correlation_id,
+        story_id: story.id,
+        story_key: story.story_key,
+        story_card_version_id: card_chain.story_card_version_id,
+        producing_agent_run_id: synthesis_run.id
+      })
+
+    {state,
+     Map.merge(card_chain, %{
+       correlation_id: correlation_id,
+       story_id: story.id,
+       story_key: story.story_key,
+       source_ref: source_ref,
+       agent_run_id: synthesis_run.id,
+       model: synthesis_run.model,
+       model_route: synthesis_run.scope["model_route"],
+       producer_kind: synthesis_run.scope["producer_kind"],
+       decision_source: synthesis_run.scope["decision_source"]
+     })}
   end
 
   defp write_story_meaning(
@@ -989,6 +1139,23 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
     |> List.first()
   end
 
+  defp card_sort_key(nil), do: {0, ""}
+  defp card_sort_key(card), do: {1, card.updated_at || card.inserted_at || DateTime.utc_now()}
+
+  defp latest_story_input(state, story, actor_id) do
+    state
+    |> visible_story_inputs(story, actor_id)
+    |> Enum.sort_by(&(&1.observed_at || DateTime.from_unix!(0)), {:desc, DateTime})
+    |> List.first()
+  end
+
+  defp latest_story_event(state, story_id, input_id) do
+    state.story_events
+    |> Enum.filter(&(&1.story_id == story_id and &1.input_id == input_id))
+    |> Enum.sort_by(&(&1.observed_at || DateTime.from_unix!(0)), {:desc, DateTime})
+    |> List.first()
+  end
+
   defp card_version_for(state, story_id) do
     case current_story_card_version(state, story_id) do
       nil -> 1
@@ -1289,7 +1456,19 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
   defp refresh_reason("duplicate"), do: "source_linked"
   defp refresh_reason("color"), do: "source_linked"
   defp refresh_reason("stale"), do: "stale_recheck"
+  defp refresh_reason("active_story_recurring_15m"), do: "active_story_recurring_15m"
+  defp refresh_reason("story_card_hourly_synthesis"), do: "story_card_hourly_synthesis"
+  defp refresh_reason("daily_deep_soup_sweep"), do: "daily_deep_soup_sweep"
   defp refresh_reason(_), do: "source_content_changed"
+
+  defp refresh_reason_for_cadence(:active_story_transform_detect_link_15m),
+    do: "active_story_recurring_15m"
+
+  defp refresh_reason_for_cadence(:hourly_story_card_synthesis),
+    do: "story_card_hourly_synthesis"
+
+  defp refresh_reason_for_cadence(:daily_deep_soup_sweep), do: "daily_deep_soup_sweep"
+  defp refresh_reason_for_cadence(_), do: "manual_review"
 
   defp claim_status(status)
        when status in ["current", "disputed", "stale", "background", "unresolved"], do: status
