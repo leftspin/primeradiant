@@ -1091,7 +1091,7 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
       card_version INTEGER NOT NULL,
       status TEXT NOT NULL CHECK (status IN ('complete', 'incomplete', 'refused', 'unavailable')),
       supersedes_id TEXT,
-      refresh_reason TEXT NOT NULL CHECK (refresh_reason IN ('story_created', 'source_linked', 'source_content_changed', 'source_weight_changed', 'reader_delta_requested', 'repair_backfill', 'stale_recheck', 'manual_review')),
+      refresh_reason TEXT NOT NULL CHECK (refresh_reason IN ('story_created', 'source_linked', 'source_content_changed', 'source_weight_changed', 'reader_delta_requested', 'repair_backfill', 'stale_recheck', 'manual_review', 'active_story_recurring_15m', 'story_card_hourly_synthesis', 'daily_deep_soup_sweep')),
       producing_agent_run_id TEXT NOT NULL REFERENCES agent_runs(id),
       packet_hash TEXT NOT NULL,
       prompt_config_hash TEXT NOT NULL,

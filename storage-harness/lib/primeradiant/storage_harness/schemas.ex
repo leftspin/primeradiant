@@ -721,7 +721,7 @@ end
 defmodule Primeradiant.StorageHarness.StoryCardVersion do
   use Primeradiant.StorageHarness.Schema
 
-  @refresh_reasons ~w(story_created source_linked source_content_changed source_weight_changed reader_delta_requested repair_backfill stale_recheck manual_review)
+  @refresh_reasons ~w(story_created source_linked source_content_changed source_weight_changed reader_delta_requested repair_backfill stale_recheck manual_review active_story_recurring_15m story_card_hourly_synthesis daily_deep_soup_sweep)
   @statuses ~w(complete incomplete refused unavailable)
 
   schema "story_card_versions" do
