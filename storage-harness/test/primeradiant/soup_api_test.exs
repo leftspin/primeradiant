@@ -38,6 +38,19 @@ defmodule Primeradiant.SoupApiTest do
     assert body["blockers"] == []
   end
 
+  test "ready accepts Reporter news-morning as the story-card projection", %{state: state} do
+    body =
+      :get
+      |> conn("/api/v1/soup/ready?consumer=reporter&projection=news-morning")
+      |> put_req_header("authorization", "Bearer internal-token")
+      |> Router.call(Keyword.put(@opts, :state, state))
+      |> json()
+
+    assert body["contract_version"] == "soup.v1"
+    assert body["status"] in ["ready", "degraded"]
+    assert body["blockers"] == []
+  end
+
   test "ready blocks unsupported projection instead of allowing render", %{state: state} do
     body =
       :get
@@ -400,6 +413,20 @@ defmodule Primeradiant.SoupApiTest do
     assert source["link_status"] == "unavailable"
   end
 
+  test "feed serves Reporter news-morning from Prime Radiant story cards", %{state: state} do
+    body =
+      :get
+      |> conn("/api/v1/soup/feed?consumer=reporter&projection=news-morning&limit=2")
+      |> put_req_header("authorization", "Bearer internal-token")
+      |> Router.call(Keyword.put(@opts, :state, state))
+      |> json()
+
+    assert body["contract_version"] == "soup.v1"
+    assert length(body["items"]) == 2
+    assert body["blockers"] == []
+    assert hd(body["items"])["section"] == "story_card"
+  end
+
   test "feed does not return material for blocked readiness params", %{state: state} do
     body =
       :get
@@ -469,6 +496,23 @@ defmodule Primeradiant.SoupApiTest do
       :get
       |> conn(
         "/api/v1/soup/delta?consumer=reporter&projection=story_cards&after=#{after_cursor}&limit=3"
+      )
+      |> put_req_header("authorization", "Bearer internal-token")
+      |> Router.call(Keyword.put(@opts, :state, state))
+      |> json()
+
+    assert body["gap"] == nil
+    assert body["items"] == []
+    assert is_binary(body["next_cursor"])
+  end
+
+  test "delta accepts Reporter news-morning as the story-card projection", %{state: state} do
+    after_cursor = Soup.cursor_for(state, 0)
+
+    body =
+      :get
+      |> conn(
+        "/api/v1/soup/delta?consumer=reporter&projection=news-morning&after=#{after_cursor}&limit=3"
       )
       |> put_req_header("authorization", "Bearer internal-token")
       |> Router.call(Keyword.put(@opts, :state, state))
