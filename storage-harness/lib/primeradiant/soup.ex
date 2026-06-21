@@ -112,11 +112,11 @@ defmodule Primeradiant.Soup do
       (params["consumer"] || params[:consumer]) != "reporter" ->
         [%{code: "unsupported_consumer", message: "consumer must be reporter"}]
 
-      (params["projection"] || params[:projection]) != "story_cards" ->
+      not story_card_projection?(params["projection"] || params[:projection]) ->
         [
           %{
             code: "unsupported_projection",
-            message: "projection must be story_cards"
+            message: "projection must be story_cards or news-morning"
           }
         ]
 
@@ -132,6 +132,8 @@ defmodule Primeradiant.Soup do
         []
     end
   end
+
+  defp story_card_projection?(projection), do: projection in ["story_cards", "news-morning"]
 
   defp freshness(state, generated_at) do
     latest_source =

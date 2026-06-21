@@ -347,6 +347,18 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert card_item.changed_since_seen.state == "complete"
     assert card_item.topic_salience["distinct_source_count"] == 1
 
+    gazette_feed = Soup.feed(state, %{"consumer" => "reporter", "projection" => "news-morning"})
+    [gazette_item] = gazette_feed.items
+    [gazette_source] = gazette_item.source_coverage
+    assert gazette_feed.blockers == []
+    assert gazette_item.story_card_version_id == chain.story_card_version_id
+    assert gazette_source.source_ref == "news_article:event-agent-news-1"
+    assert gazette_source.canonical_public_url["state"] in ["complete", "unavailable"]
+    assert gazette_source.source_domain["state"] in ["complete", "unavailable"]
+    assert gazette_source.source_label["state"] in ["complete", "unavailable"]
+    assert gazette_source.publication["state"] in ["complete", "unavailable"]
+    assert gazette_source.contribution_reason["state"] in ["complete", "unavailable"]
+
     assert [%{external_id: "event-agent-news-1"} = input] = state.inputs
     assert get_in(input.normalized, ["meaning_proof"]) == "not_ingest_owned"
     assert is_nil(input.normalized["story_identity"])
