@@ -104,9 +104,15 @@ requires it.
    machine:
 
    ```sh
-   git ls-remote origin refs/heads/main
-   git cat-file -t 06b4dbbe87d2c42662d64e1068acb8267bbf06b7
+   TARGET_COMMIT=06b4dbbe87d2c42662d64e1068acb8267bbf06b7
+   git fetch --prune origin refs/heads/main:refs/remotes/origin/main
+   test "$(git rev-parse --verify "${TARGET_COMMIT}^{commit}")" = "${TARGET_COMMIT}"
+   git merge-base --is-ancestor "${TARGET_COMMIT}" origin/main
+   git rev-parse origin/main
    ```
+
+   The `merge-base --is-ancestor` command is the reachability proof. A local
+   object existing in `.git` is not sufficient deploy evidence.
 
 2. Create a timestamped backup of the current staged source copy on EURISKO:
 
@@ -152,18 +158,32 @@ requires it.
       mix test'
    ```
 
-6. Promote the checked staged copy atomically enough for this single-host source
-   layout:
+6. Promote the checked staged copy with recovery if the second move fails:
 
    ```sh
    ssh -i /Users/mike/.ssh/id_ed25519_clu clu@eurisko \
-     'rm -rf /home/clu/src/primeradiant.previous &&
-      mv /home/clu/src/primeradiant /home/clu/src/primeradiant.previous &&
-      mv /home/clu/src/primeradiant.next /home/clu/src/primeradiant'
+     'set -eu
+      TS="$(date -u +%Y%m%dT%H%M%SZ)"
+      test -d /home/clu/src/primeradiant
+      test -d /home/clu/src/primeradiant.next
+      rm -rf "/home/clu/src/primeradiant.previous-stale-${TS}"
+      if test -d /home/clu/src/primeradiant.previous; then
+        mv /home/clu/src/primeradiant.previous \
+          "/home/clu/src/primeradiant.previous-stale-${TS}"
+      fi
+      mv /home/clu/src/primeradiant /home/clu/src/primeradiant.previous
+      if ! mv /home/clu/src/primeradiant.next /home/clu/src/primeradiant; then
+        mv /home/clu/src/primeradiant.previous /home/clu/src/primeradiant
+        test -d /home/clu/src/primeradiant/storage-harness
+        exit 1
+      fi
+      test -d /home/clu/src/primeradiant/storage-harness'
    ```
 
-If any copy/build step fails, stop before restart. The runtime remains on the
-pre-existing service process and source copy.
+If any copy/build step fails, stop before restart. If promotion step 6 fails
+after moving the active directory to `primeradiant.previous`, the command must
+move `primeradiant.previous` back before it exits. Do not restart the service
+unless `/home/clu/src/primeradiant/storage-harness` exists after promotion.
 
 ## RB3 User-Systemd Restart/Reload And Service Identity
 
@@ -176,12 +196,13 @@ primeradiant-soup-api.service
 Restart is a runtime mutation. It is allowed only when the operator is executing
 this runbook for an approved deploy ticket.
 
-Reload the user manager and restart the existing unit:
+Restart the existing unit without reloading the user systemd manager. This is a
+source-only deploy; do not run `daemon-reload` unless a separate reviewed ticket
+changed the unit or environment file.
 
 ```sh
 ssh -i /Users/mike/.ssh/id_ed25519_clu clu@eurisko \
-  'systemctl --user daemon-reload &&
-   systemctl --user restart primeradiant-soup-api.service &&
+  'systemctl --user restart primeradiant-soup-api.service &&
    systemctl --user status primeradiant-soup-api.service --no-pager'
 ```
 
@@ -202,11 +223,12 @@ installed `primeradiant-soup-api.service`.
 
 ## RB4 DEPLOYED_COMMIT Update
 
-Update the deployed marker only after:
+Run RB6 pre-marker health checks after:
 
 - the staged copy has been promoted;
-- the service restart has completed;
-- RB6 health checks pass.
+- the service restart has completed.
+
+Update the deployed marker only after those pre-marker health checks pass:
 
 ```sh
 ssh -i /Users/mike/.ssh/id_ed25519_clu clu@eurisko \
@@ -215,9 +237,10 @@ ssh -i /Users/mike/.ssh/id_ed25519_clu clu@eurisko \
    cat /home/clu/src/primeradiant/DEPLOYED_COMMIT'
 ```
 
+After updating the marker, rerun RB6 as the final marker-parity health check.
 The deploy proof must record both the commit from this file and the running
-service `MainPID` after restart. If the marker is updated without a matching
-healthy runtime, rollback and do not record deploy proof.
+service `MainPID` after restart. If either the pre-marker or final marker-parity
+health check fails, rollback and do not record deploy proof.
 
 ## RB5 Rollback
 
@@ -231,17 +254,32 @@ Rollback command:
 
 ```sh
 ssh -i /Users/mike/.ssh/id_ed25519_clu clu@eurisko \
-  'test -d /home/clu/src/primeradiant.previous &&
-   rm -rf /home/clu/src/primeradiant.failed &&
-   mv /home/clu/src/primeradiant /home/clu/src/primeradiant.failed &&
-   mv /home/clu/src/primeradiant.previous /home/clu/src/primeradiant &&
+  'set -eu
+   TS="$(date -u +%Y%m%dT%H%M%SZ)"
+   TARGET=/home/clu/src/primeradiant.previous
+   RESTORE_MODE=move
+   if ! test -d "${TARGET}"; then
+     TARGET="$(ls -dt /home/clu/src/primeradiant.backup-t1329-* 2>/dev/null | head -1)"
+     RESTORE_MODE=copy
+   fi
+   test -n "${TARGET}"
+   test -d "${TARGET}"
+   if test -d /home/clu/src/primeradiant; then
+     mv /home/clu/src/primeradiant "/home/clu/src/primeradiant.failed-${TS}"
+   fi
+   if test "${RESTORE_MODE}" = move; then
+     mv "${TARGET}" /home/clu/src/primeradiant
+   else
+     cp -a "${TARGET}" /home/clu/src/primeradiant
+   fi
    systemctl --user restart primeradiant-soup-api.service &&
    cat /home/clu/src/primeradiant/DEPLOYED_COMMIT &&
    systemctl --user status primeradiant-soup-api.service --no-pager'
 ```
 
 Rollback health checks are the same as RB6. Record rollback evidence with the
-restored `DEPLOYED_COMMIT`, service status, and `/api/v1/soup/ready` result.
+restored `DEPLOYED_COMMIT`, service status, `/api/v1/soup/ready` result, and
+authenticated `/api/v1/soup/feed` JSON shape check.
 
 Rollback must not delete or rewrite soup DB rows, story events, graph edges,
 acks, or source input records.
@@ -259,7 +297,10 @@ ssh -i /Users/mike/.ssh/id_ed25519_clu clu@eurisko \
    curl -fsS -m 5 http://127.0.0.1:4084/api/v1/soup/ready &&
    curl -fsS -m 10 \
      -H "Authorization: Bearer $PRIMERADIANT_SOUP_API_TOKEN" \
-     "http://127.0.0.1:4084/api/v1/soup/feed?consumer=reporter&projection=news-morning&limit=3"'
+     "http://127.0.0.1:4084/api/v1/soup/feed?consumer=reporter&projection=news-morning&limit=3" \
+     > /tmp/primeradiant-soup-feed-local.json &&
+   jq -e '\''type == "object" and (.items | type == "array")'\'' \
+     /tmp/primeradiant-soup-feed-local.json'
 ```
 
 Operator check:
@@ -271,7 +312,10 @@ TOKEN="$(ssh -i /Users/mike/.ssh/id_ed25519_clu clu@eurisko \
 curl -fsS -m 5 http://eurisko:4084/api/v1/soup/ready
 curl -fsS -m 10 \
   -H "Authorization: Bearer ${TOKEN}" \
-  "http://eurisko:4084/api/v1/soup/feed?consumer=reporter&projection=news-morning&limit=3"
+  "http://eurisko:4084/api/v1/soup/feed?consumer=reporter&projection=news-morning&limit=3" \
+  > /tmp/primeradiant-soup-feed-operator.json
+jq -e 'type == "object" and (.items | type == "array")' \
+  /tmp/primeradiant-soup-feed-operator.json
 ```
 
 Required pass criteria:
@@ -280,8 +324,11 @@ Required pass criteria:
 - `MainPID` is non-empty and its cwd is
   `/home/clu/src/primeradiant/storage-harness`;
 - `/api/v1/soup/ready` returns HTTP 2xx;
-- authenticated `/api/v1/soup/feed` returns HTTP 2xx JSON;
-- `DEPLOYED_COMMIT` matches the reviewed deployed commit after RB4;
+- authenticated `/api/v1/soup/feed` returns HTTP 2xx JSON with a top-level
+  object and `items` array;
+- pre-marker RB6 checks pass before RB4 updates `DEPLOYED_COMMIT`;
+- final marker-parity RB6 checks pass after RB4, including `DEPLOYED_COMMIT`
+  matching the reviewed deployed commit;
 - no smoke check mutates the soup DB except normal read/ack behavior explicitly
   requested by the API endpoint being tested.
 
