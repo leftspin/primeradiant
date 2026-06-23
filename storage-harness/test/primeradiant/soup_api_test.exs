@@ -758,6 +758,35 @@ defmodule Primeradiant.SoupApiTest do
     assert source_link.contribution_reason["reason"] == "source_text_withheld"
   end
 
+  test "feed hides internal source coverage validation failures from source links" do
+    state =
+      source_ready_state([
+        source_item("validation-failed-source-link", title: "Validation failed source")
+      ])
+
+    state =
+      update_in(state.story_source_coverage, fn rows ->
+        Enum.map(rows, fn row ->
+          %{
+            row
+            | contribution_reason: %{
+                "state" => "refused",
+                "reason" => "story_synthesis_agent_omitted_required_source_coverage_after_retry",
+                "text" => nil
+              }
+          }
+        end)
+      end)
+
+    [item] = Soup.feed(state, %{"consumer" => "reporter", "projection" => "news-morning"}).items
+    [coverage] = item.source_coverage
+
+    assert coverage.contribution_reason["reason"] ==
+             "story_synthesis_agent_omitted_required_source_coverage_after_retry"
+
+    assert item.source_links == []
+  end
+
   defp source_ready_state(items) do
     {:ok, state, report} = RealIngestion.ingest_items(items)
 

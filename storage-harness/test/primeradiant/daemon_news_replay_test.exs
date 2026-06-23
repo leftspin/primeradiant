@@ -567,7 +567,7 @@ defmodule Primeradiant.DaemonNewsReplayTest do
            end)
   end
 
-  test "story-card synthesis keeps missing article salience auditable without exposing a source link" do
+  test "story-card synthesis retries omitted salience and keeps retry failure out of source links" do
     tmp =
       Path.join(
         System.tmp_dir!(),
@@ -609,13 +609,17 @@ defmodule Primeradiant.DaemonNewsReplayTest do
 
     [chain] = report.live_story_agent_loop.correlation_chains
     assert chain.story_card_status == "incomplete"
+    assert length(chain.agent_run_ids) == 4
+    assert length(chain.packet_ids) == 4
 
     [card] = state.story_card_versions
     assert card.status == "incomplete"
 
     [coverage] = state.story_source_coverage
-    assert coverage.contribution_reason["state"] == "unavailable"
-    assert coverage.contribution_reason["reason"] == "story_synthesis_agent_did_not_supply_field"
+    assert coverage.contribution_reason["state"] == "refused"
+
+    assert coverage.contribution_reason["reason"] ==
+             "story_synthesis_agent_omitted_required_source_coverage_after_retry"
 
     feed = Soup.feed(state, %{"consumer" => "reporter", "projection" => "news-morning"})
     [item] = feed.items
@@ -623,9 +627,67 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     [projected_coverage] = item.source_coverage
 
     assert projected_coverage.contribution_reason["reason"] ==
-             "story_synthesis_agent_did_not_supply_field"
+             "story_synthesis_agent_omitted_required_source_coverage_after_retry"
 
     assert item.source_links == []
+  end
+
+  test "story-card synthesis retry repairs omitted source contribution reasons" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-daemon-news-repaired-source-reason-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    soup_db_path = Path.join(tmp, "primeradiant-event-soup.sqlite3")
+    raw_path = Path.join(tmp, "archive.jsonl")
+
+    [row] = [
+      envelope(
+        "Agent Civic Clinic triage repaired source reason",
+        "Agent Civic Clinic triage remains open and needs retry repair."
+      )
+    ]
+
+    [{offset, length}] = write_archive!(raw_path, [row])
+
+    event =
+      committed_source_item_event(
+        "event-agent-news-repaired-reason",
+        raw_path,
+        offset,
+        length,
+        row
+      )
+
+    {:ok, state, report} =
+      DaemonNewsEvent.consume_event(event,
+        soup_db_path: soup_db_path,
+        tenant_id: @tenant,
+        actor_id: "flynn",
+        story_agent_loop?: true,
+        story_agent_opts: [adapter: &stub_story_agent_repair_source_reason/3]
+      )
+
+    [chain] = report.live_story_agent_loop.correlation_chains
+    assert chain.story_card_status == "complete"
+    assert length(chain.agent_run_ids) == 4
+    assert length(chain.packet_ids) == 4
+
+    [coverage] = state.story_source_coverage
+    assert coverage.contribution_reason["state"] == "complete"
+    assert coverage.contribution_reason["text"] =~ "repaired source salience"
+
+    refute coverage.contribution_reason["reason"] ==
+             "story_synthesis_agent_did_not_supply_field"
+
+    feed = Soup.feed(state, %{"consumer" => "reporter", "projection" => "news-morning"})
+    [item] = feed.items
+    [source_link] = item.source_links
+    assert source_link.contribution_reason["text"] =~ "repaired source salience"
   end
 
   test "story-card synthesis accepts explicit non-sentinel unavailable source reasons" do
@@ -2044,6 +2106,32 @@ defmodule Primeradiant.DaemonNewsReplayTest do
   end
 
   defp stub_story_agent_missing_source_reason(config, packet, ctx),
+    do: stub_story_agent(config, packet, ctx)
+
+  defp stub_story_agent_repair_source_reason(%{role: :story_synthesis}, packet, _ctx) do
+    synthesis = stub_story_synthesis(packet)
+
+    output =
+      if packet[:source_coverage_repair_request] do
+        update_in(synthesis.output, ["source_coverage"], fn rows ->
+          Enum.map(rows, fn row ->
+            put_in(row["contribution_reason"], %{
+              "text" => "repaired source salience for #{row["source_ref"]}",
+              "state" => "complete",
+              "provenance_refs" => ["fieldprov:test"]
+            })
+          end)
+        end)
+      else
+        update_in(synthesis.output, ["source_coverage"], fn rows ->
+          Enum.map(rows, &Map.delete(&1, "contribution_reason"))
+        end)
+      end
+
+    %{synthesis | output: output}
+  end
+
+  defp stub_story_agent_repair_source_reason(config, packet, ctx),
     do: stub_story_agent(config, packet, ctx)
 
   defp stub_story_agent_unavailable_source_reason(%{role: :story_synthesis}, packet, _ctx) do

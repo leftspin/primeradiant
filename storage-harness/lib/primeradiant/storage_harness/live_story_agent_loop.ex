@@ -59,6 +59,7 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
   Use contribution_reason unavailable/refused with a specific non-sentinel reason only when the linked article text truly cannot support a reader-facing salience explanation.
   Examples: "Adds the funding amount and names the investor" or "Provides the primary quote from the company."
   If any required source display or story-card field is unavailable, return explicit unavailable/refused/incomplete field state with reason and provenance.
+  If the packet includes source_coverage_repair_request, repair the prior omission by returning source_coverage for every missing source_ref.
   """
 
   def run(%State{} = state, admissions, actor_id, opts \\ []) when is_list(admissions) do
@@ -248,23 +249,27 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
 
     story = Enum.find(state.stories, &(&1.id == write_chain.story_id))
 
-    {state, synthesis_run, synthesis} =
-      invoke_agent(
+    synthesis_packet =
+      packet(state, input, admission, :story_synthesis, correlation_id, actor_id, %{
+        story_id: story.id,
+        story_key: story.story_key,
+        story_version: story.version,
+        story_event_id: write_chain.story_event_id,
+        refresh_reason: refresh_reason(write_chain.classification),
+        committed_story_state: story_packet_state(state, story, actor_id),
+        prior_story_card_version: current_story_card_version(state, story.id)
+      })
+
+    {state, synthesis_runs, synthesis} =
+      invoke_story_synthesis_agent(
         state,
-        config(:story_synthesis),
-        packet(state, input, admission, :story_synthesis, correlation_id, actor_id, %{
-          story_id: story.id,
-          story_key: story.story_key,
-          story_version: story.version,
-          story_event_id: write_chain.story_event_id,
-          refresh_reason: refresh_reason(write_chain.classification),
-          committed_story_state: story_packet_state(state, story, actor_id),
-          prior_story_card_version: current_story_card_version(state, story.id)
-        }),
+        synthesis_packet,
         actor_id,
         adapter,
         correlation_id
       )
+
+    synthesis_run = List.last(synthesis_runs)
 
     {state, card_chain} =
       write_story_card(
@@ -285,8 +290,9 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
         correlation_id: correlation_id,
         source_ref: source_ref,
         activation_id: activation.activation_id,
-        packet_ids: [identity.packet_id, meaning.packet_id, synthesis.packet_id],
-        agent_run_ids: [identity_run.id, meaning_run.id, synthesis_run.id],
+        packet_ids:
+          [identity.packet_id, meaning.packet_id] ++ Enum.map(synthesis_runs, &run_packet_id/1),
+        agent_run_ids: [identity_run.id, meaning_run.id] ++ Enum.map(synthesis_runs, & &1.id),
         agent_families: [
           identity_run.agent_type,
           meaning_run.agent_type,
@@ -373,6 +379,54 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
      }}
   end
 
+  defp invoke_story_synthesis_agent(state, packet, actor_id, adapter, correlation_id) do
+    config = config(:story_synthesis)
+
+    {state, run, synthesis} =
+      invoke_agent(state, config, packet, actor_id, adapter, correlation_id)
+
+    missing_refs = missing_source_contribution_refs(synthesis.output, packet)
+
+    if missing_refs == [] do
+      {state, [run], synthesis}
+    else
+      retry_correlation_id = "#{correlation_id}:source-coverage-repair"
+
+      retry_packet =
+        packet
+        |> Map.put(:packet_id, "packet:story_synthesis:#{retry_correlation_id}")
+        |> Map.put(:source_coverage_repair_request, %{
+          missing_source_refs: missing_refs,
+          required_source_refs: linked_source_refs(packet),
+          previous_output: synthesis.output,
+          instruction:
+            "Return source_coverage rows for every required_source_ref. Do not omit missing_source_refs."
+        })
+
+      {state, retry_run, retry_synthesis} =
+        invoke_agent(state, config, retry_packet, actor_id, adapter, retry_correlation_id)
+
+      retry_missing_refs = missing_source_contribution_refs(retry_synthesis.output, packet)
+
+      retry_synthesis =
+        if retry_missing_refs == [] do
+          retry_synthesis
+        else
+          Map.update!(retry_synthesis, :output, fn output ->
+            Map.put(output, "source_coverage_validation", %{
+              "state" => "failed",
+              "reason" => "story_synthesis_agent_omitted_required_source_coverage_after_retry",
+              "missing_source_refs" => retry_missing_refs
+            })
+          end)
+        end
+
+      {state, [run, retry_run], retry_synthesis}
+    end
+  end
+
+  defp run_packet_id(run), do: run.scope["packet_id"]
+
   defp refresh_story_card_for_story(state, story, input, actor_id, adapter, cadence) do
     source_ref = Admission.input_ref(input)
     latest_event = latest_story_event(state, story.id, input.id)
@@ -405,25 +459,29 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
       source_provenance: get_in(input.normalized || %{}, ["source_provenance"]) || %{}
     }
 
-    {state, synthesis_run, synthesis} =
-      invoke_agent(
+    synthesis_packet =
+      packet(state, input, admission, :story_synthesis, correlation_id, actor_id, %{
+        story_id: story.id,
+        story_key: story.story_key,
+        story_version: story.version,
+        story_event_id: latest_event && latest_event.id,
+        refresh_reason: refresh_reason_for_cadence(cadence),
+        committed_story_state: story_packet_state(state, story, actor_id),
+        prior_story_card_version: current_story_card_version(state, story.id),
+        cadence: cadence,
+        candidate_reason: refresh_reason_for_cadence(cadence)
+      })
+
+    {state, synthesis_runs, synthesis} =
+      invoke_story_synthesis_agent(
         state,
-        config(:story_synthesis),
-        packet(state, input, admission, :story_synthesis, correlation_id, actor_id, %{
-          story_id: story.id,
-          story_key: story.story_key,
-          story_version: story.version,
-          story_event_id: latest_event && latest_event.id,
-          refresh_reason: refresh_reason_for_cadence(cadence),
-          committed_story_state: story_packet_state(state, story, actor_id),
-          prior_story_card_version: current_story_card_version(state, story.id),
-          cadence: cadence,
-          candidate_reason: refresh_reason_for_cadence(cadence)
-        }),
+        synthesis_packet,
         actor_id,
         adapter,
         correlation_id
       )
+
+    synthesis_run = List.last(synthesis_runs)
 
     write_chain = %{
       story_event_id: latest_event && latest_event.id,
@@ -1232,6 +1290,34 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
     end)
   end
 
+  defp missing_source_contribution_refs(output, packet) do
+    output_coverage = output["source_coverage"] || []
+
+    packet
+    |> linked_source_refs()
+    |> Enum.reject(fn source_ref ->
+      case Enum.find(output_coverage, &(Map.get(&1, "source_ref") == source_ref)) do
+        nil -> false
+        row -> usable_contribution_reason?(Map.get(row, "contribution_reason"))
+      end
+    end)
+  end
+
+  defp linked_source_refs(packet) do
+    packet
+    |> get_in([:committed_story_state, :linked_sources])
+    |> case do
+      sources when is_list(sources) ->
+        sources
+        |> Enum.map(& &1.source_ref)
+        |> Enum.reject(&is_nil/1)
+        |> Enum.uniq()
+
+      _ ->
+        []
+    end
+  end
+
   defp usable_contribution_reason?(%{"state" => state, "reason" => reason})
        when state in ["unavailable", "refused"] and is_binary(reason) and reason != "" and
               reason != "story_synthesis_agent_did_not_supply_field",
@@ -1332,6 +1418,7 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
 
   defp source_coverage_rows(state, story, card, input, admission, output, provenance_refs) do
     output_coverage = output["source_coverage"] || []
+    validation_failed_refs = source_coverage_validation_failed_refs(output)
     linked_inputs = story_inputs_for_card(state, story.id)
 
     linked_inputs
@@ -1365,9 +1452,10 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
             "reason" => "not_supplied"
           }),
         contribution_reason:
-          field_value(
-            Map.get(agent_row, "contribution_reason"),
-            nil,
+          contribution_reason_for_source(
+            agent_row,
+            source_ref,
+            validation_failed_refs,
             provenance_refs
           ),
         materiality: Map.get(agent_row, "materiality", "unavailable"),
@@ -1409,6 +1497,39 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
 
       rows ->
         rows
+    end
+  end
+
+  defp source_coverage_validation_failed_refs(output) do
+    case output["source_coverage_validation"] do
+      %{
+        "state" => "failed",
+        "reason" => "story_synthesis_agent_omitted_required_source_coverage_after_retry",
+        "missing_source_refs" => refs
+      }
+      when is_list(refs) ->
+        refs
+
+      _ ->
+        []
+    end
+  end
+
+  defp contribution_reason_for_source(
+         agent_row,
+         source_ref,
+         validation_failed_refs,
+         provenance_refs
+       ) do
+    if source_ref in validation_failed_refs do
+      %{
+        "text" => nil,
+        "state" => "refused",
+        "reason" => "story_synthesis_agent_omitted_required_source_coverage_after_retry",
+        "provenance_refs" => provenance_refs
+      }
+    else
+      field_value(Map.get(agent_row, "contribution_reason"), nil, provenance_refs)
     end
   end
 

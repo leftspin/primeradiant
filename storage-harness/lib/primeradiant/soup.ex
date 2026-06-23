@@ -384,14 +384,21 @@ defmodule Primeradiant.Soup do
   defp reader_visible_contribution_reason?(%{"state" => state, "reason" => reason})
        when state in ["unavailable", "refused"] and is_binary(reason) and reason != "" and
               reason != "story_synthesis_agent_did_not_supply_field",
-       do: true
+       do: not internal_synthesis_failure_reason?(reason)
 
   defp reader_visible_contribution_reason?(%{state: state, reason: reason})
        when state in ["unavailable", "refused"] and is_binary(reason) and reason != "" and
               reason != "story_synthesis_agent_did_not_supply_field",
-       do: true
+       do: not internal_synthesis_failure_reason?(reason)
 
   defp reader_visible_contribution_reason?(_), do: false
+
+  defp internal_synthesis_failure_reason?(
+         "story_synthesis_agent_omitted_required_source_coverage_after_retry"
+       ),
+       do: true
+
+  defp internal_synthesis_failure_reason?(_reason), do: false
 
   defp source_link_projection(row) do
     %{
