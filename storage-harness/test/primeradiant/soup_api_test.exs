@@ -708,6 +708,56 @@ defmodule Primeradiant.SoupApiTest do
     assert json(conn)["error"] == "unauthorized"
   end
 
+  test "feed hides missing-agent source coverage from reader-facing source links" do
+    state =
+      source_ready_state([
+        source_item("missing-agent-source-link", title: "Missing salience source")
+      ])
+
+    state =
+      update_in(state.story_source_coverage, fn rows ->
+        Enum.map(rows, fn row ->
+          %{
+            row
+            | contribution_reason: %{
+                "state" => "unavailable",
+                "reason" => "story_synthesis_agent_did_not_supply_field",
+                "text" => nil
+              }
+          }
+        end)
+      end)
+
+    [item] = Soup.feed(state, %{"consumer" => "reporter", "projection" => "news-morning"}).items
+    [_coverage] = item.source_coverage
+    assert item.source_links == []
+  end
+
+  test "feed keeps explicit non-missing unavailable source reason in reader-facing source links" do
+    state =
+      source_ready_state([
+        source_item("unavailable-source-link", title: "Unavailable salience source")
+      ])
+
+    state =
+      update_in(state.story_source_coverage, fn rows ->
+        Enum.map(rows, fn row ->
+          %{
+            row
+            | contribution_reason: %{
+                "state" => "unavailable",
+                "reason" => "source_text_withheld",
+                "text" => nil
+              }
+          }
+        end)
+      end)
+
+    [item] = Soup.feed(state, %{"consumer" => "reporter", "projection" => "news-morning"}).items
+    [source_link] = item.source_links
+    assert source_link.contribution_reason["reason"] == "source_text_withheld"
+  end
+
   defp source_ready_state(items) do
     {:ok, state, report} = RealIngestion.ingest_items(items)
 

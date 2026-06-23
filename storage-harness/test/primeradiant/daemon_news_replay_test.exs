@@ -489,7 +489,7 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert Enum.all?(chain.evidence_refs, &(&1 in evidence_labels))
   end
 
-  test "story-card synthesis is incomplete when linked article salience reason is missing" do
+  test "story-card synthesis keeps missing article salience auditable without exposing a source link" do
     tmp =
       Path.join(
         System.tmp_dir!(),
@@ -538,6 +538,16 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     [coverage] = state.story_source_coverage
     assert coverage.contribution_reason["state"] == "unavailable"
     assert coverage.contribution_reason["reason"] == "story_synthesis_agent_did_not_supply_field"
+
+    feed = Soup.feed(state, %{"consumer" => "reporter", "projection" => "news-morning"})
+    [item] = feed.items
+    assert item.status == "incomplete"
+    [projected_coverage] = item.source_coverage
+
+    assert projected_coverage.contribution_reason["reason"] ==
+             "story_synthesis_agent_did_not_supply_field"
+
+    assert item.source_links == []
   end
 
   test "recurring cadence refreshes Reporter story cards over admitted soup without source admission" do

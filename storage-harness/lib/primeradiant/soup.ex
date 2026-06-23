@@ -203,7 +203,10 @@ defmodule Primeradiant.Soup do
       summary: card.summary,
       key_claims: Enum.map(claims, &claim_projection/1),
       source_coverage: Enum.map(coverage, &coverage_projection/1),
-      source_links: Enum.map(coverage, &source_link_projection/1),
+      source_links:
+        coverage
+        |> Enum.filter(&reader_visible_source_link?/1)
+        |> Enum.map(&source_link_projection/1),
       provenance:
         Map.merge(card.provenance || %{}, %{
           "projection_id" => projection_id(state),
@@ -366,6 +369,29 @@ defmodule Primeradiant.Soup do
       provenance_refs: row.provenance_refs
     }
   end
+
+  defp reader_visible_source_link?(row),
+    do: reader_visible_contribution_reason?(row.contribution_reason)
+
+  defp reader_visible_contribution_reason?(%{"state" => "complete", "text" => text})
+       when is_binary(text) and text != "",
+       do: true
+
+  defp reader_visible_contribution_reason?(%{state: "complete", text: text})
+       when is_binary(text) and text != "",
+       do: true
+
+  defp reader_visible_contribution_reason?(%{"state" => state, "reason" => reason})
+       when state in ["unavailable", "refused"] and is_binary(reason) and reason != "" and
+              reason != "story_synthesis_agent_did_not_supply_field",
+       do: true
+
+  defp reader_visible_contribution_reason?(%{state: state, reason: reason})
+       when state in ["unavailable", "refused"] and is_binary(reason) and reason != "" and
+              reason != "story_synthesis_agent_did_not_supply_field",
+       do: true
+
+  defp reader_visible_contribution_reason?(_), do: false
 
   defp source_link_projection(row) do
     %{

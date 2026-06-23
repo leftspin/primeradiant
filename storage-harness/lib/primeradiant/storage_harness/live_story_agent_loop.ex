@@ -1367,7 +1367,7 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
       })
     end)
     |> case do
-      [] ->
+      [] when linked_inputs == [] ->
         [
           ChangesetStore.insert!(StorySourceCoverage, %{
             tenant_id: state.tenant_id,
