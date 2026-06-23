@@ -74,7 +74,7 @@ defmodule Primeradiant.Soup.Router do
   defp load_state(%State{} = state), do: state
 
   defp load_state({:durable_soup_db, soup_db, tenant}) do
-    DurableSoupDb.load_tenant(soup_db, tenant)
+    DurableSoupDb.load_soup_projection(soup_db, tenant)
   end
 
   defp send_json(conn, status, payload) do

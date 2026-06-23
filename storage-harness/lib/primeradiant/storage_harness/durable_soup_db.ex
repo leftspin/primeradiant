@@ -223,6 +223,95 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
     end
   end
 
+  def load_soup_projection(db_path, tenant_id) do
+    if File.regular?(db_path) do
+      state = Primeradiant.StorageHarness.State.new(tenant_id: tenant_id, user_id: "flynn")
+
+      state
+      |> put_rows(
+        :inputs,
+        load_rows(db_path, "inputs", tenant_id, Primeradiant.StorageHarness.Input)
+      )
+      |> put_rows(
+        :stories,
+        load_rows(db_path, "stories", tenant_id, Primeradiant.StorageHarness.Story)
+      )
+      |> put_rows(
+        :soup_nodes,
+        load_rows(db_path, "soup_nodes", tenant_id, Primeradiant.StorageHarness.SoupNode)
+      )
+      |> put_rows(
+        :edges,
+        load_rows(db_path, "edges", tenant_id, Primeradiant.StorageHarness.Edge)
+      )
+      |> put_rows(
+        :story_fact_versions,
+        load_rows(
+          db_path,
+          "story_fact_versions",
+          tenant_id,
+          Primeradiant.StorageHarness.StoryFactVersion
+        )
+      )
+      |> put_rows(
+        :story_events,
+        load_rows(db_path, "story_events", tenant_id, Primeradiant.StorageHarness.StoryEvent)
+      )
+      |> put_rows(
+        :story_card_versions,
+        load_rows(
+          db_path,
+          "story_card_versions",
+          tenant_id,
+          Primeradiant.StorageHarness.StoryCardVersion
+        )
+      )
+      |> put_rows(
+        :story_source_coverage,
+        load_rows(
+          db_path,
+          "story_source_coverage",
+          tenant_id,
+          Primeradiant.StorageHarness.StorySourceCoverage
+        )
+      )
+      |> put_rows(
+        :story_key_claims,
+        load_rows(
+          db_path,
+          "story_key_claims",
+          tenant_id,
+          Primeradiant.StorageHarness.StoryKeyClaim
+        )
+      )
+      |> put_rows(
+        :story_card_change_sets,
+        load_rows(
+          db_path,
+          "story_card_change_sets",
+          tenant_id,
+          Primeradiant.StorageHarness.StoryCardChangeSet
+        )
+      )
+      |> put_rows(
+        :story_reader_deltas,
+        load_rows(
+          db_path,
+          "story_reader_deltas",
+          tenant_id,
+          Primeradiant.StorageHarness.StoryReaderDelta
+        )
+      )
+      |> put_rows(
+        :evidence_refs,
+        load_rows(db_path, "evidence_refs", tenant_id, Primeradiant.StorageHarness.EvidenceRef)
+      )
+      |> rebuild_source_ids()
+    else
+      Primeradiant.StorageHarness.State.new(tenant_id: tenant_id, user_id: "flynn")
+    end
+  end
+
   def merge_state(%Primeradiant.StorageHarness.State{} = prior, current) do
     %Primeradiant.StorageHarness.State{
       prior

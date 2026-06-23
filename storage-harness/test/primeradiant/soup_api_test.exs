@@ -628,6 +628,76 @@ defmodule Primeradiant.SoupApiTest do
     assert length(loaded_state.stories) == length(state.stories)
   end
 
+  test "durable soup API runtime source avoids proposal op payload hydration", %{state: state} do
+    db_path =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-soup-heavy-proposal-#{System.system_time(:nanosecond)}-#{System.unique_integer([:positive])}.sqlite3"
+      )
+
+    DurableSoupDb.persist!(db_path, state, %{
+      source_kind: "soup_api_test",
+      source_db_path: "fixture_importer",
+      source_row_count: length(state.inputs)
+    })
+
+    loaded_projection = DurableSoupDb.load_soup_projection(db_path, state.tenant_id)
+    loaded_full = DurableSoupDb.load_tenant(db_path, state.tenant_id)
+
+    assert loaded_projection.proposal_ops == []
+    assert length(loaded_full.proposal_ops) == length(state.proposal_ops)
+
+    body =
+      :get
+      |> conn("/api/v1/soup/feed?consumer=reporter&projection=news-morning&limit=1")
+      |> put_req_header("authorization", "Bearer internal-token")
+      |> Router.call(Keyword.put(@opts, :state, {:durable_soup_db, db_path, state.tenant_id}))
+      |> json()
+
+    assert [_item] = body["items"]
+  end
+
+  test "durable soup API projection loader preserves story-card feed shape", %{state: _state} do
+    state =
+      source_ready_state([
+        source_item("projection-parity-1", title: "Projection parity article")
+      ])
+
+    db_path =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-soup-projection-parity-#{System.system_time(:nanosecond)}-#{System.unique_integer([:positive])}.sqlite3"
+      )
+
+    DurableSoupDb.persist!(db_path, state, %{
+      source_kind: "soup_api_test",
+      source_db_path: "real_ingestion",
+      source_row_count: length(state.inputs)
+    })
+
+    full_state = DurableSoupDb.load_tenant(db_path, state.tenant_id)
+    projection_state = DurableSoupDb.load_soup_projection(db_path, state.tenant_id)
+    params = %{"consumer" => "reporter", "projection" => "news-morning", "limit" => "1"}
+
+    assert Soup.feed(projection_state, params) == Soup.feed(full_state, params)
+
+    assert Soup.delta(projection_state, Map.put(params, "after", Soup.cursor_for(full_state))) ==
+             Soup.delta(full_state, Map.put(params, "after", Soup.cursor_for(full_state)))
+
+    [item] = Soup.feed(projection_state, params).items
+
+    assert item.story_card_version_id
+    assert [_claim] = item.key_claims
+    assert [_coverage] = item.source_coverage
+    assert [_link] = item.source_links
+    assert is_map(item.provenance)
+    assert is_map(item.projection_provenance)
+    assert item.change_set
+    assert item.changed_since_seen.state == "unavailable"
+    assert item.magazine_contract.summary_text
+    assert [_source] = item.magazine_contract.sources
+  end
+
   test "internal service auth rejects missing bearer token", %{state: state} do
     conn =
       :get
