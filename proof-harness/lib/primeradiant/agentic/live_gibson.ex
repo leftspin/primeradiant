@@ -8,29 +8,44 @@ defmodule Primeradiant.Agentic.LiveGibson do
     prompt = prompt(config, packet)
     started = monotonic_ms()
 
-    {body, 0} =
-      System.cmd(
-        "curl",
-        [
-          "-sS",
-          "--max-time",
-          "120",
-          endpoint(),
-          "-H",
-          "Content-Type: application/json",
-          "-d",
-          Jason.encode!(%{
-            model: model(),
-            messages: [
-              %{role: "system", content: config.system_prompt},
-              %{role: "user", content: prompt}
-            ],
-            temperature: 0.1,
-            max_tokens: Map.get(config, :max_tokens, 640)
-          })
+    request_body =
+      Jason.encode!(%{
+        model: model(),
+        messages: [
+          %{role: "system", content: config.system_prompt},
+          %{role: "user", content: prompt}
         ],
-        stderr_to_stdout: true
+        temperature: 0.1,
+        max_tokens: Map.get(config, :max_tokens, 640)
+      })
+
+    request_path =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-gibson-#{System.unique_integer([:positive])}.json"
       )
+
+    File.write!(request_path, request_body)
+
+    {body, 0} =
+      try do
+        System.cmd(
+          "curl",
+          [
+            "-sS",
+            "--max-time",
+            "120",
+            endpoint(),
+            "-H",
+            "Content-Type: application/json",
+            "--data-binary",
+            "@#{request_path}"
+          ],
+          stderr_to_stdout: true
+        )
+      after
+        File.rm(request_path)
+      end
 
     elapsed = monotonic_ms() - started
     decoded = Jason.decode!(body)
