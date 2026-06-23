@@ -53,6 +53,9 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
   @synthesis_prompt """
   Maintain the current living story card from committed story state and linked source evidence.
   Return deck, summary, key_claims, source_coverage, contribution explanations, salience hints, and changed fields.
+  For every article in committed_story_state.linked_sources that appears in the story card, return a matching source_coverage row keyed by source_ref.
+  Each source_coverage row must include contribution_reason.text: a concise plain-language explanation of why that article matters to this story, suitable for a reader-facing News source popup.
+  Examples: "Adds the funding amount and names the investor" or "Provides the primary quote from the company."
   If any required source display or story-card field is unavailable, return explicit unavailable/refused/incomplete field state with reason and provenance.
   """
 
@@ -725,7 +728,7 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
     card_version = card_version_for(state, story.id)
     field_provenance_manifest_id = "fieldprov:#{story.story_key}:card-v#{card_version}"
     provenance_refs = [field_provenance_manifest_id]
-    card_status = card_status(synthesis.output)
+    card_status = card_status(synthesis.output, state, story)
 
     card =
       ChangesetStore.insert!(StoryCardVersion, %{
@@ -1189,14 +1192,15 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
     }
   end
 
-  defp card_status(output) do
+  defp card_status(output, state, story) do
     status = to_string(output["status"] || "incomplete")
 
     cond do
       status in ["refused", "unavailable"] ->
         status
 
-      missing_agent_key_claims?(output) or missing_durable_topic_nodes?(output) ->
+      missing_agent_key_claims?(output) or missing_durable_topic_nodes?(output) or
+          missing_source_contribution_reasons?(output, state, story) ->
         "incomplete"
 
       status == "complete" ->
@@ -1208,6 +1212,28 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
   end
 
   defp missing_agent_key_claims?(output), do: output["key_claims"] in [nil, []]
+
+  defp missing_source_contribution_reasons?(output, state, story) do
+    output_coverage = output["source_coverage"] || []
+
+    state
+    |> story_inputs_for_card(story.id)
+    |> Enum.map(&Admission.input_ref/1)
+    |> Enum.uniq()
+    |> Enum.any?(fn source_ref ->
+      case Enum.find(output_coverage, &(Map.get(&1, "source_ref") == source_ref)) do
+        nil -> true
+        row -> not complete_text_field?(Map.get(row, "contribution_reason"))
+      end
+    end)
+  end
+
+  defp complete_text_field?(%{"state" => "complete", "text" => text})
+       when is_binary(text) and text != "",
+       do: true
+
+  defp complete_text_field?(text) when is_binary(text) and text != "", do: true
+  defp complete_text_field?(_), do: false
 
   defp missing_durable_topic_nodes?(output) do
     case get_in(output, ["topic_salience", "durable_topic_nodes"]) do
@@ -1513,7 +1539,7 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
 
   defp config(:story_synthesis) do
     :story_synthesis
-    |> config("story-synthesis.v1.t1312.story-cards", @synthesis_prompt, %{
+    |> config("story-synthesis.v2.t1311.article-link-salience", @synthesis_prompt, %{
       status: "complete | incomplete | refused | unavailable",
       title: %{text: "string", state: "complete | unavailable", provenance_refs: ["string"]},
       deck: %{
@@ -1544,7 +1570,8 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
         %{
           source_ref: "source ref",
           contribution_reason: %{
-            text: "why this article belongs to the story",
+            text:
+              "concise reader-facing reason this article matters to the story; required for every linked source_ref, for example Adds the funding amount and names the investor",
             state: "complete",
             provenance_refs: ["string"]
           },

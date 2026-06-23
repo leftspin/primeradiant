@@ -357,7 +357,9 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert gazette_source.source_domain["state"] in ["complete", "unavailable"]
     assert gazette_source.source_label["state"] in ["complete", "unavailable"]
     assert gazette_source.publication["state"] in ["complete", "unavailable"]
-    assert gazette_source.contribution_reason["state"] in ["complete", "unavailable"]
+    assert gazette_source.contribution_reason["state"] == "complete"
+    assert is_binary(gazette_source.contribution_reason["text"])
+    assert gazette_source.contribution_reason["text"] != ""
 
     assert [%{external_id: "event-agent-news-1"} = input] = state.inputs
     assert get_in(input.normalized, ["meaning_proof"]) == "not_ingest_owned"
@@ -485,6 +487,57 @@ defmodule Primeradiant.DaemonNewsReplayTest do
       |> Enum.uniq()
 
     assert Enum.all?(chain.evidence_refs, &(&1 in evidence_labels))
+  end
+
+  test "story-card synthesis is incomplete when linked article salience reason is missing" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-daemon-news-missing-source-reason-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    soup_db_path = Path.join(tmp, "primeradiant-event-soup.sqlite3")
+    raw_path = Path.join(tmp, "archive.jsonl")
+
+    [row] = [
+      envelope(
+        "Agent Civic Clinic triage missing source reason",
+        "Agent Civic Clinic triage remains open and needs a source salience explanation."
+      )
+    ]
+
+    [{offset, length}] = write_archive!(raw_path, [row])
+
+    event =
+      committed_source_item_event(
+        "event-agent-news-missing-reason",
+        raw_path,
+        offset,
+        length,
+        row
+      )
+
+    {:ok, state, report} =
+      DaemonNewsEvent.consume_event(event,
+        soup_db_path: soup_db_path,
+        tenant_id: @tenant,
+        actor_id: "flynn",
+        story_agent_loop?: true,
+        story_agent_opts: [adapter: &stub_story_agent_missing_source_reason/3]
+      )
+
+    [chain] = report.live_story_agent_loop.correlation_chains
+    assert chain.story_card_status == "incomplete"
+
+    [card] = state.story_card_versions
+    assert card.status == "incomplete"
+
+    [coverage] = state.story_source_coverage
+    assert coverage.contribution_reason["state"] == "unavailable"
+    assert coverage.contribution_reason["reason"] == "story_synthesis_agent_did_not_supply_field"
   end
 
   test "recurring cadence refreshes Reporter story cards over admitted soup without source admission" do
@@ -1833,6 +1886,20 @@ defmodule Primeradiant.DaemonNewsReplayTest do
 
   defp stub_story_agent(%{role: :story_synthesis}, packet, _ctx),
     do: stub_story_synthesis(packet)
+
+  defp stub_story_agent_missing_source_reason(%{role: :story_synthesis}, packet, _ctx) do
+    synthesis = stub_story_synthesis(packet)
+
+    output =
+      update_in(synthesis.output["source_coverage"], fn rows ->
+        Enum.map(rows, &Map.delete(&1, "contribution_reason"))
+      end)
+
+    %{synthesis | output: output}
+  end
+
+  defp stub_story_agent_missing_source_reason(config, packet, ctx),
+    do: stub_story_agent(config, packet, ctx)
 
   defp stub_story_agent_with_later_update(%{role: :story_identity}, _packet, _ctx) do
     %{
