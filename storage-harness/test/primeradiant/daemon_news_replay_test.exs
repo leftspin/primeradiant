@@ -527,7 +527,7 @@ defmodule Primeradiant.DaemonNewsReplayTest do
       LiveStoryAgentLoop.refresh_story_cards(loaded, "flynn",
         cadence: :hourly_story_card_synthesis,
         limit: 1,
-        adapter: &refusing_story_synthesis_agent/3
+        adapter: &refusing_story_synthesis_agent_with_config_assertion/3
       )
 
     DurableSoupDb.persist!(soup_db_path, refreshed, %{
@@ -2017,6 +2017,12 @@ defmodule Primeradiant.DaemonNewsReplayTest do
       invocation_transport_id: "stub-story-synthesis-refusal",
       duration_ms: 1
     }
+  end
+
+  defp refusing_story_synthesis_agent_with_config_assertion(config, packet, ctx) do
+    assert config.role == :story_synthesis
+    assert config.max_tokens == 4096
+    refusing_story_synthesis_agent(config, packet, ctx)
   end
 
   defp stub_story_synthesis(packet) do

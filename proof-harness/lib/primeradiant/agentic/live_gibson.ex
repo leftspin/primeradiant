@@ -26,7 +26,7 @@ defmodule Primeradiant.Agentic.LiveGibson do
               %{role: "user", content: prompt}
             ],
             temperature: 0.1,
-            max_tokens: 640
+            max_tokens: Map.get(config, :max_tokens, 640)
           })
         ],
         stderr_to_stdout: true

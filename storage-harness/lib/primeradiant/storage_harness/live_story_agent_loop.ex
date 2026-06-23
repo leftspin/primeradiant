@@ -1512,7 +1512,8 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
   end
 
   defp config(:story_synthesis) do
-    config(:story_synthesis, "story-synthesis.v1.t1312.story-cards", @synthesis_prompt, %{
+    :story_synthesis
+    |> config("story-synthesis.v1.t1312.story-cards", @synthesis_prompt, %{
       status: "complete | incomplete | refused | unavailable",
       title: %{text: "string", state: "complete | unavailable", provenance_refs: ["string"]},
       deck: %{
@@ -1565,6 +1566,7 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
       },
       field_completeness: %{}
     })
+    |> Map.put(:max_tokens, 4096)
   end
 
   defp config(role, version, task_prompt, output_schema) do
