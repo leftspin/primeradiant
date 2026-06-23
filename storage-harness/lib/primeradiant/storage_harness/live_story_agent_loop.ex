@@ -1261,7 +1261,7 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
       status in ["refused", "unavailable"] ->
         status
 
-      missing_agent_key_claims?(output) or missing_durable_topic_nodes?(output) or
+      missing_agent_key_claims?(output) or missing_topic_salience?(output) or
           missing_source_contribution_reasons?(output, state, story) ->
         "incomplete"
 
@@ -1337,11 +1337,11 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
   defp complete_text_field?(text) when is_binary(text) and text != "", do: true
   defp complete_text_field?(_), do: false
 
-  defp missing_durable_topic_nodes?(output) do
-    case get_in(output, ["topic_salience", "durable_topic_nodes"]) do
-      %{"state" => state} when state in ["complete", "refused"] -> false
-      _ -> true
-    end
+  defp missing_topic_salience?(output) do
+    salience = output["topic_salience"] || %{}
+
+    not usable_salience_hint?(salience["salience_explanation"]) or
+      blank?(salience["global_salience"]) or blank?(salience["flynn_priority"])
   end
 
   defp field_value(%{} = value, _fallback, _provenance_refs), do: value
@@ -1375,7 +1375,7 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
         Map.get(
           supplied,
           "topic_salience",
-          if(missing_durable_topic_nodes?(output), do: "unavailable", else: "complete")
+          if(missing_topic_salience?(output), do: "unavailable", else: "complete")
         ),
       "canonical_public_url" => Map.get(supplied, "canonical_public_url", "source_level"),
       "source_label" => Map.get(supplied, "source_label", "source_level"),
@@ -1387,6 +1387,19 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
   defp completeness_for(%{"state" => state}), do: state
   defp completeness_for(value) when is_binary(value) and value != "", do: "complete"
   defp completeness_for(_), do: "unavailable"
+
+  defp usable_salience_hint?(%{"state" => state, "reason" => reason})
+       when state in ["unavailable", "refused"] and is_binary(reason) and reason != "",
+       do: true
+
+  defp usable_salience_hint?(%{"state" => "complete", "text" => text})
+       when is_binary(text) and text != "",
+       do: true
+
+  defp usable_salience_hint?(text) when is_binary(text) and text != "", do: true
+  defp usable_salience_hint?(_), do: false
+
+  defp blank?(value), do: not (is_binary(value) and value != "")
 
   defp salience_hints(output, state, story) do
     source_count =
@@ -1749,7 +1762,25 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
     }
   end
 
-  defp normalize_output(output), do: Admission.normalize_keys(output || %{})
+  defp normalize_output(output) do
+    output
+    |> Kernel.||(%{})
+    |> Admission.normalize_keys()
+    |> normalize_source_coverage_output()
+  end
+
+  defp normalize_source_coverage_output(%{"source_coverage" => coverage} = output)
+       when is_map(coverage) do
+    rows =
+      Enum.map(coverage, fn
+        {source_ref, %{} = row} -> Map.put_new(row, "source_ref", source_ref)
+        {_source_ref, row} -> row
+      end)
+
+    %{output | "source_coverage" => rows}
+  end
+
+  defp normalize_source_coverage_output(output), do: output
 
   defp story_key(output, input) do
     slug(output["story_key"] || input.title || input.external_id)

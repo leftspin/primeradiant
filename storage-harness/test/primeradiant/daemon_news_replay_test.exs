@@ -690,6 +690,116 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert source_link.contribution_reason["text"] =~ "repaired source salience"
   end
 
+  test "story-card synthesis does not require unrequested durable topic nodes" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-daemon-news-no-durable-topic-nodes-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    soup_db_path = Path.join(tmp, "primeradiant-event-soup.sqlite3")
+    raw_path = Path.join(tmp, "archive.jsonl")
+
+    [row] = [
+      envelope(
+        "Agent Civic Clinic triage salience only",
+        "Agent Civic Clinic triage remains open and has reader-facing salience."
+      )
+    ]
+
+    [{offset, length}] = write_archive!(raw_path, [row])
+
+    event =
+      committed_source_item_event(
+        "event-agent-news-no-durable-topic-nodes",
+        raw_path,
+        offset,
+        length,
+        row
+      )
+
+    {:ok, state, report} =
+      DaemonNewsEvent.consume_event(event,
+        soup_db_path: soup_db_path,
+        tenant_id: @tenant,
+        actor_id: "flynn",
+        story_agent_loop?: true,
+        story_agent_opts: [adapter: &stub_story_agent_without_durable_topic_nodes/3]
+      )
+
+    [chain] = report.live_story_agent_loop.correlation_chains
+    assert chain.story_card_status == "complete"
+
+    [card] = state.story_card_versions
+    assert card.status == "complete"
+    assert card.field_completeness["topic_salience"] == "complete"
+
+    feed = Soup.feed(state, %{"consumer" => "reporter", "projection" => "news-morning"})
+    [item] = feed.items
+    assert item.status == "complete"
+
+    assert item.topic_salience["salience_explanation"] ==
+             "clinic triage story has local service salience"
+
+    assert item.topic_salience["durable_topic_nodes"]["state"] == "unavailable"
+  end
+
+  test "story-card synthesis accepts map-shaped source coverage keyed by source ref" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-daemon-news-map-source-coverage-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    soup_db_path = Path.join(tmp, "primeradiant-event-soup.sqlite3")
+    raw_path = Path.join(tmp, "archive.jsonl")
+
+    [row] = [
+      envelope(
+        "Agent Civic Clinic triage map coverage",
+        "Agent Civic Clinic triage remains open and has map-shaped source coverage."
+      )
+    ]
+
+    [{offset, length}] = write_archive!(raw_path, [row])
+
+    event =
+      committed_source_item_event(
+        "event-agent-news-map-source-coverage",
+        raw_path,
+        offset,
+        length,
+        row
+      )
+
+    {:ok, state, report} =
+      DaemonNewsEvent.consume_event(event,
+        soup_db_path: soup_db_path,
+        tenant_id: @tenant,
+        actor_id: "flynn",
+        story_agent_loop?: true,
+        story_agent_opts: [adapter: &stub_story_agent_map_source_coverage/3]
+      )
+
+    [chain] = report.live_story_agent_loop.correlation_chains
+    assert chain.story_card_status == "complete"
+
+    [coverage] = state.story_source_coverage
+    assert coverage.source_ref == "news_article:event-agent-news-map-source-coverage"
+    assert coverage.contribution_reason["text"] =~ "source supplies story-specific evidence"
+
+    feed = Soup.feed(state, %{"consumer" => "reporter", "projection" => "news-morning"})
+    [item] = feed.items
+    [source_link] = item.source_links
+    assert source_link.source_ref == coverage.source_ref
+  end
+
   test "story-card synthesis accepts explicit non-sentinel unavailable source reasons" do
     tmp =
       Path.join(
@@ -2132,6 +2242,29 @@ defmodule Primeradiant.DaemonNewsReplayTest do
   end
 
   defp stub_story_agent_repair_source_reason(config, packet, ctx),
+    do: stub_story_agent(config, packet, ctx)
+
+  defp stub_story_agent_without_durable_topic_nodes(%{role: :story_synthesis}, packet, _ctx) do
+    synthesis = stub_story_synthesis(packet)
+    output = pop_in(synthesis.output, ["topic_salience", "durable_topic_nodes"]) |> elem(1)
+    %{synthesis | output: output}
+  end
+
+  defp stub_story_agent_without_durable_topic_nodes(config, packet, ctx),
+    do: stub_story_agent(config, packet, ctx)
+
+  defp stub_story_agent_map_source_coverage(%{role: :story_synthesis}, packet, _ctx) do
+    synthesis = stub_story_synthesis(packet)
+
+    coverage =
+      Map.new(synthesis.output["source_coverage"], fn row ->
+        {row["source_ref"], Map.delete(row, "source_ref")}
+      end)
+
+    %{synthesis | output: %{synthesis.output | "source_coverage" => coverage}}
+  end
+
+  defp stub_story_agent_map_source_coverage(config, packet, ctx),
     do: stub_story_agent(config, packet, ctx)
 
   defp stub_story_agent_unavailable_source_reason(%{role: :story_synthesis}, packet, _ctx) do
