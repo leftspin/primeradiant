@@ -278,8 +278,9 @@ ssh -i /Users/mike/.ssh/id_ed25519_clu clu@eurisko \
 ```
 
 Rollback health checks are the same as RB6. Record rollback evidence with the
-restored `DEPLOYED_COMMIT`, service status, `/api/v1/soup/ready` result, and
-authenticated `/api/v1/soup/feed` JSON shape check.
+restored `DEPLOYED_COMMIT`, service status, authenticated
+`/api/v1/soup/ready` result, and authenticated `/api/v1/soup/feed` JSON shape
+check.
 
 Rollback must not delete or rewrite soup DB rows, story events, graph edges,
 acks, or source input records.
@@ -289,12 +290,22 @@ acks, or source input records.
 Run health checks from EURISKO localhost and from the operator machine against
 the product URL.
 
+The soup API is token-gated. An unauthenticated 401 from `/api/v1/soup/ready`
+or `/api/v1/soup/feed` proves the auth gate; it is not product-health evidence
+and must not by itself trigger rollback. Product health is authenticated
+ready/feed for `consumer=reporter&projection=news-morning`.
+
 Local EURISKO checks:
 
 ```sh
 ssh -i /Users/mike/.ssh/id_ed25519_clu clu@eurisko \
   '. /home/clu/.local/state/primeradiant/soup-api/env &&
-   curl -fsS -m 5 http://127.0.0.1:4084/api/v1/soup/ready &&
+   curl -fsS -m 5 \
+     -H "Authorization: Bearer $PRIMERADIANT_SOUP_API_TOKEN" \
+     "http://127.0.0.1:4084/api/v1/soup/ready?consumer=reporter&projection=news-morning" \
+     > /tmp/primeradiant-soup-ready-local.json &&
+   jq -e '\''type == "object" and (.status | type == "string")'\'' \
+     /tmp/primeradiant-soup-ready-local.json &&
    curl -fsS -m 10 \
      -H "Authorization: Bearer $PRIMERADIANT_SOUP_API_TOKEN" \
      "http://127.0.0.1:4084/api/v1/soup/feed?consumer=reporter&projection=news-morning&limit=3" \
@@ -309,7 +320,12 @@ Operator check:
 TOKEN="$(ssh -i /Users/mike/.ssh/id_ed25519_clu clu@eurisko \
   'set -a; . /home/clu/.local/state/primeradiant/soup-api/env; printf "%s" "$PRIMERADIANT_SOUP_API_TOKEN"')"
 
-curl -fsS -m 5 http://eurisko:4084/api/v1/soup/ready
+curl -fsS -m 5 \
+  -H "Authorization: Bearer ${TOKEN}" \
+  "http://eurisko:4084/api/v1/soup/ready?consumer=reporter&projection=news-morning" \
+  > /tmp/primeradiant-soup-ready-operator.json
+jq -e 'type == "object" and (.status | type == "string")' \
+  /tmp/primeradiant-soup-ready-operator.json
 curl -fsS -m 10 \
   -H "Authorization: Bearer ${TOKEN}" \
   "http://eurisko:4084/api/v1/soup/feed?consumer=reporter&projection=news-morning&limit=3" \
@@ -323,7 +339,8 @@ Required pass criteria:
 - user systemd reports `ActiveState=active` and `SubState=running`;
 - `MainPID` is non-empty and its cwd is
   `/home/clu/src/primeradiant/storage-harness`;
-- `/api/v1/soup/ready` returns HTTP 2xx;
+- authenticated `/api/v1/soup/ready?consumer=reporter&projection=news-morning`
+  returns HTTP 2xx JSON;
 - authenticated `/api/v1/soup/feed` returns HTTP 2xx JSON with a top-level
   object and `items` array;
 - pre-marker RB6 checks pass before RB4 updates `DEPLOYED_COMMIT`;
@@ -348,8 +365,9 @@ Required source proof before deploy:
 
 Required post-deploy soak:
 
-- Repeated `/api/v1/soup/ready` checks against the real port 4084 for the soak
-  window selected by the deploy ticket.
+- Repeated authenticated
+  `/api/v1/soup/ready?consumer=reporter&projection=news-morning` checks against
+  the real port 4084 for the soak window selected by the deploy ticket.
 - Repeated authenticated `/api/v1/soup/feed?consumer=reporter&projection=news-morning&limit=3`
   checks against the same service.
 - A non-production or copied-DB write-membrane check for the deployed source
