@@ -53,8 +53,10 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
   @synthesis_prompt """
   Maintain the current living story card from committed story state and linked source evidence.
   Return deck, summary, key_claims, source_coverage, contribution explanations, salience hints, and changed fields.
-  For every article in committed_story_state.linked_sources that appears in the story card, return a matching source_coverage row keyed by source_ref.
+  For every article in committed_story_state.linked_sources, return exactly one matching source_coverage row keyed by source_ref.
+  Do not cover only the newest source_ref. The story card source list is incomplete unless every linked source_ref has source_coverage.
   Each source_coverage row must include contribution_reason.text: a concise plain-language explanation of why that article matters to this story, suitable for a reader-facing News source popup.
+  Use contribution_reason unavailable/refused with a specific non-sentinel reason only when the linked article text truly cannot support a reader-facing salience explanation.
   Examples: "Adds the funding amount and names the investor" or "Provides the primary quote from the company."
   If any required source display or story-card field is unavailable, return explicit unavailable/refused/incomplete field state with reason and provenance.
   """
@@ -1185,10 +1187,12 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
     %{
       source_ref: Admission.input_ref(input),
       article_ref: input.external_id,
+      article_title: input.title,
       canonical_uri: get_in(input.normalized || %{}, ["canonical_uri"]),
       source_name: get_in(input.normalized || %{}, ["source_name"]),
       source_actor: get_in(input.normalized || %{}, ["source_actor"]),
-      observed_at: input.observed_at && DateTime.to_iso8601(input.observed_at)
+      observed_at: input.observed_at && DateTime.to_iso8601(input.observed_at),
+      excerpt: String.slice(input.body_text || "", 0, 500)
     }
   end
 
@@ -1223,10 +1227,22 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
     |> Enum.any?(fn source_ref ->
       case Enum.find(output_coverage, &(Map.get(&1, "source_ref") == source_ref)) do
         nil -> true
-        row -> not complete_text_field?(Map.get(row, "contribution_reason"))
+        row -> not usable_contribution_reason?(Map.get(row, "contribution_reason"))
       end
     end)
   end
+
+  defp usable_contribution_reason?(%{"state" => state, "reason" => reason})
+       when state in ["unavailable", "refused"] and is_binary(reason) and reason != "" and
+              reason != "story_synthesis_agent_did_not_supply_field",
+       do: true
+
+  defp usable_contribution_reason?(%{state: state, reason: reason})
+       when state in ["unavailable", "refused"] and is_binary(reason) and reason != "" and
+              reason != "story_synthesis_agent_did_not_supply_field",
+       do: true
+
+  defp usable_contribution_reason?(value), do: complete_text_field?(value)
 
   defp complete_text_field?(%{"state" => "complete", "text" => text})
        when is_binary(text) and text != "",
@@ -1568,11 +1584,13 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
       ],
       source_coverage: [
         %{
-          source_ref: "source ref",
+          source_ref:
+            "must exactly match one committed_story_state.linked_sources[].source_ref; include one row for every linked source_ref",
           contribution_reason: %{
             text:
-              "concise reader-facing reason this article matters to the story; required for every linked source_ref, for example Adds the funding amount and names the investor",
-            state: "complete",
+              "concise reader-facing reason this article matters to the story; required for every committed_story_state.linked_sources source_ref unless state is unavailable/refused with a specific non-sentinel reason, for example Adds the funding amount and names the investor",
+            state: "complete | unavailable | refused",
+            reason: "string or null; required when state is unavailable/refused",
             provenance_refs: ["string"]
           },
           materiality: "material | nonmaterial | unavailable",

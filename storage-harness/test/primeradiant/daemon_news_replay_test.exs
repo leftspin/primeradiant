@@ -489,6 +489,84 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert Enum.all?(chain.evidence_refs, &(&1 in evidence_labels))
   end
 
+  test "story-card synthesis writes contribution reasons for every linked story source" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-daemon-multisource-card-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    raw_path = Path.join(tmp, "archive.jsonl")
+    soup_db_path = Path.join(tmp, "soup.sqlite3")
+
+    rows = [
+      envelope("Clinic triage opens", "North clinic triage opens today."),
+      envelope("Clinic triage expands", "West clinic triage expands the same service.")
+    ]
+
+    offsets = write_archive!(raw_path, rows)
+
+    first_event =
+      committed_source_item_event(
+        "event-agent-news-1",
+        raw_path,
+        elem(Enum.at(offsets, 0), 0),
+        elem(Enum.at(offsets, 0), 1),
+        Enum.at(rows, 0)
+      )
+
+    second_event =
+      committed_source_item_event(
+        "event-agent-news-2",
+        raw_path,
+        elem(Enum.at(offsets, 1), 0),
+        elem(Enum.at(offsets, 1), 1),
+        Enum.at(rows, 1)
+      )
+
+    {:ok, _first_state, _first_report} =
+      DaemonNewsEvent.consume_event(first_event,
+        soup_db_path: soup_db_path,
+        tenant_id: @tenant,
+        actor_id: "flynn",
+        story_agent_loop?: true,
+        story_agent_opts: [adapter: &stub_story_agent_with_later_update/3]
+      )
+
+    {:ok, state, _report} =
+      DaemonNewsEvent.consume_event(second_event,
+        tenant_id: @tenant,
+        soup_db_path: soup_db_path,
+        actor_id: "flynn",
+        story_agent_loop?: true,
+        story_agent_opts: [adapter: &stub_story_agent_with_later_update/3]
+      )
+
+    story = Enum.find(state.stories, &(&1.story_key == "civic-clinic-triage"))
+
+    current_card =
+      state.story_card_versions
+      |> Enum.filter(&(&1.story_id == story.id))
+      |> Enum.max_by(& &1.card_version)
+
+    coverage =
+      Enum.filter(state.story_source_coverage, &(&1.story_card_version_id == current_card.id))
+
+    assert coverage |> Enum.map(& &1.source_ref) |> Enum.sort() == [
+             "news_article:event-agent-news-1",
+             "news_article:event-agent-news-2"
+           ]
+
+    assert Enum.all?(coverage, fn row ->
+             row.contribution_reason["state"] == "complete" and
+               is_binary(row.contribution_reason["text"]) and
+               row.contribution_reason["text"] != ""
+           end)
+  end
+
   test "story-card synthesis keeps missing article salience auditable without exposing a source link" do
     tmp =
       Path.join(
@@ -548,6 +626,63 @@ defmodule Primeradiant.DaemonNewsReplayTest do
              "story_synthesis_agent_did_not_supply_field"
 
     assert item.source_links == []
+  end
+
+  test "story-card synthesis accepts explicit non-sentinel unavailable source reasons" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-daemon-news-unavailable-source-reason-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    soup_db_path = Path.join(tmp, "primeradiant-event-soup.sqlite3")
+    raw_path = Path.join(tmp, "archive.jsonl")
+
+    [row] = [
+      envelope(
+        "Agent Civic Clinic triage source withheld",
+        "Agent Civic Clinic triage remains open but source text is withheld."
+      )
+    ]
+
+    [{offset, length}] = write_archive!(raw_path, [row])
+
+    event =
+      committed_source_item_event(
+        "event-agent-news-unavailable-reason",
+        raw_path,
+        offset,
+        length,
+        row
+      )
+
+    {:ok, state, report} =
+      DaemonNewsEvent.consume_event(event,
+        soup_db_path: soup_db_path,
+        tenant_id: @tenant,
+        actor_id: "flynn",
+        story_agent_loop?: true,
+        story_agent_opts: [adapter: &stub_story_agent_unavailable_source_reason/3]
+      )
+
+    [chain] = report.live_story_agent_loop.correlation_chains
+    assert chain.story_card_status == "complete"
+
+    [card] = state.story_card_versions
+    assert card.status == "complete"
+
+    [coverage] = state.story_source_coverage
+    assert coverage.contribution_reason["state"] == "unavailable"
+    assert coverage.contribution_reason["reason"] == "source_text_withheld"
+
+    feed = Soup.feed(state, %{"consumer" => "reporter", "projection" => "news-morning"})
+    [item] = feed.items
+    assert item.status == "complete"
+    [source_link] = item.source_links
+    assert source_link.contribution_reason["reason"] == "source_text_withheld"
   end
 
   test "recurring cadence refreshes Reporter story cards over admitted soup without source admission" do
@@ -1901,7 +2036,7 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     synthesis = stub_story_synthesis(packet)
 
     output =
-      update_in(synthesis.output["source_coverage"], fn rows ->
+      update_in(synthesis.output, ["source_coverage"], fn rows ->
         Enum.map(rows, &Map.delete(&1, "contribution_reason"))
       end)
 
@@ -1909,6 +2044,27 @@ defmodule Primeradiant.DaemonNewsReplayTest do
   end
 
   defp stub_story_agent_missing_source_reason(config, packet, ctx),
+    do: stub_story_agent(config, packet, ctx)
+
+  defp stub_story_agent_unavailable_source_reason(%{role: :story_synthesis}, packet, _ctx) do
+    synthesis = stub_story_synthesis(packet)
+
+    output =
+      update_in(synthesis.output, ["source_coverage"], fn rows ->
+        Enum.map(rows, fn row ->
+          put_in(row["contribution_reason"], %{
+            "text" => nil,
+            "state" => "unavailable",
+            "reason" => "source_text_withheld",
+            "provenance_refs" => ["fieldprov:test"]
+          })
+        end)
+      end)
+
+    %{synthesis | output: output}
+  end
+
+  defp stub_story_agent_unavailable_source_reason(config, packet, ctx),
     do: stub_story_agent(config, packet, ctx)
 
   defp stub_story_agent_with_later_update(%{role: :story_identity}, _packet, _ctx) do
@@ -2104,7 +2260,16 @@ defmodule Primeradiant.DaemonNewsReplayTest do
 
   defp stub_story_synthesis(packet) do
     story_key = packet.story_key || "civic-clinic-triage"
-    source_ref = packet.source_ref
+    linked_sources = get_in(packet, [:committed_story_state, :linked_sources]) || []
+
+    source_refs =
+      linked_sources
+      |> Enum.map(& &1.source_ref)
+      |> Enum.reject(&is_nil/1)
+      |> case do
+        [] -> [packet.source_ref]
+        refs -> refs
+      end
 
     %{
       output: %{
@@ -2137,19 +2302,20 @@ defmodule Primeradiant.DaemonNewsReplayTest do
             "appears_in_current_card" => true
           }
         ],
-        "source_coverage" => [
-          %{
-            "source_ref" => source_ref,
-            "contribution_reason" => %{
-              "text" => "source supplies the current triage state",
-              "state" => "complete",
-              "provenance_refs" => ["fieldprov:test"]
-            },
-            "materiality" => "material",
-            "source_posture" => %{"state" => "unavailable", "reason" => "not_supplied"},
-            "source_weight" => %{"state" => "unavailable", "reason" => "not_supplied"}
-          }
-        ],
+        "source_coverage" =>
+          Enum.map(source_refs, fn source_ref ->
+            %{
+              "source_ref" => source_ref,
+              "contribution_reason" => %{
+                "text" => "source supplies story-specific evidence for #{source_ref}",
+                "state" => "complete",
+                "provenance_refs" => ["fieldprov:test"]
+              },
+              "materiality" => "material",
+              "source_posture" => %{"state" => "unavailable", "reason" => "not_supplied"},
+              "source_weight" => %{"state" => "unavailable", "reason" => "not_supplied"}
+            }
+          end),
         "topic_salience" => %{
           "salience_explanation" => "clinic triage story has local service salience",
           "global_salience" => "source_count",
