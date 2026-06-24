@@ -935,6 +935,346 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert provenance["source_refs"] == ["news_article:event-recurring-news-1"]
   end
 
+  test "recurring story-card synthesis bounds oversized linked-source packets" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-recurring-bounded-story-card-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    soup_db_path = Path.join(tmp, "primeradiant-event-soup.sqlite3")
+    raw_path = Path.join(tmp, "archive.jsonl")
+
+    [row] = [
+      envelope(
+        "Recurring Civic Clinic bounded packet",
+        "Recurring Civic Clinic bounded packet creates the story."
+      )
+    ]
+
+    [{offset, length}] = write_archive!(raw_path, [row])
+    event = committed_source_item_event("event-bounded-news-1", raw_path, offset, length, row)
+
+    {:ok, state, _report} =
+      DaemonNewsEvent.consume_event(event,
+        soup_db_path: soup_db_path,
+        tenant_id: @tenant,
+        actor_id: "flynn",
+        story_agent_loop?: true,
+        story_agent_opts: [adapter: &stub_story_agent/3]
+      )
+
+    [story] = state.stories
+
+    extra_inputs =
+      Enum.map(2..260, fn index ->
+        %Primeradiant.StorageHarness.Input{
+          id: Ecto.UUID.generate(),
+          tenant_id: @tenant,
+          source_type: "news_article",
+          external_id: "event-bounded-news-#{index}",
+          observed_at: DateTime.add(DateTime.utc_now(), index, :second),
+          title: "Bounded linked source #{index}",
+          body_text: String.duplicate("linked source evidence #{index} ", 120),
+          content_sha256: "sha256-bounded-#{index}",
+          acl: %{"privacy" => "public"},
+          normalized: %{
+            "canonical_uri" => "https://example.test/bounded/#{index}",
+            "source_name" => "Example News"
+          },
+          facts: %{},
+          background: %{},
+          questions: %{},
+          colors: [],
+          topic_tokens: []
+        }
+      end)
+
+    extra_events =
+      Enum.map(extra_inputs, fn input ->
+        %Primeradiant.StorageHarness.StoryEvent{
+          id: Ecto.UUID.generate(),
+          tenant_id: @tenant,
+          story_id: story.id,
+          input_id: input.id,
+          classification: "source_linked",
+          story_version: story.version,
+          changed_facts: %{},
+          observed_at: input.observed_at,
+          proposal_id: Ecto.UUID.generate(),
+          proposal_op_id: Ecto.UUID.generate(),
+          graph_commit_id: Ecto.UUID.generate(),
+          confidence: Decimal.new("0.80")
+        }
+      end)
+
+    loaded =
+      state
+      |> Map.update!(:inputs, &(&1 ++ extra_inputs))
+      |> Map.update!(:story_events, &(&1 ++ extra_events))
+
+    {_refreshed, cadence_report} =
+      LiveStoryAgentLoop.refresh_story_cards(loaded, "flynn",
+        cadence: :hourly_story_card_synthesis,
+        limit: 1,
+        adapter: &capturing_bounded_packet_story_agent/3
+      )
+
+    assert cadence_report.candidate_count == 1
+
+    assert_receive {:story_synthesis_packet, packet}, 1_000
+
+    linked_sources = get_in(packet, [:committed_story_state, :linked_sources])
+    source_refs = Enum.map(linked_sources, & &1.source_ref)
+
+    assert length(linked_sources) == 260
+    assert length(Enum.uniq(source_refs)) == 260
+    assert packet.visible_story_refs == []
+    assert byte_size(Jason.encode!(Map.drop(packet, [:prior_story_card_version]))) < 180_000
+
+    bounds = get_in(packet, [:committed_story_state, :packet_bounds])
+    assert bounds.truncation_reason == "story_synthesis_packet_context_bound"
+    assert bounds.truncated_source_count > 0
+
+    assert Enum.any?(
+             linked_sources,
+             &(&1.excerpt_state == "unavailable:story_synthesis_packet_context_bound")
+           )
+  end
+
+  test "recurring story-card synthesis refuses over-budget packets without invoking agent" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-recurring-overbudget-story-card-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    soup_db_path = Path.join(tmp, "primeradiant-event-soup.sqlite3")
+    raw_path = Path.join(tmp, "archive.jsonl")
+
+    [row] = [
+      envelope(
+        "Recurring Civic Clinic overbudget packet",
+        "Recurring Civic Clinic overbudget packet creates the story."
+      )
+    ]
+
+    [{offset, length}] = write_archive!(raw_path, [row])
+    event = committed_source_item_event("event-overbudget-news-1", raw_path, offset, length, row)
+
+    {:ok, state, _report} =
+      DaemonNewsEvent.consume_event(event,
+        soup_db_path: soup_db_path,
+        tenant_id: @tenant,
+        actor_id: "flynn",
+        story_agent_loop?: true,
+        story_agent_opts: [adapter: &stub_story_agent/3]
+      )
+
+    [story] = state.stories
+
+    extra_inputs =
+      Enum.map(2..2_000, fn index ->
+        %Primeradiant.StorageHarness.Input{
+          id: Ecto.UUID.generate(),
+          tenant_id: @tenant,
+          source_type: "news_article",
+          external_id: "event-overbudget-news-#{index}",
+          observed_at: DateTime.add(DateTime.utc_now(), index, :second),
+          title: "Overbudget linked source #{index}",
+          body_text: String.duplicate("overbudget linked source evidence #{index} ", 120),
+          content_sha256: "sha256-overbudget-#{index}",
+          acl: %{"privacy" => "public"},
+          normalized: %{
+            "canonical_uri" => "https://example.test/overbudget/#{index}",
+            "source_name" => "Example News"
+          },
+          facts: %{},
+          background: %{},
+          questions: %{},
+          colors: [],
+          topic_tokens: []
+        }
+      end)
+
+    extra_events =
+      Enum.map(extra_inputs, fn input ->
+        %Primeradiant.StorageHarness.StoryEvent{
+          id: Ecto.UUID.generate(),
+          tenant_id: @tenant,
+          story_id: story.id,
+          input_id: input.id,
+          classification: "source_linked",
+          story_version: story.version,
+          changed_facts: %{},
+          observed_at: input.observed_at,
+          proposal_id: Ecto.UUID.generate(),
+          proposal_op_id: Ecto.UUID.generate(),
+          graph_commit_id: Ecto.UUID.generate(),
+          confidence: Decimal.new("0.80")
+        }
+      end)
+
+    loaded =
+      state
+      |> Map.update!(:inputs, &(&1 ++ extra_inputs))
+      |> Map.update!(:story_events, &(&1 ++ extra_events))
+
+    {refreshed, cadence_report} =
+      LiveStoryAgentLoop.refresh_story_cards(loaded, "flynn",
+        cadence: :hourly_story_card_synthesis,
+        limit: 1,
+        adapter: &capturing_bounded_packet_story_agent/3
+      )
+
+    assert cadence_report.candidate_count == 1
+    refute_received {:story_synthesis_packet, _packet}
+
+    [refresh] = cadence_report.refreshes
+    assert refresh.story_card_status == "refused"
+    assert refresh.model_route == "internal://story-synthesis/packet-context-bound"
+    latest_card = Enum.max_by(refreshed.story_card_versions, & &1.card_version)
+
+    latest_coverage =
+      Enum.filter(
+        refreshed.story_source_coverage,
+        &(&1.story_card_version_id == latest_card.id)
+      )
+
+    assert length(latest_coverage) == 2_000
+
+    assert Enum.all?(latest_coverage, fn coverage ->
+             coverage.contribution_reason["state"] == "refused" and
+               coverage.contribution_reason["reason"] == "story_synthesis_packet_context_bound" and
+               coverage.contribution_reason["provenance_refs"] == [
+                 "story-synthesis:packet-context-bound:civic-clinic-triage"
+               ]
+           end)
+  end
+
+  test "story-card synthesis refuses over-budget source coverage retry before reinvoking agent" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-recurring-overbudget-retry-story-card-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    soup_db_path = Path.join(tmp, "primeradiant-event-soup.sqlite3")
+    raw_path = Path.join(tmp, "archive.jsonl")
+
+    [row] = [
+      envelope(
+        "Recurring Civic Clinic overbudget retry packet",
+        "Recurring Civic Clinic overbudget retry packet creates the story."
+      )
+    ]
+
+    [{offset, length}] = write_archive!(raw_path, [row])
+
+    event =
+      committed_source_item_event("event-overbudget-retry-news-1", raw_path, offset, length, row)
+
+    {:ok, state, _report} =
+      DaemonNewsEvent.consume_event(event,
+        soup_db_path: soup_db_path,
+        tenant_id: @tenant,
+        actor_id: "flynn",
+        story_agent_loop?: true,
+        story_agent_opts: [adapter: &stub_story_agent/3]
+      )
+
+    [story] = state.stories
+
+    extra_inputs =
+      Enum.map(2..260, fn index ->
+        %Primeradiant.StorageHarness.Input{
+          id: Ecto.UUID.generate(),
+          tenant_id: @tenant,
+          source_type: "news_article",
+          external_id: "event-overbudget-retry-news-#{index}",
+          observed_at: DateTime.add(DateTime.utc_now(), index, :second),
+          title: "Overbudget retry linked source #{index}",
+          body_text: String.duplicate("overbudget retry linked source evidence #{index} ", 120),
+          content_sha256: "sha256-overbudget-retry-#{index}",
+          acl: %{"privacy" => "public"},
+          normalized: %{
+            "canonical_uri" => "https://example.test/overbudget-retry/#{index}",
+            "source_name" => "Example News"
+          },
+          facts: %{},
+          background: %{},
+          questions: %{},
+          colors: [],
+          topic_tokens: []
+        }
+      end)
+
+    extra_events =
+      Enum.map(extra_inputs, fn input ->
+        %Primeradiant.StorageHarness.StoryEvent{
+          id: Ecto.UUID.generate(),
+          tenant_id: @tenant,
+          story_id: story.id,
+          input_id: input.id,
+          classification: "source_linked",
+          story_version: story.version,
+          changed_facts: %{},
+          observed_at: input.observed_at,
+          proposal_id: Ecto.UUID.generate(),
+          proposal_op_id: Ecto.UUID.generate(),
+          graph_commit_id: Ecto.UUID.generate(),
+          confidence: Decimal.new("0.80")
+        }
+      end)
+
+    loaded =
+      state
+      |> Map.update!(:inputs, &(&1 ++ extra_inputs))
+      |> Map.update!(:story_events, &(&1 ++ extra_events))
+
+    {refreshed, cadence_report} =
+      LiveStoryAgentLoop.refresh_story_cards(loaded, "flynn",
+        cadence: :hourly_story_card_synthesis,
+        limit: 1,
+        adapter: &stub_story_agent_oversized_retry_previous_output/3
+      )
+
+    assert_receive {:story_synthesis_packet, first_packet}, 1_000
+    refute Map.has_key?(first_packet, :source_coverage_repair_request)
+    refute_received {:story_synthesis_packet, %{source_coverage_repair_request: _}}
+
+    [refresh] = cadence_report.refreshes
+    assert refresh.story_card_status == "refused"
+    assert refresh.model_route == "internal://story-synthesis/packet-context-bound"
+
+    latest_card = Enum.max_by(refreshed.story_card_versions, & &1.card_version)
+
+    latest_coverage =
+      Enum.filter(
+        refreshed.story_source_coverage,
+        &(&1.story_card_version_id == latest_card.id)
+      )
+
+    assert length(latest_coverage) == 260
+
+    assert Enum.all?(latest_coverage, fn coverage ->
+             coverage.contribution_reason["state"] == "refused" and
+               coverage.contribution_reason["reason"] == "story_synthesis_packet_context_bound" and
+               coverage.contribution_reason["provenance_refs"] == [
+                 "story-synthesis:packet-context-bound:civic-clinic-triage"
+               ]
+           end)
+  end
+
   test "event story agents persist Flynn seen refs and later soup-native deltas across cycles" do
     tmp =
       Path.join(
@@ -2203,6 +2543,32 @@ defmodule Primeradiant.DaemonNewsReplayTest do
 
   defp stub_story_agent(%{role: :story_synthesis}, packet, _ctx),
     do: stub_story_synthesis(packet)
+
+  defp capturing_bounded_packet_story_agent(%{role: :story_synthesis}, packet, _ctx) do
+    send(self(), {:story_synthesis_packet, packet})
+    stub_story_synthesis(packet)
+  end
+
+  defp capturing_bounded_packet_story_agent(config, packet, ctx),
+    do: stub_story_agent(config, packet, ctx)
+
+  defp stub_story_agent_oversized_retry_previous_output(%{role: :story_synthesis}, packet, _ctx) do
+    send(self(), {:story_synthesis_packet, packet})
+
+    synthesis = stub_story_synthesis(packet)
+
+    output =
+      synthesis.output
+      |> update_in(["source_coverage"], fn rows ->
+        Enum.map(rows, &Map.delete(&1, "contribution_reason"))
+      end)
+      |> Map.put("oversized_retry_padding", String.duplicate("retry packet padding ", 12_000))
+
+    %{synthesis | output: output}
+  end
+
+  defp stub_story_agent_oversized_retry_previous_output(config, packet, ctx),
+    do: stub_story_agent(config, packet, ctx)
 
   defp stub_story_agent_missing_source_reason(%{role: :story_synthesis}, packet, _ctx) do
     synthesis = stub_story_synthesis(packet)

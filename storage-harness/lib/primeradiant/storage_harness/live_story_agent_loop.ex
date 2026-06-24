@@ -29,6 +29,10 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
                          ~w(a an and are as at be by for from has have in into is it its of on or the this to with without)
                        )
 
+  @story_synthesis_linked_source_budget_bytes 60_000
+  @story_synthesis_source_excerpt_chars 240
+  @story_synthesis_prompt_budget_bytes 180_000
+
   @system_prompt """
   You are a Prime Radiant story agent. Use only the bounded packet supplied in the user message.
   Source admission is evidence only; you own story/meaning output only when it is packet-grounded.
@@ -256,7 +260,7 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
         story_version: story.version,
         story_event_id: write_chain.story_event_id,
         refresh_reason: refresh_reason(write_chain.classification),
-        committed_story_state: story_packet_state(state, story, actor_id),
+        committed_story_state: story_synthesis_packet_state(state, story, actor_id),
         prior_story_card_version: current_story_card_version(state, story.id)
       })
 
@@ -383,7 +387,14 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
     config = config(:story_synthesis)
 
     {state, run, synthesis} =
-      invoke_agent(state, config, packet, actor_id, adapter, correlation_id)
+      invoke_bounded_story_synthesis_agent(
+        state,
+        config,
+        packet,
+        actor_id,
+        adapter,
+        correlation_id
+      )
 
     missing_refs = missing_source_contribution_refs(synthesis.output, packet)
 
@@ -404,7 +415,14 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
         })
 
       {state, retry_run, retry_synthesis} =
-        invoke_agent(state, config, retry_packet, actor_id, adapter, retry_correlation_id)
+        invoke_bounded_story_synthesis_agent(
+          state,
+          config,
+          retry_packet,
+          actor_id,
+          adapter,
+          retry_correlation_id
+        )
 
       retry_missing_refs = missing_source_contribution_refs(retry_synthesis.output, packet)
 
@@ -423,6 +441,87 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
 
       {state, [run, retry_run], retry_synthesis}
     end
+  end
+
+  defp invoke_bounded_story_synthesis_agent(
+         state,
+         config,
+         packet,
+         actor_id,
+         adapter,
+         correlation_id
+       ) do
+    adapter =
+      if story_synthesis_prompt_bytes(config, packet) > @story_synthesis_prompt_budget_bytes do
+        &oversized_story_synthesis_refusal/3
+      else
+        adapter
+      end
+
+    invoke_agent(state, config, packet, actor_id, adapter, correlation_id)
+  end
+
+  defp oversized_story_synthesis_refusal(_config, packet, _ctx) do
+    provenance_refs = ["story-synthesis:packet-context-bound:#{packet.story_key}"]
+    reason = "story_synthesis_packet_context_bound"
+
+    %{
+      output: %{
+        "status" => "refused",
+        "title" => %{
+          "text" => get_in(packet, [:committed_story_state, :title]) || packet.story_key,
+          "state" => "complete",
+          "provenance_refs" => provenance_refs
+        },
+        "deck" => unavailable_story_synthesis_field(reason, provenance_refs),
+        "summary" => unavailable_story_synthesis_field(reason, provenance_refs),
+        "key_claims" => [],
+        "source_coverage" =>
+          Enum.map(linked_source_refs(packet), fn source_ref ->
+            %{
+              "source_ref" => source_ref,
+              "contribution_reason" => %{
+                "text" => nil,
+                "state" => "refused",
+                "reason" => reason,
+                "provenance_refs" => provenance_refs
+              },
+              "materiality" => "unavailable",
+              "source_posture" => %{"state" => "unavailable", "reason" => reason},
+              "source_weight" => %{"state" => "unavailable", "reason" => reason}
+            }
+          end),
+        "topic_salience" => %{
+          "salience_explanation" => unavailable_story_synthesis_field(reason, provenance_refs),
+          "global_salience" => "unavailable",
+          "flynn_priority" => "unavailable"
+        },
+        "changed_field_keys" => ["source_coverage"],
+        "change_summary" => unavailable_story_synthesis_field(reason, provenance_refs),
+        "field_completeness" => %{
+          "deck" => "unavailable",
+          "summary" => "unavailable",
+          "key_claims" => "unavailable",
+          "topic_salience" => "unavailable",
+          "overall" => "refused"
+        }
+      },
+      model: "primeradiant-story-synthesis-boundary",
+      model_route: "internal://story-synthesis/packet-context-bound",
+      producer_kind: "deterministic_product_logic",
+      decision_source: "story_synthesis_packet_context_bound",
+      invocation_transport_id: "story-synthesis-packet-context-bound",
+      duration_ms: 0
+    }
+  end
+
+  defp unavailable_story_synthesis_field(reason, provenance_refs) do
+    %{
+      "text" => nil,
+      "state" => "refused",
+      "reason" => reason,
+      "provenance_refs" => provenance_refs
+    }
   end
 
   defp run_packet_id(run), do: run.scope["packet_id"]
@@ -466,7 +565,7 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
         story_version: story.version,
         story_event_id: latest_event && latest_event.id,
         refresh_reason: refresh_reason_for_cadence(cadence),
-        committed_story_state: story_packet_state(state, story, actor_id),
+        committed_story_state: story_synthesis_packet_state(state, story, actor_id),
         prior_story_card_version: current_story_card_version(state, story.id),
         cadence: cadence,
         candidate_reason: refresh_reason_for_cadence(cadence)
@@ -1110,13 +1209,18 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
         content_span_refs: admission.content_span_refs,
         source_provenance: admission.source_provenance,
         snippet: String.slice(input.body_text || "", 0, 600),
-        visible_story_refs: visible_story_refs(state, actor_id),
+        visible_story_refs: visible_story_refs_for_role(state, actor_id, role),
         traversal_depth: 1,
         raw_database_access: false
       },
       extra
     )
   end
+
+  defp visible_story_refs_for_role(_state, _actor_id, :story_synthesis), do: []
+
+  defp visible_story_refs_for_role(state, actor_id, _role),
+    do: visible_story_refs(state, actor_id)
 
   defp soup_candidate_hint(state, input, actor_id) do
     input_tokens = content_tokens([input.title, input.body_text])
@@ -1226,22 +1330,96 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
     end
   end
 
-  defp story_packet_state(state, story, actor_id) do
+  defp story_synthesis_packet_state(state, story, actor_id) do
+    linked_inputs = visible_story_inputs(state, story, actor_id)
+    {linked_sources, bounds} = bounded_linked_sources(linked_inputs)
+
+    story
+    |> story_packet_state_without_sources()
+    |> Map.put(:linked_sources, linked_sources)
+    |> Map.put(:packet_bounds, bounds)
+  end
+
+  defp story_packet_state_without_sources(story) do
     %{
       title: story.title,
       state: story.state,
       version: story.version,
       structural_facts: story.structural_facts || %{},
       background_facts: story.background_facts || %{},
-      topic_tokens: story.topic_tokens || [],
-      linked_sources:
-        state
-        |> visible_story_inputs(story, actor_id)
-        |> Enum.map(&source_packet_state/1)
+      topic_tokens: story.topic_tokens || []
     }
   end
 
-  defp source_packet_state(input) do
+  defp bounded_linked_sources(inputs) do
+    {sources, _remaining, truncated_count} =
+      Enum.reduce(inputs, {[], @story_synthesis_linked_source_budget_bytes, 0}, fn input,
+                                                                                   {sources,
+                                                                                    remaining,
+                                                                                    truncated_count} ->
+        source = source_packet_state(input, @story_synthesis_source_excerpt_chars)
+        encoded_bytes = byte_size(Jason.encode!(source))
+
+        if encoded_bytes <= remaining do
+          {sources ++ [source], remaining - encoded_bytes, truncated_count}
+        else
+          bounded = source_packet_state(input, 0)
+
+          {sources ++ [bounded], max(remaining - byte_size(Jason.encode!(bounded)), 0),
+           truncated_count + 1}
+        end
+      end)
+
+    bounds = %{
+      source_count: length(inputs),
+      linked_source_budget_bytes: @story_synthesis_linked_source_budget_bytes,
+      source_excerpt_chars: @story_synthesis_source_excerpt_chars,
+      truncated_source_count: truncated_count,
+      truncation_reason: "story_synthesis_packet_context_bound"
+    }
+
+    {sources, bounds}
+  end
+
+  defp story_synthesis_prompt_bytes(config, packet) do
+    %{
+      instruction: config.task_prompt,
+      output_schema: config.output_schema,
+      bounded_soup_packet: json_safe(packet)
+    }
+    |> Jason.encode!()
+    |> byte_size()
+  end
+
+  defp json_safe(%DateTime{} = value), do: DateTime.to_iso8601(value)
+  defp json_safe(%NaiveDateTime{} = value), do: NaiveDateTime.to_iso8601(value)
+  defp json_safe(%Decimal{} = value), do: Decimal.to_string(value)
+  defp json_safe(%MapSet{} = set), do: set |> MapSet.to_list() |> Enum.map(&json_safe/1)
+
+  defp json_safe(%_{} = struct) do
+    struct
+    |> Map.from_struct()
+    |> Map.drop([:__meta__])
+    |> json_safe()
+  end
+
+  defp json_safe(map) when is_map(map) do
+    Map.new(map, fn {key, value} -> {to_string(key), json_safe(value)} end)
+  end
+
+  defp json_safe(list) when is_list(list), do: Enum.map(list, &json_safe/1)
+  defp json_safe(value), do: value
+
+  defp source_packet_state(input, excerpt_chars) do
+    excerpt =
+      case excerpt_chars do
+        count when is_integer(count) and count > 0 ->
+          String.slice(input.body_text || "", 0, count)
+
+        _ ->
+          nil
+      end
+
     %{
       source_ref: Admission.input_ref(input),
       article_ref: input.external_id,
@@ -1250,7 +1428,12 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
       source_name: get_in(input.normalized || %{}, ["source_name"]),
       source_actor: get_in(input.normalized || %{}, ["source_actor"]),
       observed_at: input.observed_at && DateTime.to_iso8601(input.observed_at),
-      excerpt: String.slice(input.body_text || "", 0, 500)
+      excerpt: excerpt,
+      excerpt_state:
+        if(excerpt,
+          do: "bounded",
+          else: "unavailable:story_synthesis_packet_context_bound"
+        )
     }
   end
 
