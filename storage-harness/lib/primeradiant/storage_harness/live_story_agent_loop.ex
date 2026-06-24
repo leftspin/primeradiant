@@ -455,15 +455,43 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
       if story_synthesis_prompt_bytes(config, packet) > @story_synthesis_prompt_budget_bytes do
         &oversized_story_synthesis_refusal/3
       else
-        adapter
+        malformed_story_synthesis_refusal_adapter(adapter)
       end
 
     invoke_agent(state, config, packet, actor_id, adapter, correlation_id)
   end
 
+  defp malformed_story_synthesis_refusal_adapter(adapter) do
+    fn config, packet, ctx ->
+      try do
+        adapter.(config, packet, ctx)
+      rescue
+        _error in [Jason.DecodeError] ->
+          malformed_story_synthesis_refusal(config, packet, ctx)
+      end
+    end
+  end
+
   defp oversized_story_synthesis_refusal(_config, packet, _ctx) do
-    provenance_refs = ["story-synthesis:packet-context-bound:#{packet.story_key}"]
-    reason = "story_synthesis_packet_context_bound"
+    story_synthesis_refusal(
+      packet,
+      "story_synthesis_packet_context_bound",
+      "packet-context-bound",
+      "packet-context-bound"
+    )
+  end
+
+  defp malformed_story_synthesis_refusal(_config, packet, _ctx) do
+    story_synthesis_refusal(
+      packet,
+      "story_synthesis_malformed_model_output",
+      "story_synthesis_malformed_model_output",
+      "story_synthesis_malformed_model_output"
+    )
+  end
+
+  defp story_synthesis_refusal(packet, reason, route_reason, provenance_reason) do
+    provenance_refs = ["story-synthesis:#{provenance_reason}:#{packet.story_key}"]
 
     %{
       output: %{
@@ -507,10 +535,10 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
         }
       },
       model: "primeradiant-story-synthesis-boundary",
-      model_route: "internal://story-synthesis/packet-context-bound",
+      model_route: "internal://story-synthesis/#{route_reason}",
       producer_kind: "deterministic_product_logic",
-      decision_source: "story_synthesis_packet_context_bound",
-      invocation_transport_id: "story-synthesis-packet-context-bound",
+      decision_source: reason,
+      invocation_transport_id: "story-synthesis-#{route_reason}",
       duration_ms: 0
     }
   end

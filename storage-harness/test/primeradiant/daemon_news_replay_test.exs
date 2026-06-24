@@ -1275,6 +1275,77 @@ defmodule Primeradiant.DaemonNewsReplayTest do
            end)
   end
 
+  test "recurring story-card synthesis refuses malformed Gibson JSON without crashing" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-recurring-malformed-gibson-story-card-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    soup_db_path = Path.join(tmp, "primeradiant-event-soup.sqlite3")
+    raw_path = Path.join(tmp, "archive.jsonl")
+
+    [row] = [
+      envelope(
+        "Recurring Civic Clinic malformed Gibson packet",
+        "Recurring Civic Clinic malformed Gibson packet creates the story."
+      )
+    ]
+
+    [{offset, length}] = write_archive!(raw_path, [row])
+
+    event =
+      committed_source_item_event("event-malformed-gibson-news-1", raw_path, offset, length, row)
+
+    {:ok, state, _report} =
+      DaemonNewsEvent.consume_event(event,
+        soup_db_path: soup_db_path,
+        tenant_id: @tenant,
+        actor_id: "flynn",
+        story_agent_loop?: true,
+        story_agent_opts: [adapter: &stub_story_agent/3]
+      )
+
+    {refreshed, cadence_report} =
+      LiveStoryAgentLoop.refresh_story_cards(state, "flynn",
+        cadence: :hourly_story_card_synthesis,
+        limit: 1,
+        adapter: &malformed_gibson_story_synthesis_agent/3
+      )
+
+    assert cadence_report.source_behavior == :recurring_cadence_over_admitted_soup
+    assert cadence_report.source_admission_performed == false
+    assert cadence_report.refreshed_count == 1
+
+    [refresh] = cadence_report.refreshes
+    assert refresh.story_card_status == "refused"
+
+    assert refresh.model_route ==
+             "internal://story-synthesis/story_synthesis_malformed_model_output"
+
+    assert refresh.producer_kind == "deterministic_product_logic"
+
+    latest_card = Enum.max_by(refreshed.story_card_versions, & &1.card_version)
+    assert latest_card.status == "refused"
+    assert latest_card.field_completeness["overall"] == "refused"
+
+    [coverage] =
+      Enum.filter(
+        refreshed.story_source_coverage,
+        &(&1.story_card_version_id == latest_card.id)
+      )
+
+    assert coverage.contribution_reason["state"] == "refused"
+    assert coverage.contribution_reason["reason"] == "story_synthesis_malformed_model_output"
+
+    assert coverage.contribution_reason["provenance_refs"] == [
+             "story-synthesis:story_synthesis_malformed_model_output:civic-clinic-triage"
+           ]
+  end
+
   test "event story agents persist Flynn seen refs and later soup-native deltas across cycles" do
     tmp =
       Path.join(
@@ -2568,6 +2639,13 @@ defmodule Primeradiant.DaemonNewsReplayTest do
   end
 
   defp stub_story_agent_oversized_retry_previous_output(config, packet, ctx),
+    do: stub_story_agent(config, packet, ctx)
+
+  defp malformed_gibson_story_synthesis_agent(%{role: :story_synthesis}, _packet, _ctx) do
+    raise Jason.DecodeError, data: "{\"summary\":{\"text\":\"partial", position: 10_068
+  end
+
+  defp malformed_gibson_story_synthesis_agent(config, packet, ctx),
     do: stub_story_agent(config, packet, ctx)
 
   defp stub_story_agent_missing_source_reason(%{role: :story_synthesis}, packet, _ctx) do
