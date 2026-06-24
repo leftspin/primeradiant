@@ -115,7 +115,16 @@ defmodule Primeradiant.Agentic.LiveGibson do
   defp normalize_keys(list) when is_list(list), do: Enum.map(list, &normalize_keys/1)
   defp normalize_keys(value), do: value
 
+  defp json_safe(%DateTime{} = value), do: DateTime.to_iso8601(value)
+  defp json_safe(%NaiveDateTime{} = value), do: NaiveDateTime.to_iso8601(value)
   defp json_safe(%MapSet{} = set), do: set |> MapSet.to_list() |> Enum.map(&json_safe/1)
+
+  defp json_safe(%_{} = struct) do
+    struct
+    |> Map.from_struct()
+    |> Map.drop([:__meta__])
+    |> json_safe()
+  end
 
   defp json_safe(map) when is_map(map) do
     Map.new(map, fn {key, value} -> {to_string(key), json_safe(value)} end)
