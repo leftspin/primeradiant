@@ -77,14 +77,47 @@ ROWS_JSON="$PACKAGE_ROOT/cursor-rows.json"
 PACKAGES_JSONL="$PACKAGE_ROOT/packages.jsonl"
 : > "$PACKAGES_JSONL"
 
-sqlite3 -readonly -cmd ".timeout 10000" -json "$SOURCE_DB" "
+set +e
+SQLITE_OUTPUT="$(sqlite3 -readonly -cmd ".timeout 10000" -json "$SOURCE_DB" "
   SELECT id, message_id, message_timestamp, inbound_event, author_id, author_name,
          accepted_at, text
     FROM daemon_event
    WHERE $WHERE
    ORDER BY accepted_at ASC, id ASC
    LIMIT $LIMIT;
-" > "$ROWS_JSON"
+" 2>&1)"
+SQLITE_STATUS=$?
+set -e
+if [[ "$SQLITE_STATUS" -ne 0 ]]; then
+  FAILURE_MANIFEST="$PACKAGE_ROOT/manifest.json"
+  jq -n \
+    --arg run_id "$RUN_ID" \
+    --arg source_db "$SOURCE_DB" \
+    --arg after_cursor "$AFTER_CURSOR" \
+    --arg error "$SQLITE_OUTPUT" \
+    --argjson status "$SQLITE_STATUS" \
+    '{
+      run_id: $run_id,
+      source_adapter: "daemon-news",
+      source_db_path: $source_db,
+      source_mode: "subspace_daemon_read_only_db_cursor",
+      after_cursor: $after_cursor,
+      next_cursor: $after_cursor,
+      emitted_count: 0,
+      persistent_service_installed: false,
+      status: "source_db_cursor_read_failed",
+      error: {
+        command: "sqlite3 -readonly",
+        exit_status: $status,
+        message: $error
+      },
+      packages: []
+    }' > "$FAILURE_MANIFEST"
+  printf "source DB cursor read failed; failure manifest: %s\n%s\n" "$FAILURE_MANIFEST" "$SQLITE_OUTPUT" >&2
+  exit "$SQLITE_STATUS"
+fi
+
+printf "%s" "$SQLITE_OUTPUT" > "$ROWS_JSON"
 
 COUNT=0
 NEXT_CURSOR="$AFTER_CURSOR"

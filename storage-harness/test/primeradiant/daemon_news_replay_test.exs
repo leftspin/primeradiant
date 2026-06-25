@@ -2063,6 +2063,57 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert before_stat.size == after_stat.size
   end
 
+  test "Subspace cursor reader records source DB read failure as red manifest" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-daemon-news-cursor-failure-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    source_db = Path.join(tmp, "not-a-daemon.sqlite3")
+    package_root = Path.join(tmp, "cursor-packages")
+    File.write!(source_db, "not sqlite")
+
+    cursor_script = Path.expand("scripts/r1/emit_subspace_daemon_cursor_event_packages.sh")
+
+    {output, status} =
+      System.cmd(
+        cursor_script,
+        [
+          "--source-db",
+          source_db,
+          "--tenant",
+          @tenant,
+          "--package-root",
+          package_root,
+          "--after-cursor",
+          "2026-06-18 18:23:59|7765",
+          "--limit",
+          "10",
+          "--run-id",
+          "cursor-failure-test"
+        ],
+        stderr_to_stdout: true
+      )
+
+    assert status != 0
+    assert output =~ "source DB cursor read failed"
+
+    manifest = Path.join(package_root, "manifest.json") |> File.read!() |> Jason.decode!()
+    assert manifest["status"] == "source_db_cursor_read_failed"
+    assert manifest["source_mode"] == "subspace_daemon_read_only_db_cursor"
+    assert manifest["after_cursor"] == "2026-06-18 18:23:59|7765"
+    assert manifest["next_cursor"] == "2026-06-18 18:23:59|7765"
+    assert manifest["emitted_count"] == 0
+    assert manifest["packages"] == []
+    assert get_in(manifest, ["error", "command"]) == "sqlite3 -readonly"
+    assert is_integer(get_in(manifest, ["error", "exit_status"]))
+    assert get_in(manifest, ["error", "message"]) =~ "file is not a database"
+  end
+
   test "SQLite file wakeup runs read-only cursor importer without trusting file event" do
     tmp =
       Path.join(
