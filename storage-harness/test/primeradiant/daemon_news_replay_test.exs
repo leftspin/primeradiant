@@ -489,6 +489,126 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert Enum.all?(chain.evidence_refs, &(&1 in evidence_labels))
   end
 
+  test "Google News event source coverage uses original publisher identity when supplied" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-google-news-original-source-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    soup_db_path = Path.join(tmp, "primeradiant-event-soup.sqlite3")
+    raw_path = Path.join(tmp, "archive.jsonl")
+
+    row =
+      "Apple confirms pricing"
+      |> envelope("Apple pricing is changing after memory costs rose.")
+      |> update_in(["body"], fn body ->
+        Map.merge(body, %{
+          "url" => "https://news.google.com/rss/articles/CBMiapple?oc=5",
+          "source_name" => "Google News Apple",
+          "canonical_url" => "https://www.ign.com/articles/apple-confirms-price-increases",
+          "original_source_name" => "IGN"
+        })
+      end)
+
+    [{offset, length}] = write_archive!(raw_path, [row])
+    event = committed_source_item_event("google-news-original-1", raw_path, offset, length, row)
+
+    {:ok, state, _report} =
+      DaemonNewsEvent.consume_event(event,
+        soup_db_path: soup_db_path,
+        tenant_id: @tenant,
+        actor_id: "flynn",
+        story_agent_loop?: true,
+        story_agent_opts: [adapter: &stub_story_agent/3]
+      )
+
+    [input] = state.inputs
+
+    assert input.normalized["canonical_uri"] ==
+             "https://www.ign.com/articles/apple-confirms-price-increases"
+
+    assert input.normalized["source_name"] == "IGN"
+    assert get_in(input.normalized, ["metadata", "aggregator", "name"]) == "Google News Apple"
+
+    [item] = Soup.feed(state, %{"consumer" => "reporter", "projection" => "news-morning"}).items
+    [source] = item.source_coverage
+    [source_link] = item.source_links
+
+    assert source.canonical_public_url["value"] ==
+             "https://www.ign.com/articles/apple-confirms-price-increases"
+
+    assert source.source_domain["value"] == "www.ign.com"
+    assert source.source_label["value"] == "IGN"
+    assert source.publication["value"] == "IGN"
+    assert source_link.canonical_public_url["value"] == source.canonical_public_url["value"]
+    assert source_link.source_domain["value"] == source.source_domain["value"]
+    assert source_link.source_label["value"] == source.source_label["value"]
+    assert source_link.publication["value"] == source.publication["value"]
+  end
+
+  test "Google News RSS URL without original source is not exposed as publisher identity" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-google-news-aggregator-only-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    soup_db_path = Path.join(tmp, "primeradiant-event-soup.sqlite3")
+    raw_path = Path.join(tmp, "archive.jsonl")
+
+    row =
+      "Apple confirms pricing"
+      |> envelope("Apple pricing is changing after memory costs rose.")
+      |> update_in(["body"], fn body ->
+        Map.merge(body, %{
+          "url" => "https://news.google.com/rss/articles/CBMiapple?oc=5",
+          "source_name" => "Google News Apple"
+        })
+      end)
+
+    [{offset, length}] = write_archive!(raw_path, [row])
+    event = committed_source_item_event("google-news-aggregator-1", raw_path, offset, length, row)
+
+    {:ok, state, _report} =
+      DaemonNewsEvent.consume_event(event,
+        soup_db_path: soup_db_path,
+        tenant_id: @tenant,
+        actor_id: "flynn",
+        story_agent_loop?: true,
+        story_agent_opts: [adapter: &stub_story_agent/3]
+      )
+
+    [input] = state.inputs
+    assert input.normalized["canonical_uri"] == nil
+    assert input.normalized["source_name"] == nil
+
+    assert get_in(input.normalized, ["metadata", "aggregator", "url"]) ==
+             "https://news.google.com/rss/articles/CBMiapple?oc=5"
+
+    [item] = Soup.feed(state, %{"consumer" => "reporter", "projection" => "news-morning"}).items
+    [source] = item.source_coverage
+    [source_link] = item.source_links
+    assert source.canonical_public_url["state"] == "unavailable"
+    assert source.source_domain["state"] == "unavailable"
+    assert source.source_label["state"] == "unavailable"
+    assert source.publication["state"] == "unavailable"
+    assert source.canonical_public_url["value"] == nil
+    refute source.source_label["value"] == "Google News Apple"
+    assert source_link.canonical_public_url["state"] == "unavailable"
+    assert source_link.source_domain["state"] == "unavailable"
+    assert source_link.source_label["state"] == "unavailable"
+    assert source_link.publication["state"] == "unavailable"
+    assert source_link.canonical_public_url["value"] == nil
+    refute source_link.source_label["value"] == "Google News Apple"
+  end
+
   test "story-card synthesis writes contribution reasons for every linked story source" do
     tmp =
       Path.join(
@@ -1437,9 +1557,12 @@ defmodule Primeradiant.DaemonNewsReplayTest do
       |> List.last()
 
     assert reloaded_run.scope["attempted_model_route"] == "test://invalid-story-synthesis"
+
     assert reloaded_run.scope["model_route"] ==
              "internal://story-synthesis/story_synthesis_invalid_model_output"
+
     assert reloaded_run.scope["final_story_synthesis_source"] == "refused"
+
     assert reloaded_run.scope["fallback_gap"] ==
              "no_supported_codex_oauth_spark_story_synthesis_route"
 
