@@ -3318,6 +3318,33 @@ defmodule Primeradiant.DaemonNewsReplayTest do
   defp refusing_story_synthesis_agent_with_config_assertion(config, packet, ctx) do
     assert config.role == :story_synthesis
     assert config.max_tokens == 4096
+    assert get_in(config.output_schema, [:topic_salience, :salience_explanation, :state]) ==
+             "complete"
+
+    assert get_in(config.output_schema, [:topic_salience, :salience_explanation, :text]) ==
+             "story-to-topic salience explanation"
+
+    assert get_in(config.output_schema, [
+             :topic_salience,
+             :salience_explanation,
+             :provenance_refs
+           ]) == ["string"]
+
+    assert get_in(config.output_schema, [:source_coverage, Access.at(0), :materiality]) ==
+             "material | nonmaterial"
+
+    assert get_in(config.output_schema, [:source_coverage, Access.at(0), :source_posture, :state]) ==
+             "complete | unavailable | refused"
+
+    assert get_in(config.output_schema, [:source_coverage, Access.at(0), :source_posture, :reason]) ==
+             "string or null; required when state is unavailable/refused"
+
+    assert get_in(config.output_schema, [:source_coverage, Access.at(0), :source_weight, :state]) ==
+             "complete | unavailable | refused"
+
+    assert get_in(config.output_schema, [:source_coverage, Access.at(0), :source_weight, :reason]) ==
+             "string or null; required when state is unavailable/refused"
+
     refusing_story_synthesis_agent(config, packet, ctx)
   end
 

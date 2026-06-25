@@ -2196,13 +2196,25 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
             reason: "string or null; required when state is unavailable/refused",
             provenance_refs: ["string"]
           },
-          materiality: "material | nonmaterial | unavailable",
-          source_posture: %{state: "complete | unavailable", value: "string or null"},
-          source_weight: %{state: "complete | unavailable", value: "number or null"}
+          materiality: "material | nonmaterial",
+          source_posture: %{
+            state: "complete | unavailable | refused",
+            value: "string or null; required when state is complete",
+            reason: "string or null; required when state is unavailable/refused"
+          },
+          source_weight: %{
+            state: "complete | unavailable | refused",
+            value: "number or null; required when state is complete",
+            reason: "string or null; required when state is unavailable/refused"
+          }
         }
       ],
       topic_salience: %{
-        salience_explanation: "story-to-topic salience explanation or unavailable state",
+        salience_explanation: %{
+          text: "story-to-topic salience explanation",
+          state: "complete",
+          provenance_refs: ["string"]
+        },
         global_salience: "hint",
         flynn_priority: "hint"
       },
