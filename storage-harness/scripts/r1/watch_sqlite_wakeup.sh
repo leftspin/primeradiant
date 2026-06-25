@@ -166,8 +166,43 @@ while :; do
     EMIT_ARGS+=(--after-cursor "$CURRENT_CURSOR")
   fi
 
-  MANIFEST_PATH="$("$EMIT_CURSOR" "${EMIT_ARGS[@]}")"
-  MANIFEST_PATH="$(printf "%s" "$MANIFEST_PATH" | tail -n 1)"
+  set +e
+  EMIT_OUTPUT="$("$EMIT_CURSOR" "${EMIT_ARGS[@]}" 2>&1)"
+  EMIT_STATUS=$?
+  set -e
+  MANIFEST_PATH="$(printf "%s" "$EMIT_OUTPUT" | tail -n 1)"
+  if [[ "$EMIT_STATUS" -ne 0 ]]; then
+    FAILURE_MANIFEST="$PASS_ROOT/manifest.json"
+    WATCH_FAILED_REPORT="$PACKAGE_ROOT/wakeup-failed-report.json"
+    jq -n \
+      --arg run_id "$RUN_ID" \
+      --arg source_db "$SOURCE_DB" \
+      --arg cursor_file "$CURSOR_FILE" \
+      --arg after_cursor "$CURRENT_CURSOR" \
+      --arg failure_manifest "$FAILURE_MANIFEST" \
+      --arg emitter_output "$EMIT_OUTPUT" \
+      --argjson pass "$PASS_COUNT" \
+      --argjson exit_status "$EMIT_STATUS" \
+      '{
+        run_id: $run_id,
+        source_adapter: "daemon-news",
+        source_db_path: $source_db,
+        source_mode: "sqlite_file_wakeup_read_only_cursor",
+        status: "source_db_cursor_read_failed",
+        failed_stage: "sqlite_wakeup_cursor_import",
+        cursor_file: $cursor_file,
+        after_cursor: $after_cursor,
+        pass: $pass,
+        failure_manifest_path: $failure_manifest,
+        error: {
+          command: "emit_subspace_daemon_cursor_event_packages.sh",
+          exit_status: $exit_status,
+          message: $emitter_output
+        }
+      }' > "$WATCH_FAILED_REPORT"
+    printf "SQLite wakeup cursor import failed; report: %s\n" "$WATCH_FAILED_REPORT" >&2
+    exit "$EMIT_STATUS"
+  fi
 
   if [[ "$CONSUME_PACKAGES" == "true" ]]; then
     while IFS= read -r package_dir; do

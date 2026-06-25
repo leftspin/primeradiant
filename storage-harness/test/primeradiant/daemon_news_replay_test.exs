@@ -2114,6 +2114,173 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert get_in(manifest, ["error", "message"]) =~ "file is not a database"
   end
 
+  test "live watcher records failed report when catchup cursor read fails" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-live-watch-cursor-failure-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    source_db = Path.join(tmp, "not-a-daemon.sqlite3")
+    state_root = Path.join(tmp, "state")
+    File.write!(source_db, "not sqlite")
+    File.mkdir_p!(state_root)
+    File.write!(Path.join(state_root, "cursor.txt"), "2026-06-18 18:23:59|7765\n")
+
+    watcher_script = Path.expand("scripts/r1/live_subspace_daemon_watcher_once.sh")
+
+    {output, status} =
+      System.cmd(
+        watcher_script,
+        [
+          "--source-db",
+          source_db,
+          "--tenant",
+          @tenant,
+          "--state-root",
+          state_root,
+          "--eurisko-target",
+          "clu@eurisko",
+          "--eurisko-repo",
+          "/home/clu/src/primeradiant",
+          "--ssh-key",
+          source_db,
+          "--run-id",
+          "live-cursor-failure-test",
+          "--limit",
+          "10"
+        ],
+        stderr_to_stdout: true
+      )
+
+    assert status != 0
+    assert output =~ "live watcher cursor catchup failed"
+
+    failed_report =
+      Path.join(state_root, "live-cursor-failure-test-failed-report.json")
+      |> File.read!()
+      |> Jason.decode!()
+
+    assert failed_report["status"] == "source_db_cursor_read_failed"
+    assert failed_report["failed_stage"] == "cursor_catchup"
+    assert failed_report["after_cursor"] == "2026-06-18 18:23:59|7765"
+    assert get_in(failed_report, ["error", "command"]) ==
+             "emit_subspace_daemon_cursor_event_packages.sh"
+    assert get_in(failed_report, ["error", "message"]) =~ "file is not a database"
+
+    failure_manifest = failed_report["failure_manifest_path"] |> File.read!() |> Jason.decode!()
+    assert failure_manifest["status"] == "source_db_cursor_read_failed"
+    assert failure_manifest["next_cursor"] == "2026-06-18 18:23:59|7765"
+  end
+
+  test "SQLite file wakeup records failed report when cursor importer fails" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-daemon-news-watch-failure-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    source_db = Path.join(tmp, "source-news.db")
+    cursor_file = Path.join(tmp, "primeradiant/cursor.txt")
+    package_root = Path.join(tmp, "packages")
+    run_root = Path.join(tmp, "runs")
+    fake_emitter = Path.join(tmp, "fake-emitter.sh")
+
+    File.write!(source_db, "before")
+    File.mkdir_p!(Path.dirname(cursor_file))
+    File.write!(cursor_file, "2026-06-18 18:23:59|7765\n")
+
+    File.write!(fake_emitter, """
+    #!/usr/bin/env bash
+    set -euo pipefail
+    PACKAGE_ROOT=""
+    AFTER_CURSOR=""
+    RUN_ID=""
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --package-root) PACKAGE_ROOT="$2"; shift 2 ;;
+        --after-cursor) AFTER_CURSOR="$2"; shift 2 ;;
+        --run-id) RUN_ID="$2"; shift 2 ;;
+        *) shift 2 ;;
+      esac
+    done
+    mkdir -p "$PACKAGE_ROOT"
+    cat > "$PACKAGE_ROOT/manifest.json" <<JSON
+    {"run_id":"$RUN_ID","status":"source_db_cursor_read_failed","after_cursor":"$AFTER_CURSOR","next_cursor":"$AFTER_CURSOR","emitted_count":0,"packages":[],"error":{"command":"sqlite3 -readonly","exit_status":1,"message":"authorization denied"}}
+    JSON
+    echo "source DB cursor read failed; failure manifest: $PACKAGE_ROOT/manifest.json" >&2
+    echo "authorization denied" >&2
+    echo "$PACKAGE_ROOT/manifest.json" >&2
+    exit 11
+    """)
+
+    File.chmod!(fake_emitter, 0o755)
+
+    watcher_script = Path.expand("scripts/r1/watch_sqlite_wakeup.sh")
+
+    task =
+      Task.async(fn ->
+        System.cmd(
+          watcher_script,
+          [
+            "--source-db",
+            source_db,
+            "--tenant",
+            @tenant,
+            "--cursor-file",
+            cursor_file,
+            "--package-root",
+            package_root,
+            "--run-root",
+            run_root,
+            "--limit",
+            "10",
+            "--run-id",
+            "watch-failure-test",
+            "--timeout-seconds",
+            "8",
+            "--poll-interval-seconds",
+            "1",
+            "--emit-cursor-script",
+            fake_emitter
+          ],
+          stderr_to_stdout: true
+        )
+      end)
+
+    Process.sleep(1200)
+    File.write!(source_db, "after", [:append])
+
+    {output, status} = Task.await(task, 10_000)
+
+    assert status == 11
+    assert output =~ "SQLite wakeup cursor import failed"
+
+    failed_report =
+      Path.join(package_root, "wakeup-failed-report.json")
+      |> File.read!()
+      |> Jason.decode!()
+
+    assert failed_report["status"] == "source_db_cursor_read_failed"
+    assert failed_report["failed_stage"] == "sqlite_wakeup_cursor_import"
+    assert failed_report["after_cursor"] == "2026-06-18 18:23:59|7765"
+    assert failed_report["pass"] == 1
+    assert get_in(failed_report, ["error", "command"]) ==
+             "emit_subspace_daemon_cursor_event_packages.sh"
+    assert get_in(failed_report, ["error", "exit_status"]) == 11
+    assert get_in(failed_report, ["error", "message"]) =~ "authorization denied"
+
+    failure_manifest = failed_report["failure_manifest_path"] |> File.read!() |> Jason.decode!()
+    assert failure_manifest["status"] == "source_db_cursor_read_failed"
+    assert failure_manifest["next_cursor"] == "2026-06-18 18:23:59|7765"
+  end
+
   test "SQLite file wakeup runs read-only cursor importer without trusting file event" do
     tmp =
       Path.join(

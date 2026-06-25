@@ -76,7 +76,11 @@ Read-only proof from TARS:
 ssh tars 'set -eu
 DB=/Volumes/Microverse/openclaw/state/.openclaw/subspace-daemon/data/daemon.sqlite3
 echo "daemon_db=$DB"
+set +e
 sqlite3 -readonly "$DB" "select max(accepted_at), max(id), count(*) from daemon_event where json_valid(text) and json_type(text, '\''$.body'\'') = '\''object'\'';"
+SQLITE_RC=$?
+set -e
+echo "sqlite_readonly_rc=$SQLITE_RC"
 cat /Users/mike/.local/state/primeradiant/t328-live-watcher/cursor.txt
 tail -n 40 /Users/mike/.local/state/primeradiant/t328-live-watcher/logs/loop.log'
 ```
@@ -98,6 +102,17 @@ After explicit approval, grant the existing watcher runtime context read access
 to the Microverse daemon DB path, then restart only the existing watcher label.
 The exact platform-specific authorization step depends on the operator's chosen
 macOS privacy/volume access mechanism; do not substitute a new scheduler.
+
+Before changing authorization, record the current launcher and filesystem access
+state for rollback evidence:
+
+```sh
+ssh tars 'set -eu
+DB=/Volumes/Microverse/openclaw/state/.openclaw/subspace-daemon/data/daemon.sqlite3
+launchctl print gui/$(id -u)/ai.primeradiant.t328-daemon-db-watcher 2>&1 || true
+ls -leO@ "$DB" "$DB-wal" "$DB-shm" 2>&1 || true
+stat -f "%N|%Su|%Sg|%Sp|%m|%z" "$DB" "$DB-wal" "$DB-shm" 2>&1 || true'
+```
 
 Allowed restart after authorization:
 
@@ -141,7 +156,6 @@ curl -fsS -H "Authorization: Bearer $PRIMERADIANT_SOUP_API_TOKEN" "http://127.0.
 ## Rollback
 
 If the watcher restart causes unexpected behavior, stop at runtime proof and
-restore the previous authorization context. Do not edit either live DB. Do not
-reset the Prime Radiant cursor unless Flynn explicitly approves a separate
-cursor repair.
-
+restore the previous authorization context recorded before the repair action. Do
+not edit either live DB. Do not reset the Prime Radiant cursor unless Flynn
+explicitly approves a separate cursor repair.
