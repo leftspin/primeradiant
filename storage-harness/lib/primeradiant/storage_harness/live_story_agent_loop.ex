@@ -559,7 +559,7 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
     latest_event = latest_story_event(state, story.id, input.id)
 
     correlation_id =
-      "recurring:#{cadence}:#{story.story_key}:#{System.unique_integer([:positive])}"
+      "recurring:#{cadence}:#{story.story_key}:#{Ecto.UUID.generate()}"
 
     evidence_refs =
       evidence_refs_for_input(state, story.id, input.id, ["story:#{story.story_key}"])

@@ -918,6 +918,9 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert refresh.refresh_reason == "story_card_hourly_synthesis"
     assert refresh.model_route == "test://story-synthesis"
 
+    assert refresh.correlation_id =~
+             ~r/^recurring:hourly_story_card_synthesis:civic-clinic-triage:[0-9a-f-]{36}$/
+
     assert DurableSoupDb.table_count(soup_db_path, "inputs", @tenant) == before_inputs
 
     assert DurableSoupDb.table_count(soup_db_path, "story_card_versions", @tenant) ==
@@ -933,6 +936,17 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert card["refresh_reason"] == "story_card_hourly_synthesis"
     provenance = Jason.decode!(card["provenance"])
     assert provenance["source_refs"] == ["news_article:event-recurring-news-1"]
+
+    [agent_run] =
+      sqlite_json_rows!(
+        soup_db_path,
+        "SELECT agent_run_key FROM agent_runs WHERE id = '#{hd(provenance["agent_run_ids"])}';"
+      )
+
+    assert agent_run["agent_run_key"] in [
+             "agent-run:story-synthesis.v2.t1311.article-link-salience:#{refresh.correlation_id}",
+             "agent-run:story-synthesis.v2.t1311.article-link-salience:#{refresh.correlation_id}:source-coverage-repair"
+           ]
   end
 
   test "recurring story-card synthesis bounds oversized linked-source packets" do
