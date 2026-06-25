@@ -1,7 +1,7 @@
 defmodule Primeradiant.StorageHarness.DaemonNewsReplay do
   @moduledoc false
 
-  alias Primeradiant.StorageHarness.{DurableSoupDb, RealIngestion}
+  alias Primeradiant.StorageHarness.{DaemonNewsSourceIdentity, DurableSoupDb, RealIngestion}
 
   @default_db_path "/Volumes/BlipsAndChitz/news-storage/news.db"
   @message_type "swarm.channel.news.report.v0"
@@ -130,6 +130,7 @@ defmodule Primeradiant.StorageHarness.DaemonNewsReplay do
     with {:ok, envelope} <- read_raw_envelope(row, raw_root) do
       body = Map.get(envelope, "body") || %{}
       provenance = Map.get(envelope, "provenance") || %{}
+      source_identity = DaemonNewsSourceIdentity.source_fields(body, provenance)
       title = string_field(body, "title") || "Daemon news #{row["message_id"]}"
       summary = string_field(body, "summary") || string_field(body, "description")
       text = Enum.reject([title, summary], &blank?/1) |> Enum.join("\n\n")
@@ -147,13 +148,12 @@ defmodule Primeradiant.StorageHarness.DaemonNewsReplay do
            observed_at: row["created_at"] || row["received_at"],
            retrieved_at: row["received_at"],
            occurred_at: string_field(body, "published_at"),
-           canonical_uri: string_field(body, "url") || string_field(body, "canonical_url"),
+           canonical_uri: source_identity.canonical_uri,
            raw_object_uri: raw_uri(row),
-           source_name:
-             string_field(body, "source_name") || string_field(provenance, "source_name"),
+           source_name: source_identity.source_name,
            source_actor: %{
              kind: "daemon_news_source",
-             name: string_field(body, "source_name") || string_field(provenance, "source_name"),
+             name: source_identity.source_actor_name,
              stable_id: row["source_space"] || row["sender_id"]
            },
            title: title,
@@ -167,6 +167,7 @@ defmodule Primeradiant.StorageHarness.DaemonNewsReplay do
              sender_id: row["sender_id"],
              raw_sha256: row["raw_sha256"],
              provenance: provenance,
+             aggregator: source_identity.aggregator,
              dedupe: Map.get(envelope, "dedupe") || %{}
            },
            acl: %{"privacy" => "public"},

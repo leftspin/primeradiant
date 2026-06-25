@@ -3,6 +3,7 @@ defmodule Primeradiant.StorageHarness.DaemonNewsEvent do
 
   alias Primeradiant.StorageHarness.{
     DaemonNewsAdapter,
+    DaemonNewsSourceIdentity,
     DurableSoupDb,
     KnowledgeWork,
     LiveStoryAgentLoop,
@@ -109,6 +110,7 @@ defmodule Primeradiant.StorageHarness.DaemonNewsEvent do
            DaemonNewsAdapter.resolve_source_ref(event, %{"tenant_id" => tenant_id}, raw_root) do
       body = Map.get(envelope, "body") || %{}
       provenance = Map.get(envelope, "provenance") || %{}
+      source_identity = DaemonNewsSourceIdentity.source_fields(body, provenance)
       source = event["source"] || %{}
       ref = event["raw_ref"] || %{}
       title = string_field(body, "title") || "Daemon news #{source["item_id"]}"
@@ -127,13 +129,12 @@ defmodule Primeradiant.StorageHarness.DaemonNewsEvent do
           observed_at: source["created_at"] || event["emitted_at"],
           retrieved_at: source["committed_at"] || event["emitted_at"],
           occurred_at: string_field(body, "published_at"),
-          canonical_uri: string_field(body, "url") || string_field(body, "canonical_url"),
+          canonical_uri: source_identity.canonical_uri,
           raw_object_uri: raw_uri(ref),
-          source_name:
-            string_field(body, "source_name") || string_field(provenance, "source_name"),
+          source_name: source_identity.source_name,
           source_actor: %{
             kind: "daemon_news_source",
-            name: string_field(body, "source_name") || string_field(provenance, "source_name"),
+            name: source_identity.source_actor_name,
             stable_id: source["source_space"] || source["sender_id"]
           },
           title: title,
@@ -150,6 +151,7 @@ defmodule Primeradiant.StorageHarness.DaemonNewsEvent do
             sender_id: source["sender_id"],
             raw_sha256: ref["sha256"],
             provenance: provenance,
+            aggregator: source_identity.aggregator,
             dedupe: Map.get(envelope, "dedupe") || %{}
           },
           acl: event["acl"],
