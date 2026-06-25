@@ -787,6 +787,69 @@ defmodule Primeradiant.SoupApiTest do
     assert item.source_links == []
   end
 
+  test "feed does not project invalidated graph edges as active source contribution truth" do
+    state =
+      source_ready_state([
+        source_item("invalidated-graph-edge", title: "Invalidated graph edge")
+      ])
+
+    state =
+      update_in(state.edges, fn edges ->
+        Enum.map(edges, &%{&1 | status: "quarantined"})
+      end)
+
+    [item] = Soup.feed(state, %{"consumer" => "reporter", "projection" => "news-morning"}).items
+    [source] = item.magazine_contract.sources
+
+    assert source.contribution_summary == nil
+    assert source.edge_provenance == nil
+    assert source.no_contribution_summary_reason == "no_article_story_contribution_committed"
+  end
+
+  test "feed projects refused story-card versions as incomplete provenance" do
+    state =
+      source_ready_state([
+        source_item("refused-card-product-truth", title: "Refused card product truth")
+      ])
+
+    state =
+      update_in(state.story_card_versions, fn cards ->
+        Enum.map(cards, &%{&1 | status: "refused"})
+      end)
+
+    [item] = Soup.feed(state, %{"consumer" => "reporter", "projection" => "news-morning"}).items
+
+    assert item.status == "incomplete"
+    assert item.refresh_reason == "story_card_not_complete"
+    assert item.provenance["reason"] == "story_card_not_complete"
+    assert item.provenance["suppressed_story_card_status"] == "refused"
+    assert item.key_claims == []
+    assert item.source_coverage == []
+    assert item.source_links == []
+
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-refused-card-product-truth-#{System.unique_integer([:positive])}.sqlite3"
+      )
+
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    DurableSoupDb.persist!(tmp, state, %{
+      source_kind: "soup-api-test",
+      source_db_path: tmp,
+      source_row_count: 0
+    })
+
+    loaded = DurableSoupDb.load_tenant(tmp, state.tenant_id)
+    [loaded_item] = Soup.feed(loaded, %{"consumer" => "reporter", "projection" => "news-morning"}).items
+
+    assert loaded_item.status == "incomplete"
+    assert loaded_item.key_claims == []
+    assert loaded_item.source_coverage == []
+    assert loaded_item.source_links == []
+  end
+
   defp source_ready_state(items) do
     {:ok, state, report} = RealIngestion.ingest_items(items)
 
@@ -909,10 +972,16 @@ defmodule Primeradiant.SoupApiTest do
           "deck" => "complete",
           "summary" => "complete",
           "key_claims" => "complete",
-          "source_coverage" => "complete"
+          "source_coverage" => "complete",
+          "topic_salience" => "complete",
+          "overall" => "complete"
         },
         "topic_salience" => %{
-          "durable_topic_nodes" => %{"state" => "refused", "reason" => "test_stub"},
+          "durable_topic_nodes" => %{
+            "state" => "complete",
+            "topic_refs" => ["topic:reporter-ready"],
+            "provenance_refs" => packet.evidence_refs
+          },
           "salience_explanation" => %{
             "state" => "complete",
             "text" => "Reporter-ready test story.",

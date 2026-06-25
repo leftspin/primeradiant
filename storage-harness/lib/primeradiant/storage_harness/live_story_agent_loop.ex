@@ -458,7 +458,62 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
         malformed_story_synthesis_refusal_adapter(adapter)
       end
 
-    invoke_agent(state, config, packet, actor_id, adapter, correlation_id)
+    {state, run, synthesis} = invoke_agent(state, config, packet, actor_id, adapter, correlation_id)
+
+    case validate_story_synthesis_output(synthesis.output, packet, run) do
+      :ok ->
+        {state, run, synthesis}
+
+      {:error, reason} ->
+        fallback = supported_story_synthesis_fallback(packet)
+        refusal = story_synthesis_refusal(packet, reason, reason, reason)
+        refused_output_hash = hash(refusal.output)
+        attempted_output_hash = run.scope["output_hash"]
+        attempted_model_route = run.scope["model_route"]
+        attempted_producer_kind = run.scope["producer_kind"]
+        attempted_decision_source = run.scope["decision_source"]
+
+        synthesis =
+          %{synthesis | output: normalize_output(refusal.output)}
+
+        run =
+          ChangesetStore.update!(run, %{
+            model: refusal.model,
+            scope:
+              Map.merge(run.scope, %{
+                "attempted_output_hash" => attempted_output_hash,
+                "attempted_model_route" => attempted_model_route,
+                "attempted_producer_kind" => attempted_producer_kind,
+                "attempted_decision_source" => attempted_decision_source,
+                "output_hash" => refused_output_hash,
+                "model_route" => refusal.model_route,
+                "producer_kind" => refusal.producer_kind,
+                "decision_source" => refusal.decision_source,
+                "final_story_synthesis_source" => "refused",
+                "fallback_route" => fallback.route,
+                "fallback_gap" => fallback.gap,
+                "validation_error" => reason,
+                "refused_output_hash" => refused_output_hash
+              })
+          })
+
+        state =
+          state
+          |> State.replace(:agent_runs, run.id, run)
+          |> State.audit(%{
+            event: :story_synthesis_model_output_refused,
+            agent_run_id: run.id,
+            packet_id: packet.packet_id,
+            packet_hash: synthesis.packet_hash,
+            model_route_attempted: synthesis.run.scope["model_route"],
+            final_model_route: refusal.model_route,
+            fallback_route: fallback.route,
+            fallback_gap: fallback.gap,
+            reason: reason
+          })
+
+        {state, run, %{synthesis | run: run}}
+    end
   end
 
   defp malformed_story_synthesis_refusal_adapter(adapter) do
@@ -488,6 +543,13 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
       "story_synthesis_malformed_model_output",
       "story_synthesis_malformed_model_output"
     )
+  end
+
+  defp supported_story_synthesis_fallback(_packet) do
+    %{
+      route: "unavailable",
+      gap: "no_supported_codex_oauth_spark_story_synthesis_route"
+    }
   end
 
   defp story_synthesis_refusal(packet, reason, route_reason, provenance_reason) do
@@ -542,6 +604,194 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
       duration_ms: 0
     }
   end
+
+  defp validate_story_synthesis_output(_output, _packet, %{
+         scope: %{"producer_kind" => "deterministic_product_logic"}
+       }),
+       do: :ok
+
+  defp validate_story_synthesis_output(output, packet, _run) when is_map(output) do
+    if output["status"] == "complete" do
+      validate_trusted_story_synthesis_output(output, packet)
+    else
+      {:error, "story_synthesis_invalid_model_output"}
+    end
+  end
+
+  defp validate_story_synthesis_output(_output, _packet, _run),
+    do: {:error, "story_synthesis_invalid_model_output"}
+
+  defp validate_trusted_story_synthesis_output(output, packet) do
+    cond do
+      output["status"] != "complete" ->
+        {:error, "story_synthesis_invalid_model_output"}
+
+      not story_synthesis_field?(output["title"]) ->
+        {:error, "story_synthesis_invalid_model_output"}
+
+      not story_synthesis_field?(output["deck"]) ->
+        {:error, "story_synthesis_invalid_model_output"}
+
+      not story_synthesis_field?(output["summary"]) ->
+        {:error, "story_synthesis_invalid_model_output"}
+
+      not story_synthesis_key_claims?(output["key_claims"]) ->
+        {:error, "story_synthesis_invalid_model_output"}
+
+      not story_synthesis_source_coverage?(output["source_coverage"], packet) ->
+        {:error, "story_synthesis_invalid_model_output"}
+
+      not story_synthesis_topic_salience?(output["topic_salience"]) ->
+        {:error, "story_synthesis_invalid_model_output"}
+
+      not story_synthesis_changed_field_keys?(output["changed_field_keys"]) ->
+        {:error, "story_synthesis_invalid_model_output"}
+
+      not story_synthesis_field?(output["change_summary"]) ->
+        {:error, "story_synthesis_invalid_model_output"}
+
+      not story_synthesis_field_completeness?(output["field_completeness"]) ->
+        {:error, "story_synthesis_invalid_model_output"}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp story_synthesis_field?(%{"state" => "complete", "text" => text, "provenance_refs" => refs})
+       when is_binary(text) and text != "",
+       do: provenance_refs?(refs)
+
+  defp story_synthesis_field?(_value), do: false
+
+  defp provenance_refs?(refs) when is_list(refs) and refs != [],
+    do: Enum.all?(refs, &non_empty_string?/1)
+
+  defp provenance_refs?(_refs),
+    do: false
+
+  defp story_synthesis_key_claims?(claims) when is_list(claims),
+    do: Enum.all?(claims, &valid_agent_claim?/1)
+
+  defp story_synthesis_key_claims?(_claims), do: false
+
+  defp story_synthesis_source_coverage?(coverage, packet) when is_list(coverage) do
+    required_refs = linked_source_refs(packet)
+    coverage_refs = Enum.map(coverage, &Map.get(&1, "source_ref"))
+
+    Enum.sort(coverage_refs) == Enum.sort(required_refs) and
+      Enum.all?(coverage, &story_synthesis_source_coverage_row?/1)
+  end
+
+  defp story_synthesis_source_coverage?(_coverage, _packet), do: false
+
+  defp story_synthesis_source_coverage_row?(row) do
+    case row do
+      %{"source_ref" => source_ref} when is_binary(source_ref) and source_ref != "" ->
+        optional_contribution_reason?(row["contribution_reason"]) and materiality?(row["materiality"]) and
+          model_state_map?(row["source_posture"]) and model_state_map?(row["source_weight"])
+
+      _ ->
+        false
+    end
+  end
+
+  defp story_synthesis_topic_salience?(salience) when is_map(salience) do
+    explanation_valid? =
+      case Map.fetch(salience, "salience_explanation") do
+        {:ok, value} -> story_synthesis_field?(value)
+        :error -> false
+      end
+
+    explanation_valid? and
+      required_non_empty_string?(salience, "global_salience") and
+      required_non_empty_string?(salience, "flynn_priority") and
+      optional_topic_nodes?(salience, "durable_topic_nodes")
+  end
+
+  defp story_synthesis_topic_salience?(_salience), do: false
+
+  defp story_synthesis_changed_field_keys?(keys) when is_list(keys) do
+    allowed =
+      MapSet.new(~w(title deck summary source_coverage key_claims topic_salience change_summary))
+
+    Enum.all?(keys, &(is_binary(&1) and MapSet.member?(allowed, &1)))
+  end
+
+  defp story_synthesis_changed_field_keys?(_keys), do: false
+
+  defp story_synthesis_field_completeness?(completeness) when is_map(completeness) do
+    allowed_keys =
+      MapSet.new(~w(title deck summary key_claims topic_salience canonical_public_url source_label publication source_coverage overall))
+
+    required_keys = MapSet.new(~w(title deck summary key_claims source_coverage topic_salience overall))
+    source_level_keys = MapSet.new(~w(canonical_public_url source_label publication))
+
+    supplied_keys = MapSet.new(Map.keys(completeness))
+
+    MapSet.subset?(required_keys, supplied_keys) and
+      Enum.all?(completeness, fn {key, value} ->
+      is_binary(key) and MapSet.member?(allowed_keys, key) and
+        ((MapSet.member?(source_level_keys, key) and value == "source_level") or value == "complete")
+      end)
+  end
+
+  defp story_synthesis_field_completeness?(_completeness), do: false
+
+  defp materiality?(value), do: value in ["material", "nonmaterial"]
+
+  defp model_state_map?(%{"state" => "complete"} = value),
+    do: model_state_value?(Map.get(value, "value"))
+
+  defp model_state_map?(%{"state" => state, "reason" => reason})
+       when state in ["unavailable", "refused"] and is_binary(reason) and reason != "",
+       do: true
+
+  defp model_state_map?(_value), do: false
+
+  defp model_state_value?(value) when is_binary(value), do: value != ""
+  defp model_state_value?(value) when is_number(value), do: true
+  defp model_state_value?(_value), do: false
+
+  defp optional_contribution_reason?(nil), do: true
+
+  defp optional_contribution_reason?(%{"state" => "complete", "text" => text, "provenance_refs" => refs})
+       when is_binary(text) and text != "" and is_list(refs) and refs != [],
+       do: true
+
+  defp optional_contribution_reason?(%{
+         "state" => state,
+         "reason" => reason,
+         "provenance_refs" => refs
+       })
+       when state in ["unavailable", "refused"] and is_binary(reason) and reason != "" and
+              is_list(refs) and refs != [],
+       do: true
+
+  defp optional_contribution_reason?(_value), do: false
+
+  defp optional_topic_nodes?(map, key) do
+    case Map.fetch(map, key) do
+      {:ok, %{"state" => "complete", "topic_refs" => refs, "provenance_refs" => provenance_refs}} ->
+        Enum.all?(refs, &non_empty_string?/1) and refs != [] and
+          Enum.all?(provenance_refs, &non_empty_string?/1) and provenance_refs != []
+
+      :error ->
+        true
+
+      _ ->
+        false
+    end
+  end
+
+  defp required_non_empty_string?(map, key) do
+    case Map.fetch(map, key) do
+      {:ok, value} -> non_empty_string?(value)
+      :error -> false
+    end
+  end
+
+  defp non_empty_string?(value), do: is_binary(value) and value != ""
 
   defp unavailable_story_synthesis_field(reason, provenance_refs) do
     %{
@@ -954,18 +1204,26 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
       })
 
     coverage_rows =
-      source_coverage_rows(
-        state,
-        story,
-        card,
-        input,
-        admission,
-        synthesis.output,
-        provenance_refs
-      )
+      if card_status == "complete" do
+        source_coverage_rows(
+          state,
+          story,
+          card,
+          input,
+          admission,
+          synthesis.output,
+          provenance_refs
+        )
+      else
+        []
+      end
 
     claim_rows =
-      key_claim_rows(state, story, card, synthesis.output, admission.evidence_refs)
+      if card_status == "complete" do
+        key_claim_rows(state, story, card, synthesis.output, admission.evidence_refs)
+      else
+        []
+      end
 
     change_set =
       ChangesetStore.insert!(StoryCardChangeSet, %{
@@ -1520,7 +1778,7 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
     |> case do
       sources when is_list(sources) ->
         sources
-        |> Enum.map(& &1.source_ref)
+        |> Enum.map(fn source -> Map.get(source, :source_ref) || Map.get(source, "source_ref") end)
         |> Enum.reject(&is_nil/1)
         |> Enum.uniq()
 

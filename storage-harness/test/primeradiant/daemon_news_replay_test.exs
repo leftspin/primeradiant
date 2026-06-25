@@ -615,20 +615,12 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     [card] = state.story_card_versions
     assert card.status == "incomplete"
 
-    [coverage] = state.story_source_coverage
-    assert coverage.contribution_reason["state"] == "refused"
-
-    assert coverage.contribution_reason["reason"] ==
-             "story_synthesis_agent_omitted_required_source_coverage_after_retry"
+    assert state.story_source_coverage == []
 
     feed = Soup.feed(state, %{"consumer" => "reporter", "projection" => "news-morning"})
     [item] = feed.items
     assert item.status == "incomplete"
-    [projected_coverage] = item.source_coverage
-
-    assert projected_coverage.contribution_reason["reason"] ==
-             "story_synthesis_agent_omitted_required_source_coverage_after_retry"
-
+    assert item.source_coverage == []
     assert item.source_links == []
   end
 
@@ -741,7 +733,7 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     [item] = feed.items
     assert item.status == "complete"
 
-    assert item.topic_salience["salience_explanation"] ==
+    assert item.topic_salience["salience_explanation"]["text"] ==
              "clinic triage story has local service salience"
 
     assert item.topic_salience["durable_topic_nodes"]["state"] == "unavailable"
@@ -916,7 +908,9 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     [refresh] = cadence_report.refreshes
     assert refresh.story_card_status == "refused"
     assert refresh.refresh_reason == "story_card_hourly_synthesis"
-    assert refresh.model_route == "test://story-synthesis"
+
+    assert refresh.model_route ==
+             "internal://story-synthesis/story_synthesis_invalid_model_output"
 
     assert refresh.correlation_id =~
              ~r/^recurring:hourly_story_card_synthesis:civic-clinic-triage:[0-9a-f-]{36}$/
@@ -1161,15 +1155,7 @@ defmodule Primeradiant.DaemonNewsReplayTest do
         &(&1.story_card_version_id == latest_card.id)
       )
 
-    assert length(latest_coverage) == 2_000
-
-    assert Enum.all?(latest_coverage, fn coverage ->
-             coverage.contribution_reason["state"] == "refused" and
-               coverage.contribution_reason["reason"] == "story_synthesis_packet_context_bound" and
-               coverage.contribution_reason["provenance_refs"] == [
-                 "story-synthesis:packet-context-bound:civic-clinic-triage"
-               ]
-           end)
+    assert latest_coverage == []
   end
 
   test "story-card synthesis refuses over-budget source coverage retry before reinvoking agent" do
@@ -1278,15 +1264,7 @@ defmodule Primeradiant.DaemonNewsReplayTest do
         &(&1.story_card_version_id == latest_card.id)
       )
 
-    assert length(latest_coverage) == 260
-
-    assert Enum.all?(latest_coverage, fn coverage ->
-             coverage.contribution_reason["state"] == "refused" and
-               coverage.contribution_reason["reason"] == "story_synthesis_packet_context_bound" and
-               coverage.contribution_reason["provenance_refs"] == [
-                 "story-synthesis:packet-context-bound:civic-clinic-triage"
-               ]
-           end)
+    assert latest_coverage == []
   end
 
   test "recurring story-card synthesis refuses malformed Gibson JSON without crashing" do
@@ -1346,18 +1324,136 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert latest_card.status == "refused"
     assert latest_card.field_completeness["overall"] == "refused"
 
-    [coverage] =
+    coverage =
       Enum.filter(
         refreshed.story_source_coverage,
         &(&1.story_card_version_id == latest_card.id)
       )
 
-    assert coverage.contribution_reason["state"] == "refused"
-    assert coverage.contribution_reason["reason"] == "story_synthesis_malformed_model_output"
+    assert coverage == []
+  end
 
-    assert coverage.contribution_reason["provenance_refs"] == [
-             "story-synthesis:story_synthesis_malformed_model_output:civic-clinic-triage"
-           ]
+  test "recurring story-card synthesis quarantines decoded invalid model output before product save" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-recurring-invalid-story-card-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    soup_db_path = Path.join(tmp, "primeradiant-event-soup.sqlite3")
+    raw_path = Path.join(tmp, "archive.jsonl")
+
+    [row] = [
+      envelope(
+        "Recurring Civic Clinic invalid Gibson packet",
+        "Recurring Civic Clinic invalid Gibson packet creates the story."
+      )
+    ]
+
+    [{offset, length}] = write_archive!(raw_path, [row])
+
+    event =
+      committed_source_item_event("event-invalid-gibson-news-1", raw_path, offset, length, row)
+
+    {:ok, state, _report} =
+      DaemonNewsEvent.consume_event(event,
+        soup_db_path: soup_db_path,
+        tenant_id: @tenant,
+        actor_id: "flynn",
+        story_agent_loop?: true,
+        story_agent_opts: [adapter: &stub_story_agent/3]
+      )
+
+    {refreshed, cadence_report} =
+      LiveStoryAgentLoop.refresh_story_cards(state, "flynn",
+        cadence: :hourly_story_card_synthesis,
+        limit: 1,
+        adapter: &invalid_schema_story_synthesis_agent/3
+      )
+
+    [refresh] = cadence_report.refreshes
+    assert refresh.story_card_status == "refused"
+
+    assert refresh.model_route ==
+             "internal://story-synthesis/story_synthesis_invalid_model_output"
+
+    latest_card = Enum.max_by(refreshed.story_card_versions, & &1.card_version)
+    assert latest_card.status == "refused"
+    assert latest_card.deck["reason"] == "story_synthesis_invalid_model_output"
+    assert latest_card.summary["reason"] == "story_synthesis_invalid_model_output"
+    refute latest_card.deck["text"] == "POISON DURABLE DECK"
+    refute latest_card.summary["text"] == "POISON DURABLE SUMMARY"
+    refute latest_card.topic_salience["global_salience"] == "POISON_GLOBAL"
+    refute latest_card.field_completeness["deck"] == "poison"
+
+    assert Enum.filter(refreshed.story_key_claims, &(&1.story_card_version_id == latest_card.id)) ==
+             []
+
+    latest_change_set =
+      Enum.find(refreshed.story_card_change_sets, &(&1.new_card_version_id == latest_card.id))
+
+    refute "poison_field" in latest_change_set.changed_field_keys
+
+    coverage =
+      Enum.filter(
+        refreshed.story_source_coverage,
+        &(&1.story_card_version_id == latest_card.id)
+      )
+
+    assert coverage == []
+
+    latest_run =
+      refreshed.agent_runs
+      |> Enum.filter(&(&1.agent_type == "story_synthesis"))
+      |> List.last()
+
+    assert latest_run.scope["final_story_synthesis_source"] == "refused"
+    assert latest_run.scope["fallback_route"] == "unavailable"
+
+    assert latest_run.scope["fallback_gap"] ==
+             "no_supported_codex_oauth_spark_story_synthesis_route"
+
+    assert latest_run.scope["validation_error"] == "story_synthesis_invalid_model_output"
+    assert is_binary(latest_run.scope["attempted_output_hash"])
+    assert latest_run.scope["attempted_output_hash"] != latest_run.scope["output_hash"]
+    assert latest_run.scope["attempted_model_route"] == "test://invalid-story-synthesis"
+    assert latest_run.scope["attempted_producer_kind"] == "live_model_inference"
+    assert latest_run.scope["attempted_decision_source"] == "live_gibson_qwen_inference"
+
+    DurableSoupDb.persist!(soup_db_path, refreshed, %{
+      source_kind: "recurring-soup-cadence",
+      source_db_path: soup_db_path,
+      source_row_count: 0
+    })
+
+    reloaded = DurableSoupDb.load_tenant(soup_db_path, @tenant)
+
+    reloaded_run =
+      reloaded.agent_runs
+      |> Enum.filter(&(&1.id == latest_run.id))
+      |> List.last()
+
+    assert reloaded_run.scope["attempted_model_route"] == "test://invalid-story-synthesis"
+    assert reloaded_run.scope["model_route"] ==
+             "internal://story-synthesis/story_synthesis_invalid_model_output"
+    assert reloaded_run.scope["final_story_synthesis_source"] == "refused"
+    assert reloaded_run.scope["fallback_gap"] ==
+             "no_supported_codex_oauth_spark_story_synthesis_route"
+
+    assert Enum.any?(refreshed.audit_events, fn
+             %{
+               event: :story_synthesis_model_output_refused,
+               reason: "story_synthesis_invalid_model_output",
+               fallback_gap: "no_supported_codex_oauth_spark_story_synthesis_route"
+             } ->
+               true
+
+             _ ->
+               false
+           end)
   end
 
   test "event story agents persist Flynn seen refs and later soup-native deltas across cycles" do
@@ -2662,6 +2758,48 @@ defmodule Primeradiant.DaemonNewsReplayTest do
   defp malformed_gibson_story_synthesis_agent(config, packet, ctx),
     do: stub_story_agent(config, packet, ctx)
 
+  defp invalid_schema_story_synthesis_agent(%{role: :story_synthesis}, packet, _ctx) do
+    synthesis = stub_story_synthesis(packet)
+
+    output =
+      synthesis.output
+      |> put_in(["deck", "text"], "POISON DURABLE DECK")
+      |> put_in(["summary", "text"], "POISON DURABLE SUMMARY")
+      |> Map.put("key_claims", [
+        %{
+          "claim_ref" => "claim:poison",
+          "text" => "POISON KEY CLAIM",
+          "status" => "current",
+          "materiality" => "material",
+          "evidence_refs" => []
+        }
+      ])
+      |> update_in(["source_coverage"], fn rows ->
+        Enum.map(rows, fn row ->
+          row
+          |> put_in(["contribution_reason", "text"], "POISON SOURCE CONTRIBUTION")
+          |> Map.put("materiality", "poison_materiality")
+          |> Map.put("source_posture", %{"state" => "complete", "value" => "POISON POSTURE"})
+          |> Map.put("source_weight", %{"state" => "complete", "value" => "POISON WEIGHT"})
+        end)
+      end)
+      |> put_in(["topic_salience", "global_salience"], "POISON_GLOBAL")
+      |> put_in(["field_completeness", "deck"], "poison")
+      |> Map.put("changed_field_keys", ["deck", "poison_field"])
+
+    %{
+      synthesis
+      | output: output,
+        model: "stub-live-model",
+        model_route: "test://invalid-story-synthesis",
+        producer_kind: "live_model_inference",
+        decision_source: "live_gibson_qwen_inference"
+    }
+  end
+
+  defp invalid_schema_story_synthesis_agent(config, packet, ctx),
+    do: stub_story_agent(config, packet, ctx)
+
   defp stub_story_agent_missing_source_reason(%{role: :story_synthesis}, packet, _ctx) do
     synthesis = stub_story_synthesis(packet)
 
@@ -2889,29 +3027,57 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     do: stub_story_synthesis(packet)
 
   defp refusing_story_synthesis_agent(%{role: :story_synthesis}, packet, _ctx) do
+    provenance_refs = ["fieldprov:refused-test"]
+    reason = "insufficient_evidence_for_hourly_refresh"
+
     %{
       output: %{
         "status" => "refused",
         "title" => %{
-          "text" => packet.committed_story_state.title,
+          "text" => story_synthesis_title(packet),
           "state" => "complete",
-          "provenance_refs" => ["fieldprov:refused-test"]
+          "provenance_refs" => provenance_refs
         },
         "deck" => %{
           "text" => nil,
           "state" => "unavailable",
-          "reason" => "insufficient_evidence_for_hourly_refresh",
-          "provenance_refs" => ["fieldprov:refused-test"]
+          "reason" => reason,
+          "provenance_refs" => provenance_refs
         },
         "summary" => %{
           "text" => nil,
           "state" => "unavailable",
-          "reason" => "insufficient_evidence_for_hourly_refresh",
-          "provenance_refs" => ["fieldprov:refused-test"]
+          "reason" => reason,
+          "provenance_refs" => provenance_refs
         },
         "key_claims" => [],
-        "source_coverage" => [],
+        "source_coverage" =>
+          packet
+          |> get_in([:committed_story_state, :linked_sources])
+          |> Kernel.||([])
+          |> Enum.map(fn source ->
+            %{
+              "source_ref" => source.source_ref,
+              "contribution_reason" => %{
+                "text" => nil,
+                "state" => "refused",
+                "reason" => reason,
+                "provenance_refs" => provenance_refs
+              },
+              "materiality" => "unavailable",
+              "source_posture" => %{"state" => "unavailable", "reason" => reason},
+              "source_weight" => %{"state" => "unavailable", "reason" => reason}
+            }
+          end),
         "topic_salience" => %{
+          "salience_explanation" => %{
+            "text" => nil,
+            "state" => "refused",
+            "reason" => reason,
+            "provenance_refs" => provenance_refs
+          },
+          "global_salience" => "unavailable",
+          "flynn_priority" => "unavailable",
           "durable_topic_nodes" => %{"state" => "refused", "reason" => "not_enough_new_soup"}
         },
         "changed_field_keys" => ["deck", "summary"],
@@ -2935,6 +3101,14 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert config.role == :story_synthesis
     assert config.max_tokens == 4096
     refusing_story_synthesis_agent(config, packet, ctx)
+  end
+
+  defp story_synthesis_title(packet) do
+    case packet.committed_story_state.title do
+      [title | _] when is_binary(title) and title != "" -> title
+      title when is_binary(title) and title != "" -> title
+      _ -> packet.story_key
+    end
   end
 
   defp stub_story_synthesis(packet) do
@@ -2991,12 +3165,16 @@ defmodule Primeradiant.DaemonNewsReplayTest do
                 "provenance_refs" => ["fieldprov:test"]
               },
               "materiality" => "material",
-              "source_posture" => %{"state" => "unavailable", "reason" => "not_supplied"},
-              "source_weight" => %{"state" => "unavailable", "reason" => "not_supplied"}
+              "source_posture" => %{"state" => "complete", "value" => "reported"},
+              "source_weight" => %{"state" => "complete", "value" => 1.0}
             }
           end),
         "topic_salience" => %{
-          "salience_explanation" => "clinic triage story has local service salience",
+          "salience_explanation" => %{
+            "text" => "clinic triage story has local service salience",
+            "state" => "complete",
+            "provenance_refs" => ["fieldprov:test"]
+          },
           "global_salience" => "source_count",
           "flynn_priority" => "unavailable",
           "durable_topic_nodes" => %{
@@ -3012,11 +3190,16 @@ defmodule Primeradiant.DaemonNewsReplayTest do
           "provenance_refs" => ["fieldprov:test"]
         },
         "field_completeness" => %{
+          "title" => "complete",
           "deck" => "complete",
           "summary" => "complete",
+          "key_claims" => "complete",
+          "source_coverage" => "complete",
+          "topic_salience" => "complete",
           "canonical_public_url" => "source_level",
           "source_label" => "source_level",
-          "publication" => "source_level"
+          "publication" => "source_level",
+          "overall" => "complete"
         }
       },
       model: "stub-story-synthesis-agent",

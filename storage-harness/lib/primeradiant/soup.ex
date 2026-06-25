@@ -176,7 +176,12 @@ defmodule Primeradiant.Soup do
   defp item(state, story) do
     case current_story_card_version(state, story.id) do
       nil -> incomplete_story_card_item(state, story)
-      card -> story_card_item(state, story, card)
+      card ->
+        if complete_story_card?(card) do
+          story_card_item(state, story, card)
+        else
+          incomplete_story_card_item(state, story, card)
+        end
     end
   end
 
@@ -186,7 +191,18 @@ defmodule Primeradiant.Soup do
     inputs = story_inputs(state, story.id)
     evidence_refs = evidence_refs(state, story.id)
     magazine_sources = source_coverage(state, story, inputs, evidence_refs)
-    claims = key_claims_for(state, card.id)
+    complete_card? = complete_story_card?(card)
+    claims = if complete_card?, do: key_claims_for(state, card.id), else: []
+    coverage_projection_rows = if complete_card?, do: coverage, else: []
+    source_links =
+      if complete_card? do
+        coverage
+        |> Enum.filter(&reader_visible_source_link?/1)
+        |> Enum.map(&source_link_projection/1)
+      else
+        []
+      end
+
     change_set = change_set_for(state, card.id)
     reader_delta = reader_delta_for(state, card.id)
 
@@ -202,11 +218,8 @@ defmodule Primeradiant.Soup do
       deck: card.deck,
       summary: card.summary,
       key_claims: Enum.map(claims, &claim_projection/1),
-      source_coverage: Enum.map(coverage, &coverage_projection/1),
-      source_links:
-        coverage
-        |> Enum.filter(&reader_visible_source_link?/1)
-        |> Enum.map(&source_link_projection/1),
+      source_coverage: Enum.map(coverage_projection_rows, &coverage_projection/1),
+      source_links: source_links,
       provenance:
         Map.merge(card.provenance || %{}, %{
           "projection_id" => projection_id(state),
@@ -247,23 +260,24 @@ defmodule Primeradiant.Soup do
     }
   end
 
-  defp incomplete_story_card_item(state, story) do
+  defp incomplete_story_card_item(state, story, card \\ nil) do
     provenance_refs = ["story-card:unavailable:#{story.id}"]
     events = state.story_events |> Enum.filter(&(&1.story_id == story.id))
     inputs = story_inputs(state, story.id)
     evidence_refs = evidence_refs(state, story.id)
     magazine_sources = source_coverage(state, story, inputs, evidence_refs)
-    summary = unavailable_text_field("story_card_not_synthesized", provenance_refs)
-    deck = unavailable_text_field("story_card_not_synthesized", provenance_refs)
+    reason = if card, do: "story_card_not_complete", else: "story_card_not_synthesized"
+    summary = unavailable_text_field(reason, provenance_refs)
+    deck = unavailable_text_field(reason, provenance_refs)
 
     %{
       story_id: story.id,
       story_version: story.version,
-      story_card_version_id: nil,
-      card_version: nil,
-      change_kind: "story_card_unavailable",
+      story_card_version_id: card && card.id,
+      card_version: card && card.card_version,
+      change_kind: if(card, do: card.refresh_reason, else: "story_card_unavailable"),
       section: "story_card",
-      title: unavailable_text_field("story_card_not_synthesized", provenance_refs),
+      title: unavailable_text_field(reason, provenance_refs),
       deck: deck,
       summary: summary,
       admitted_item_ids: Enum.map(inputs, & &1.id),
@@ -273,20 +287,23 @@ defmodule Primeradiant.Soup do
       provenance: %{
         "projection_id" => projection_id(state),
         "soup_cursor" => cursor_for(state),
-        "story_card_version_id" => nil,
-        "producing_agent_run_ids" => [],
+        "story_card_version_id" => card && card.id,
+        "producing_agent_run_ids" => if(card, do: [card.producing_agent_run_id], else: []),
         "state" => "incomplete",
-        "reason" => "story_card_not_synthesized"
-      },
+        "reason" => reason,
+        "suppressed_story_card_status" => card && card.status
+      }
+      |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+      |> Map.new(),
       projection_provenance:
-        magazine_projection_provenance(state, story, inputs, nil, magazine_sources),
+        magazine_projection_provenance(state, story, inputs, card && card.id, magazine_sources),
       freshness: freshness_for(story),
       status: "incomplete",
-      refresh_reason: "story_card_not_synthesized",
+      refresh_reason: reason,
       timestamps: %{
         story_first_seen_at: iso(story.first_observed_at),
         story_updated_at: iso(story.updated_at_story),
-        card_created_at: nil
+        card_created_at: card && iso(card.inserted_at)
       },
       field_completeness: %{
         "title" => "unavailable",
@@ -298,7 +315,7 @@ defmodule Primeradiant.Soup do
       changed_since_seen: changed_since_seen_projection(nil),
       topic_salience: %{
         "state" => "unavailable",
-        "reason" => "story_card_not_synthesized"
+        "reason" => reason
       },
       ranking: %{
         score: ranking_score(story, state.story_events),
@@ -372,6 +389,8 @@ defmodule Primeradiant.Soup do
 
   defp reader_visible_source_link?(row),
     do: reader_visible_contribution_reason?(row.contribution_reason)
+
+  defp complete_story_card?(card), do: card.status == "complete"
 
   defp reader_visible_contribution_reason?(%{"state" => "complete", "text" => text})
        when is_binary(text) and text != "",
@@ -611,19 +630,20 @@ defmodule Primeradiant.Soup do
   defp article_story_edge(state, story, input) do
     input_node_ids =
       state.soup_nodes
-      |> Enum.filter(&(&1.input_id == input.id))
+      |> Enum.filter(&(&1.input_id == input.id and &1.state == "active"))
       |> Enum.map(& &1.id)
       |> MapSet.new()
 
     story_node_ids =
       state.soup_nodes
-      |> Enum.filter(&(&1.story_id == story.id))
+      |> Enum.filter(&(&1.story_id == story.id and &1.state == "active"))
       |> Enum.map(& &1.id)
       |> MapSet.new()
 
     state.edges
     |> Enum.filter(fn edge ->
-      edge.attrs["edge_contract"] == "article_story_contribution" and
+      edge.status == "committed" and
+        edge.attrs["edge_contract"] == "article_story_contribution" and
         MapSet.member?(input_node_ids, edge.from_node_id) and
         MapSet.member?(story_node_ids, edge.to_node_id)
     end)
