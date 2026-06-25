@@ -29,7 +29,7 @@ defmodule Primeradiant.Soup do
 
     items =
       if blockers == [] do
-        state |> visible_stories() |> Enum.map(&item(state, &1)) |> Enum.take(limit)
+        state |> feed_visible_stories() |> Enum.map(&item(state, &1)) |> Enum.take(limit)
       else
         []
       end
@@ -175,7 +175,9 @@ defmodule Primeradiant.Soup do
 
   defp item(state, story) do
     case current_story_card_version(state, story.id) do
-      nil -> incomplete_story_card_item(state, story)
+      nil ->
+        incomplete_story_card_item(state, story)
+
       card ->
         if complete_story_card?(card) do
           story_card_item(state, story, card)
@@ -194,6 +196,7 @@ defmodule Primeradiant.Soup do
     complete_card? = complete_story_card?(card)
     claims = if complete_card?, do: key_claims_for(state, card.id), else: []
     coverage_projection_rows = if complete_card?, do: coverage, else: []
+
     source_links =
       if complete_card? do
         coverage
@@ -284,17 +287,18 @@ defmodule Primeradiant.Soup do
       key_claims: [],
       source_coverage: [],
       source_links: [],
-      provenance: %{
-        "projection_id" => projection_id(state),
-        "soup_cursor" => cursor_for(state),
-        "story_card_version_id" => card && card.id,
-        "producing_agent_run_ids" => if(card, do: [card.producing_agent_run_id], else: []),
-        "state" => "incomplete",
-        "reason" => reason,
-        "suppressed_story_card_status" => card && card.status
-      }
-      |> Enum.reject(fn {_key, value} -> is_nil(value) end)
-      |> Map.new(),
+      provenance:
+        %{
+          "projection_id" => projection_id(state),
+          "soup_cursor" => cursor_for(state),
+          "story_card_version_id" => card && card.id,
+          "producing_agent_run_ids" => if(card, do: [card.producing_agent_run_id], else: []),
+          "state" => "incomplete",
+          "reason" => reason,
+          "suppressed_story_card_status" => card && card.status
+        }
+        |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+        |> Map.new(),
       projection_provenance:
         magazine_projection_provenance(state, story, inputs, card && card.id, magazine_sources),
       freshness: freshness_for(story),
@@ -460,8 +464,27 @@ defmodule Primeradiant.Soup do
 
   defp projection_id(state), do: "story-cards:#{state.tenant_id}:#{epoch(state)}"
 
-  defp visible_stories(state),
-    do: Enum.sort_by(state.stories, & &1.updated_at_story, {:desc, DateTime})
+  defp feed_visible_stories(state) do
+    Enum.sort_by(
+      state.stories,
+      &{story_card_serving_rank(state, &1), &1.updated_at_story},
+      fn {left_rank, left_updated_at}, {right_rank, right_updated_at} ->
+        left_rank < right_rank or
+          (left_rank == right_rank and DateTime.compare(left_updated_at, right_updated_at) != :lt)
+      end
+    )
+  end
+
+  defp visible_stories(state) do
+    Enum.sort_by(state.stories, & &1.updated_at_story, {:desc, DateTime})
+  end
+
+  defp story_card_serving_rank(state, story) do
+    case current_story_card_version(state, story.id) do
+      %{status: "complete"} -> 0
+      _ -> 1
+    end
+  end
 
   defp story_inputs(state, story_id) do
     input_ids =

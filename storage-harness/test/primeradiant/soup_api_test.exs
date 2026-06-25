@@ -842,12 +842,59 @@ defmodule Primeradiant.SoupApiTest do
     })
 
     loaded = DurableSoupDb.load_tenant(tmp, state.tenant_id)
-    [loaded_item] = Soup.feed(loaded, %{"consumer" => "reporter", "projection" => "news-morning"}).items
+
+    [loaded_item] =
+      Soup.feed(loaded, %{"consumer" => "reporter", "projection" => "news-morning"}).items
 
     assert loaded_item.status == "incomplete"
     assert loaded_item.key_claims == []
     assert loaded_item.source_coverage == []
     assert loaded_item.source_links == []
+  end
+
+  test "feed ranks usable complete story cards above newer refused story-card product truth" do
+    state =
+      source_ready_state([
+        source_item("complete-card-product-truth", title: "Complete card product truth")
+      ])
+
+    [complete_story] = state.stories
+    [complete_card] = state.story_card_versions
+    newer_at = DateTime.add(complete_story.updated_at_story, 7 * 86_400, :second)
+
+    refused_story = %{
+      complete_story
+      | id: "00000000-0000-4000-8000-000000000421",
+        story_key: "refused-card-product-truth",
+        title: "Refused card product truth",
+        version: complete_story.version + 1_000,
+        updated_at_story: newer_at,
+        last_material_at: newer_at
+    }
+
+    refused_card = %{
+      complete_card
+      | id: "00000000-0000-4000-8000-000000000422",
+        story_id: refused_story.id,
+        story_version: refused_story.version,
+        card_version: 1,
+        status: "refused",
+        inserted_at: newer_at,
+        updated_at: newer_at
+    }
+
+    state = %{
+      state
+      | stories: [refused_story | state.stories],
+        story_card_versions: [refused_card | state.story_card_versions]
+    }
+
+    [top_item | _] =
+      Soup.feed(state, %{"consumer" => "reporter", "projection" => "news-morning"}).items
+
+    assert top_item.story_id == complete_story.id
+    assert top_item.status == "complete"
+    assert top_item.ranking.score < refused_story.version
   end
 
   defp source_ready_state(items) do
