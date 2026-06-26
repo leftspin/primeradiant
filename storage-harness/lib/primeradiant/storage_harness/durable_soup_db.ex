@@ -37,6 +37,7 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
         "BEGIN IMMEDIATE;",
         "PRAGMA defer_foreign_keys = ON;",
         schema_sql(),
+        tenant_revision_guard_sql(state.tenant_id, Map.get(attrs, :expected_tenant_revision)),
         clear_tenant_sql(state.tenant_id),
         replay_run_sql(state, attrs),
         rows_sql(:agent_runs, state.agent_runs),
@@ -312,6 +313,20 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
     end
   end
 
+  def tenant_revision(db_path, tenant_id) do
+    if File.regular?(db_path) do
+      db_path
+      |> sqlite!("""
+      SELECT COUNT(*) || ':' || COALESCE(MAX(inserted_at || ':' || id), '')
+      FROM replay_runs
+      WHERE tenant_id = #{sql_quote(tenant_id)};
+      """)
+      |> String.trim()
+    else
+      ""
+    end
+  end
+
   def merge_state(%Primeradiant.StorageHarness.State{} = prior, current) do
     %Primeradiant.StorageHarness.State{
       prior
@@ -560,6 +575,28 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
     @tables
     |> Enum.map(fn table -> "DELETE FROM #{table} WHERE tenant_id = #{sql_quote(tenant_id)};" end)
     |> Enum.join("\n")
+  end
+
+  defp tenant_revision_guard_sql(_tenant_id, nil), do: ""
+
+  defp tenant_revision_guard_sql(tenant_id, expected_revision) do
+    """
+    CREATE TEMP TABLE IF NOT EXISTS primeradiant_revision_guard (
+      ok INTEGER NOT NULL CHECK (ok = 1)
+    );
+    DELETE FROM primeradiant_revision_guard;
+    INSERT INTO primeradiant_revision_guard(ok)
+    SELECT CASE
+      WHEN (
+        SELECT COUNT(*) || ':' || COALESCE(MAX(inserted_at || ':' || id), '')
+        FROM replay_runs
+        WHERE tenant_id = #{sql_quote(tenant_id)}
+      ) = #{sql_quote(expected_revision)}
+      THEN 1
+      ELSE 0
+    END;
+    DROP TABLE primeradiant_revision_guard;
+    """
   end
 
   defp replay_run_sql(state, attrs) do

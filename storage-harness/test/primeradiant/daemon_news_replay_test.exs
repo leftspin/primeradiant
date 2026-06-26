@@ -83,6 +83,141 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert length(report.admitted_source_items) == 2
   end
 
+  test "story backfill advances already admitted daemon news inputs without source reingest" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-daemon-news-story-backfill-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    db_path = Path.join(tmp, "news.db")
+    soup_db_path = Path.join(tmp, "primeradiant-soup.sqlite3")
+    raw_path = Path.join(tmp, "archive.jsonl")
+
+    rows = [
+      envelope(
+        "Civic Clinic triage open",
+        "Civic Clinic triage is open venue is north speaker is desk."
+      ),
+      envelope(
+        "Civic Clinic triage update",
+        "Civic Clinic triage is closed venue is north speaker is desk."
+      )
+    ]
+
+    offsets = write_archive!(raw_path, rows)
+    create_source_db!(db_path, raw_path, offsets)
+
+    {:ok, _state, _report} =
+      DaemonNewsReplay.replay(
+        db_path: db_path,
+        soup_db_path: soup_db_path,
+        tenant_id: @tenant,
+        actor_id: "flynn"
+      )
+
+    loaded = DurableSoupDb.load_tenant(soup_db_path, @tenant)
+    before_inputs = length(loaded.inputs)
+    latest_input = Enum.max_by(loaded.inputs, &DateTime.to_unix(&1.observed_at, :microsecond))
+
+    {backfilled, report} =
+      LiveStoryAgentLoop.run_unstoried_inputs(loaded, "flynn",
+        limit: 1,
+        adapter: &stub_backfill_story_agent/3
+      )
+
+    DurableSoupDb.persist!(soup_db_path, backfilled, %{
+      source_kind: "admitted-soup-story-backfill",
+      source_db_path: soup_db_path,
+      source_row_count: 0
+    })
+
+    assert report.source_behavior == :story_backfill_over_admitted_soup
+    assert report.source_admission_performed == false
+    assert report.candidate_count == 1
+    assert report.story_events == 1
+    assert length(backfilled.inputs) == before_inputs
+    assert length(backfilled.story_events) == 1
+    assert hd(backfilled.story_events).input_id == latest_input.id
+    assert hd(backfilled.story_events).observed_at == latest_input.observed_at
+
+    ready =
+      Soup.ready(backfilled, %{
+        "consumer" => "reporter",
+        "projection" => "news-morning"
+      })
+
+    assert ready.freshness.latest_story_event_at == DateTime.to_iso8601(latest_input.observed_at)
+    assert DurableSoupDb.table_count(soup_db_path, "inputs", @tenant) == before_inputs
+    assert DurableSoupDb.table_count(soup_db_path, "story_events", @tenant) == 1
+  end
+
+  test "story backfill persist aborts when admitted soup changed after load" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-daemon-news-story-backfill-revision-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    db_path = Path.join(tmp, "news.db")
+    soup_db_path = Path.join(tmp, "primeradiant-soup.sqlite3")
+    raw_path = Path.join(tmp, "archive.jsonl")
+
+    rows = [
+      envelope(
+        "Civic Clinic triage open",
+        "Civic Clinic triage is open venue is north speaker is desk."
+      ),
+      envelope(
+        "Civic Clinic triage update",
+        "Civic Clinic triage is closed venue is north speaker is desk."
+      )
+    ]
+
+    offsets = write_archive!(raw_path, rows)
+    create_source_db!(db_path, raw_path, offsets)
+
+    {:ok, _state, _report} =
+      DaemonNewsReplay.replay(
+        db_path: db_path,
+        soup_db_path: soup_db_path,
+        tenant_id: @tenant,
+        actor_id: "flynn"
+      )
+
+    stale_revision = DurableSoupDb.tenant_revision(soup_db_path, @tenant)
+    loaded = DurableSoupDb.load_tenant(soup_db_path, @tenant)
+
+    DurableSoupDb.persist!(soup_db_path, loaded, %{
+      source_kind: "concurrent-test-writer",
+      source_db_path: soup_db_path,
+      source_row_count: 0
+    })
+
+    {backfilled, _report} =
+      LiveStoryAgentLoop.run_unstoried_inputs(loaded, "flynn",
+        limit: 1,
+        adapter: &stub_backfill_story_agent/3
+      )
+
+    assert_raise RuntimeError, ~r/sqlite durable soup operation failed/, fn ->
+      DurableSoupDb.persist!(soup_db_path, backfilled, %{
+        source_kind: "admitted-soup-story-backfill",
+        source_db_path: soup_db_path,
+        source_row_count: 0,
+        expected_tenant_revision: stale_revision
+      })
+    end
+
+    assert DurableSoupDb.table_count(soup_db_path, "story_events", @tenant) == 0
+  end
+
   test "changed stories report is regenerated from persisted soup database" do
     tmp =
       Path.join(
@@ -1437,9 +1572,12 @@ defmodule Primeradiant.DaemonNewsReplayTest do
       |> List.last()
 
     assert reloaded_run.scope["attempted_model_route"] == "test://invalid-story-synthesis"
+
     assert reloaded_run.scope["model_route"] ==
              "internal://story-synthesis/story_synthesis_invalid_model_output"
+
     assert reloaded_run.scope["final_story_synthesis_source"] == "refused"
+
     assert reloaded_run.scope["fallback_gap"] ==
              "no_supported_codex_oauth_spark_story_synthesis_route"
 
@@ -2167,8 +2305,10 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert failed_report["status"] == "source_db_cursor_read_failed"
     assert failed_report["failed_stage"] == "cursor_catchup"
     assert failed_report["after_cursor"] == "2026-06-18 18:23:59|7765"
+
     assert get_in(failed_report, ["error", "command"]) ==
              "emit_subspace_daemon_cursor_event_packages.sh"
+
     assert get_in(failed_report, ["error", "message"]) =~ "file is not a database"
 
     failure_manifest = failed_report["failure_manifest_path"] |> File.read!() |> Jason.decode!()
@@ -2271,8 +2411,10 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert failed_report["failed_stage"] == "sqlite_wakeup_cursor_import"
     assert failed_report["after_cursor"] == "2026-06-18 18:23:59|7765"
     assert failed_report["pass"] == 1
+
     assert get_in(failed_report, ["error", "command"]) ==
              "emit_subspace_daemon_cursor_event_packages.sh"
+
     assert get_in(failed_report, ["error", "exit_status"]) == 11
     assert get_in(failed_report, ["error", "message"]) =~ "authorization denied"
 
@@ -2943,6 +3085,14 @@ defmodule Primeradiant.DaemonNewsReplayTest do
   defp stub_story_agent(%{role: :story_synthesis}, packet, _ctx),
     do: stub_story_synthesis(packet)
 
+  defp stub_backfill_story_agent(%{role: :story_synthesis}, packet, _ctx) do
+    packet
+    |> stub_story_synthesis()
+    |> put_in([:output, "title", "text"], "Civic Clinic triage")
+  end
+
+  defp stub_backfill_story_agent(config, packet, ctx), do: stub_story_agent(config, packet, ctx)
+
   defp capturing_bounded_packet_story_agent(%{role: :story_synthesis}, packet, _ctx) do
     send(self(), {:story_synthesis_packet, packet})
     stub_story_synthesis(packet)
@@ -3318,6 +3468,7 @@ defmodule Primeradiant.DaemonNewsReplayTest do
   defp refusing_story_synthesis_agent_with_config_assertion(config, packet, ctx) do
     assert config.role == :story_synthesis
     assert config.max_tokens == 4096
+
     assert get_in(config.output_schema, [:topic_salience, :salience_explanation, :state]) ==
              "complete"
 
