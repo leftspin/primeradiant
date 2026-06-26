@@ -624,6 +624,87 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert Enum.all?(chain.evidence_refs, &(&1 in evidence_labels))
   end
 
+  test "story agent event replay reports malformed durable soup precondition before persist" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-daemon-news-story-agent-preflight-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    soup_db_path = Path.join(tmp, "primeradiant-event-soup.sqlite3")
+    raw_path = Path.join(tmp, "archive.jsonl")
+
+    first_row =
+      envelope(
+        "Agent Civic Clinic triage open",
+        "Agent Civic Clinic triage is open venue is north speaker is desk."
+      )
+
+    [{first_offset, first_length}] = write_archive!(raw_path, [first_row])
+
+    first_event =
+      committed_source_item_event(
+        "event-agent-news-1",
+        raw_path,
+        first_offset,
+        first_length,
+        first_row
+      )
+
+    {:ok, _state, _report} =
+      DaemonNewsEvent.consume_event(first_event,
+        soup_db_path: soup_db_path,
+        tenant_id: @tenant,
+        actor_id: "flynn",
+        story_agent_loop?: true,
+        story_agent_opts: [adapter: &stub_story_agent/3]
+      )
+
+    [card] =
+      sqlite_json_rows!(
+        soup_db_path,
+        "SELECT producing_agent_run_id FROM story_card_versions LIMIT 1;"
+      )
+
+    {_, 0} =
+      System.cmd("sqlite3", [
+        soup_db_path,
+        "PRAGMA foreign_keys = OFF; DELETE FROM agent_runs WHERE id = '#{card["producing_agent_run_id"]}';"
+      ])
+
+    second_row =
+      envelope(
+        "Agent Civic Clinic triage update",
+        "Agent Civic Clinic triage added south desk overflow coverage."
+      )
+
+    [{second_offset, second_length}] = write_archive!(raw_path, [second_row])
+
+    second_event =
+      committed_source_item_event(
+        "event-agent-news-2",
+        raw_path,
+        second_offset,
+        second_length,
+        second_row
+      )
+
+    assert_raise RuntimeError,
+                 ~r/durable soup foreign-key precondition failed.*story_card_versions.*agent_runs/s,
+                 fn ->
+                   DaemonNewsEvent.consume_event(second_event,
+                     soup_db_path: soup_db_path,
+                     tenant_id: @tenant,
+                     actor_id: "flynn",
+                     story_agent_loop?: true,
+                     story_agent_opts: [adapter: &stub_story_agent/3]
+                   )
+                 end
+  end
+
   test "Google News event source coverage uses original publisher identity when supplied" do
     tmp =
       Path.join(

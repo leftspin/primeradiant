@@ -29,6 +29,7 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
 
   def persist!(db_path, state, attrs \\ %{}) do
     db_path |> Path.dirname() |> File.mkdir_p!()
+    validate_existing_foreign_keys!(db_path)
 
     sql =
       [
@@ -569,6 +570,25 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
     |> sqlite!(sql)
     |> String.split("\n", trim: true)
     |> Enum.map(&Jason.decode!/1)
+  end
+
+  defp validate_existing_foreign_keys!(db_path) do
+    if File.regular?(db_path) do
+      violations =
+        db_path
+        |> sqlite!("""
+        PRAGMA foreign_keys = ON;
+        PRAGMA foreign_key_check;
+        """)
+        |> String.split("\n", trim: true)
+
+      if violations != [] do
+        raise """
+        durable soup foreign-key precondition failed for #{db_path}; repair the snapshot before replaying story agents:
+        #{Enum.join(violations, "\n")}
+        """
+      end
+    end
   end
 
   defp clear_tenant_sql(tenant_id) do
