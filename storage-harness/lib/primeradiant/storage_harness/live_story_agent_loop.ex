@@ -98,6 +98,25 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
      }}
   end
 
+  def run_unstoried_inputs(%State{} = state, actor_id, opts \\ []) do
+    limit = Keyword.get(opts, :limit, 8)
+
+    admissions =
+      state
+      |> unstoried_inputs()
+      |> Enum.take(limit)
+      |> Enum.map(&admission_from_input/1)
+
+    {state, report} = run(state, admissions, actor_id, opts)
+
+    {state,
+     Map.merge(report, %{
+       source_behavior: :story_backfill_over_admitted_soup,
+       source_admission_performed: false,
+       candidate_count: length(admissions)
+     })}
+  end
+
   defp story_meaning_proof?(state, chains) do
     production_agent_runs =
       Enum.filter(state.agent_runs, fn run ->
@@ -116,6 +135,55 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
       length(state.stories) == 0 and
       length(state.proposals) == 0 and
       length(state.graph_commits) == 0
+  end
+
+  defp unstoried_inputs(state) do
+    storied_input_ids = MapSet.new(Enum.map(state.story_events, & &1.input_id))
+
+    state.inputs
+    |> Enum.reject(&MapSet.member?(storied_input_ids, &1.id))
+    |> Enum.sort_by(&{iso8601(&1.observed_at), iso8601(&1.inserted_at), &1.id}, :desc)
+  end
+
+  defp iso8601(%DateTime{} = value), do: DateTime.to_iso8601(value)
+  defp iso8601(_value), do: ""
+
+  defp admission_from_input(input) do
+    normalized = input.normalized || %{}
+
+    %{
+      event: :source_admitted,
+      admission_status: "admitted",
+      source_ref: normalized["source_ref"] || Admission.input_ref(input),
+      source_type: input.source_type,
+      external_id: input.external_id,
+      adapter_version: normalized["source_mode"],
+      source_provenance: %{
+        ingestion_run_key: normalized["ingestion_run_key"],
+        source_name: normalized["source_name"],
+        source_actor: normalized["source_actor"] || %{},
+        canonical_uri: normalized["canonical_uri"],
+        raw_object_uri: normalized["raw_object_uri"]
+      },
+      visibility: input.acl,
+      observed_at: input.observed_at,
+      content_sha256: input.content_sha256,
+      content_span_refs: normalized["content_span_refs"] || [],
+      evidence_refs: normalized["evidence_refs"] || [],
+      normalized_evidence: %{
+        title: input.title,
+        source_type: input.source_type,
+        external_id: input.external_id,
+        object_uri: input.object_uri,
+        content_hash: input.content_sha256
+      },
+      story_identity: nil,
+      story_classification: nil,
+      materiality_decision: nil,
+      relevance_decision: nil,
+      narrative_dedupe: nil,
+      meaning_proof: :not_ingest_owned
+    }
   end
 
   def invoke_live_agent(config, packet, _ctx) do
@@ -458,7 +526,8 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
         malformed_story_synthesis_refusal_adapter(adapter)
       end
 
-    {state, run, synthesis} = invoke_agent(state, config, packet, actor_id, adapter, correlation_id)
+    {state, run, synthesis} =
+      invoke_agent(state, config, packet, actor_id, adapter, correlation_id)
 
     case validate_story_synthesis_output(synthesis.output, packet, run) do
       :ok ->
@@ -688,7 +757,8 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
   defp story_synthesis_source_coverage_row?(row) do
     case row do
       %{"source_ref" => source_ref} when is_binary(source_ref) and source_ref != "" ->
-        optional_contribution_reason?(row["contribution_reason"]) and materiality?(row["materiality"]) and
+        optional_contribution_reason?(row["contribution_reason"]) and
+          materiality?(row["materiality"]) and
           model_state_map?(row["source_posture"]) and model_state_map?(row["source_weight"])
 
       _ ->
@@ -722,17 +792,22 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
 
   defp story_synthesis_field_completeness?(completeness) when is_map(completeness) do
     allowed_keys =
-      MapSet.new(~w(title deck summary key_claims topic_salience canonical_public_url source_label publication source_coverage overall))
+      MapSet.new(
+        ~w(title deck summary key_claims topic_salience canonical_public_url source_label publication source_coverage overall)
+      )
 
-    required_keys = MapSet.new(~w(title deck summary key_claims source_coverage topic_salience overall))
+    required_keys =
+      MapSet.new(~w(title deck summary key_claims source_coverage topic_salience overall))
+
     source_level_keys = MapSet.new(~w(canonical_public_url source_label publication))
 
     supplied_keys = MapSet.new(Map.keys(completeness))
 
     MapSet.subset?(required_keys, supplied_keys) and
       Enum.all?(completeness, fn {key, value} ->
-      is_binary(key) and MapSet.member?(allowed_keys, key) and
-        ((MapSet.member?(source_level_keys, key) and value == "source_level") or value == "complete")
+        is_binary(key) and MapSet.member?(allowed_keys, key) and
+          ((MapSet.member?(source_level_keys, key) and value == "source_level") or
+             value == "complete")
       end)
   end
 
@@ -755,7 +830,11 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
 
   defp optional_contribution_reason?(nil), do: true
 
-  defp optional_contribution_reason?(%{"state" => "complete", "text" => text, "provenance_refs" => refs})
+  defp optional_contribution_reason?(%{
+         "state" => "complete",
+         "text" => text,
+         "provenance_refs" => refs
+       })
        when is_binary(text) and text != "" and is_list(refs) and refs != [],
        do: true
 
@@ -1016,7 +1095,7 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
         tenant_id: state.tenant_id,
         node_key: source_ref,
         node_type: "input",
-        title: input.title || source_ref,
+        title: scalar_title(input.title) || source_ref,
         state: "active",
         input_id: input.id,
         proposal_id: proposal.id,
@@ -1778,7 +1857,9 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
     |> case do
       sources when is_list(sources) ->
         sources
-        |> Enum.map(fn source -> Map.get(source, :source_ref) || Map.get(source, "source_ref") end)
+        |> Enum.map(fn source ->
+          Map.get(source, :source_ref) || Map.get(source, "source_ref")
+        end)
         |> Enum.reject(&is_nil/1)
         |> Enum.uniq()
 
@@ -2196,13 +2277,25 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
             reason: "string or null; required when state is unavailable/refused",
             provenance_refs: ["string"]
           },
-          materiality: "material | nonmaterial | unavailable",
-          source_posture: %{state: "complete | unavailable", value: "string or null"},
-          source_weight: %{state: "complete | unavailable", value: "number or null"}
+          materiality: "material | nonmaterial",
+          source_posture: %{
+            state: "complete | unavailable | refused",
+            value: "string or null; required when state is complete",
+            reason: "string or null; required when state is unavailable/refused"
+          },
+          source_weight: %{
+            state: "complete | unavailable | refused",
+            value: "number or null; required when state is complete",
+            reason: "string or null; required when state is unavailable/refused"
+          }
         }
       ],
       topic_salience: %{
-        salience_explanation: "story-to-topic salience explanation or unavailable state",
+        salience_explanation: %{
+          text: "story-to-topic salience explanation",
+          state: "complete",
+          provenance_refs: ["string"]
+        },
         global_salience: "hint",
         flynn_priority: "hint"
       },
@@ -2281,7 +2374,13 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
     }
   end
 
-  defp story_title(output, input), do: output["title"] || input.title || input.external_id
+  defp story_title(output, input) do
+    scalar_title(output["title"]) || scalar_title(input.title) || input.external_id
+  end
+
+  defp scalar_title(value) when is_binary(value) and value != "", do: value
+  defp scalar_title([value]) when is_binary(value) and value != "", do: value
+  defp scalar_title(_value), do: nil
 
   defp classification(output, default) do
     value = to_string(output["classification"] || default)

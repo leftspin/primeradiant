@@ -83,6 +83,141 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert length(report.admitted_source_items) == 2
   end
 
+  test "story backfill advances already admitted daemon news inputs without source reingest" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-daemon-news-story-backfill-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    db_path = Path.join(tmp, "news.db")
+    soup_db_path = Path.join(tmp, "primeradiant-soup.sqlite3")
+    raw_path = Path.join(tmp, "archive.jsonl")
+
+    rows = [
+      envelope(
+        "Civic Clinic triage open",
+        "Civic Clinic triage is open venue is north speaker is desk."
+      ),
+      envelope(
+        "Civic Clinic triage update",
+        "Civic Clinic triage is closed venue is north speaker is desk."
+      )
+    ]
+
+    offsets = write_archive!(raw_path, rows)
+    create_source_db!(db_path, raw_path, offsets)
+
+    {:ok, _state, _report} =
+      DaemonNewsReplay.replay(
+        db_path: db_path,
+        soup_db_path: soup_db_path,
+        tenant_id: @tenant,
+        actor_id: "flynn"
+      )
+
+    loaded = DurableSoupDb.load_tenant(soup_db_path, @tenant)
+    before_inputs = length(loaded.inputs)
+    latest_input = Enum.max_by(loaded.inputs, &DateTime.to_unix(&1.observed_at, :microsecond))
+
+    {backfilled, report} =
+      LiveStoryAgentLoop.run_unstoried_inputs(loaded, "flynn",
+        limit: 1,
+        adapter: &stub_backfill_story_agent/3
+      )
+
+    DurableSoupDb.persist!(soup_db_path, backfilled, %{
+      source_kind: "admitted-soup-story-backfill",
+      source_db_path: soup_db_path,
+      source_row_count: 0
+    })
+
+    assert report.source_behavior == :story_backfill_over_admitted_soup
+    assert report.source_admission_performed == false
+    assert report.candidate_count == 1
+    assert report.story_events == 1
+    assert length(backfilled.inputs) == before_inputs
+    assert length(backfilled.story_events) == 1
+    assert hd(backfilled.story_events).input_id == latest_input.id
+    assert hd(backfilled.story_events).observed_at == latest_input.observed_at
+
+    ready =
+      Soup.ready(backfilled, %{
+        "consumer" => "reporter",
+        "projection" => "news-morning"
+      })
+
+    assert ready.freshness.latest_story_event_at == DateTime.to_iso8601(latest_input.observed_at)
+    assert DurableSoupDb.table_count(soup_db_path, "inputs", @tenant) == before_inputs
+    assert DurableSoupDb.table_count(soup_db_path, "story_events", @tenant) == 1
+  end
+
+  test "story backfill persist aborts when admitted soup changed after load" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-daemon-news-story-backfill-revision-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    db_path = Path.join(tmp, "news.db")
+    soup_db_path = Path.join(tmp, "primeradiant-soup.sqlite3")
+    raw_path = Path.join(tmp, "archive.jsonl")
+
+    rows = [
+      envelope(
+        "Civic Clinic triage open",
+        "Civic Clinic triage is open venue is north speaker is desk."
+      ),
+      envelope(
+        "Civic Clinic triage update",
+        "Civic Clinic triage is closed venue is north speaker is desk."
+      )
+    ]
+
+    offsets = write_archive!(raw_path, rows)
+    create_source_db!(db_path, raw_path, offsets)
+
+    {:ok, _state, _report} =
+      DaemonNewsReplay.replay(
+        db_path: db_path,
+        soup_db_path: soup_db_path,
+        tenant_id: @tenant,
+        actor_id: "flynn"
+      )
+
+    stale_revision = DurableSoupDb.tenant_revision(soup_db_path, @tenant)
+    loaded = DurableSoupDb.load_tenant(soup_db_path, @tenant)
+
+    DurableSoupDb.persist!(soup_db_path, loaded, %{
+      source_kind: "concurrent-test-writer",
+      source_db_path: soup_db_path,
+      source_row_count: 0
+    })
+
+    {backfilled, _report} =
+      LiveStoryAgentLoop.run_unstoried_inputs(loaded, "flynn",
+        limit: 1,
+        adapter: &stub_backfill_story_agent/3
+      )
+
+    assert_raise RuntimeError, ~r/sqlite durable soup operation failed/, fn ->
+      DurableSoupDb.persist!(soup_db_path, backfilled, %{
+        source_kind: "admitted-soup-story-backfill",
+        source_db_path: soup_db_path,
+        source_row_count: 0,
+        expected_tenant_revision: stale_revision
+      })
+    end
+
+    assert DurableSoupDb.table_count(soup_db_path, "story_events", @tenant) == 0
+  end
+
   test "changed stories report is regenerated from persisted soup database" do
     tmp =
       Path.join(
@@ -2186,6 +2321,228 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert before_stat.size == after_stat.size
   end
 
+  test "Subspace cursor reader records source DB read failure as red manifest" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-daemon-news-cursor-failure-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    source_db = Path.join(tmp, "not-a-daemon.sqlite3")
+    package_root = Path.join(tmp, "cursor-packages")
+    File.write!(source_db, "not sqlite")
+
+    cursor_script = Path.expand("scripts/r1/emit_subspace_daemon_cursor_event_packages.sh")
+
+    {output, status} =
+      System.cmd(
+        cursor_script,
+        [
+          "--source-db",
+          source_db,
+          "--tenant",
+          @tenant,
+          "--package-root",
+          package_root,
+          "--after-cursor",
+          "2026-06-18 18:23:59|7765",
+          "--limit",
+          "10",
+          "--run-id",
+          "cursor-failure-test"
+        ],
+        stderr_to_stdout: true
+      )
+
+    assert status != 0
+    assert output =~ "source DB cursor read failed"
+
+    manifest = Path.join(package_root, "manifest.json") |> File.read!() |> Jason.decode!()
+    assert manifest["status"] == "source_db_cursor_read_failed"
+    assert manifest["source_mode"] == "subspace_daemon_read_only_db_cursor"
+    assert manifest["after_cursor"] == "2026-06-18 18:23:59|7765"
+    assert manifest["next_cursor"] == "2026-06-18 18:23:59|7765"
+    assert manifest["emitted_count"] == 0
+    assert manifest["packages"] == []
+    assert get_in(manifest, ["error", "command"]) == "sqlite3 -readonly"
+    assert is_integer(get_in(manifest, ["error", "exit_status"]))
+    assert get_in(manifest, ["error", "message"]) =~ "file is not a database"
+  end
+
+  test "live watcher records failed report when catchup cursor read fails" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-live-watch-cursor-failure-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    source_db = Path.join(tmp, "not-a-daemon.sqlite3")
+    state_root = Path.join(tmp, "state")
+    File.write!(source_db, "not sqlite")
+    File.mkdir_p!(state_root)
+    File.write!(Path.join(state_root, "cursor.txt"), "2026-06-18 18:23:59|7765\n")
+
+    watcher_script = Path.expand("scripts/r1/live_subspace_daemon_watcher_once.sh")
+
+    {output, status} =
+      System.cmd(
+        watcher_script,
+        [
+          "--source-db",
+          source_db,
+          "--tenant",
+          @tenant,
+          "--state-root",
+          state_root,
+          "--eurisko-target",
+          "clu@eurisko",
+          "--eurisko-repo",
+          "/home/clu/src/primeradiant",
+          "--ssh-key",
+          source_db,
+          "--run-id",
+          "live-cursor-failure-test",
+          "--limit",
+          "10"
+        ],
+        stderr_to_stdout: true
+      )
+
+    assert status != 0
+    assert output =~ "live watcher cursor catchup failed"
+
+    failed_report =
+      Path.join(state_root, "live-cursor-failure-test-failed-report.json")
+      |> File.read!()
+      |> Jason.decode!()
+
+    assert failed_report["status"] == "source_db_cursor_read_failed"
+    assert failed_report["failed_stage"] == "cursor_catchup"
+    assert failed_report["after_cursor"] == "2026-06-18 18:23:59|7765"
+
+    assert get_in(failed_report, ["error", "command"]) ==
+             "emit_subspace_daemon_cursor_event_packages.sh"
+
+    assert get_in(failed_report, ["error", "message"]) =~ "file is not a database"
+
+    failure_manifest = failed_report["failure_manifest_path"] |> File.read!() |> Jason.decode!()
+    assert failure_manifest["status"] == "source_db_cursor_read_failed"
+    assert failure_manifest["next_cursor"] == "2026-06-18 18:23:59|7765"
+  end
+
+  test "SQLite file wakeup records failed report when cursor importer fails" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-daemon-news-watch-failure-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    source_db = Path.join(tmp, "source-news.db")
+    cursor_file = Path.join(tmp, "primeradiant/cursor.txt")
+    package_root = Path.join(tmp, "packages")
+    run_root = Path.join(tmp, "runs")
+    fake_emitter = Path.join(tmp, "fake-emitter.sh")
+
+    File.write!(source_db, "before")
+    File.mkdir_p!(Path.dirname(cursor_file))
+    File.write!(cursor_file, "2026-06-18 18:23:59|7765\n")
+
+    File.write!(fake_emitter, """
+    #!/usr/bin/env bash
+    set -euo pipefail
+    PACKAGE_ROOT=""
+    AFTER_CURSOR=""
+    RUN_ID=""
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --package-root) PACKAGE_ROOT="$2"; shift 2 ;;
+        --after-cursor) AFTER_CURSOR="$2"; shift 2 ;;
+        --run-id) RUN_ID="$2"; shift 2 ;;
+        *) shift 2 ;;
+      esac
+    done
+    mkdir -p "$PACKAGE_ROOT"
+    cat > "$PACKAGE_ROOT/manifest.json" <<JSON
+    {"run_id":"$RUN_ID","status":"source_db_cursor_read_failed","after_cursor":"$AFTER_CURSOR","next_cursor":"$AFTER_CURSOR","emitted_count":0,"packages":[],"error":{"command":"sqlite3 -readonly","exit_status":1,"message":"authorization denied"}}
+    JSON
+    echo "source DB cursor read failed; failure manifest: $PACKAGE_ROOT/manifest.json" >&2
+    echo "authorization denied" >&2
+    echo "$PACKAGE_ROOT/manifest.json" >&2
+    exit 11
+    """)
+
+    File.chmod!(fake_emitter, 0o755)
+
+    watcher_script = Path.expand("scripts/r1/watch_sqlite_wakeup.sh")
+
+    task =
+      Task.async(fn ->
+        System.cmd(
+          watcher_script,
+          [
+            "--source-db",
+            source_db,
+            "--tenant",
+            @tenant,
+            "--cursor-file",
+            cursor_file,
+            "--package-root",
+            package_root,
+            "--run-root",
+            run_root,
+            "--limit",
+            "10",
+            "--run-id",
+            "watch-failure-test",
+            "--timeout-seconds",
+            "8",
+            "--poll-interval-seconds",
+            "1",
+            "--emit-cursor-script",
+            fake_emitter
+          ],
+          stderr_to_stdout: true
+        )
+      end)
+
+    Process.sleep(1200)
+    File.write!(source_db, "after", [:append])
+
+    {output, status} = Task.await(task, 10_000)
+
+    assert status == 11
+    assert output =~ "SQLite wakeup cursor import failed"
+
+    failed_report =
+      Path.join(package_root, "wakeup-failed-report.json")
+      |> File.read!()
+      |> Jason.decode!()
+
+    assert failed_report["status"] == "source_db_cursor_read_failed"
+    assert failed_report["failed_stage"] == "sqlite_wakeup_cursor_import"
+    assert failed_report["after_cursor"] == "2026-06-18 18:23:59|7765"
+    assert failed_report["pass"] == 1
+
+    assert get_in(failed_report, ["error", "command"]) ==
+             "emit_subspace_daemon_cursor_event_packages.sh"
+
+    assert get_in(failed_report, ["error", "exit_status"]) == 11
+    assert get_in(failed_report, ["error", "message"]) =~ "authorization denied"
+
+    failure_manifest = failed_report["failure_manifest_path"] |> File.read!() |> Jason.decode!()
+    assert failure_manifest["status"] == "source_db_cursor_read_failed"
+    assert failure_manifest["next_cursor"] == "2026-06-18 18:23:59|7765"
+  end
+
   test "SQLite file wakeup runs read-only cursor importer without trusting file event" do
     tmp =
       Path.join(
@@ -2848,6 +3205,14 @@ defmodule Primeradiant.DaemonNewsReplayTest do
   defp stub_story_agent(%{role: :story_synthesis}, packet, _ctx),
     do: stub_story_synthesis(packet)
 
+  defp stub_backfill_story_agent(%{role: :story_synthesis}, packet, _ctx) do
+    packet
+    |> stub_story_synthesis()
+    |> put_in([:output, "title", "text"], "Civic Clinic triage")
+  end
+
+  defp stub_backfill_story_agent(config, packet, ctx), do: stub_story_agent(config, packet, ctx)
+
   defp capturing_bounded_packet_story_agent(%{role: :story_synthesis}, packet, _ctx) do
     send(self(), {:story_synthesis_packet, packet})
     stub_story_synthesis(packet)
@@ -3223,6 +3588,34 @@ defmodule Primeradiant.DaemonNewsReplayTest do
   defp refusing_story_synthesis_agent_with_config_assertion(config, packet, ctx) do
     assert config.role == :story_synthesis
     assert config.max_tokens == 4096
+
+    assert get_in(config.output_schema, [:topic_salience, :salience_explanation, :state]) ==
+             "complete"
+
+    assert get_in(config.output_schema, [:topic_salience, :salience_explanation, :text]) ==
+             "story-to-topic salience explanation"
+
+    assert get_in(config.output_schema, [
+             :topic_salience,
+             :salience_explanation,
+             :provenance_refs
+           ]) == ["string"]
+
+    assert get_in(config.output_schema, [:source_coverage, Access.at(0), :materiality]) ==
+             "material | nonmaterial"
+
+    assert get_in(config.output_schema, [:source_coverage, Access.at(0), :source_posture, :state]) ==
+             "complete | unavailable | refused"
+
+    assert get_in(config.output_schema, [:source_coverage, Access.at(0), :source_posture, :reason]) ==
+             "string or null; required when state is unavailable/refused"
+
+    assert get_in(config.output_schema, [:source_coverage, Access.at(0), :source_weight, :state]) ==
+             "complete | unavailable | refused"
+
+    assert get_in(config.output_schema, [:source_coverage, Access.at(0), :source_weight, :reason]) ==
+             "string or null; required when state is unavailable/refused"
+
     refusing_story_synthesis_agent(config, packet, ctx)
   end
 
