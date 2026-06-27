@@ -699,6 +699,53 @@ defmodule Primeradiant.SoupApiTest do
     assert is_binary(body["substrate_cursor"])
   end
 
+  test "durable feed API bounds source hydration for limited Reporter feed", %{state: _state} do
+    state =
+      source_ready_state([
+        source_item("feed-bounded-1", title: "Bounded feed source one"),
+        source_item("feed-bounded-2", title: "Bounded feed source two")
+      ])
+
+    db_path =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-soup-feed-bounded-#{System.system_time(:nanosecond)}-#{System.unique_integer([:positive])}.sqlite3"
+      )
+
+    DurableSoupDb.persist!(db_path, state, %{
+      source_kind: "soup_api_test",
+      source_db_path: "real_ingestion",
+      source_row_count: length(state.inputs)
+    })
+
+    inflate_unrelated_feed_rows!(db_path, state.tenant_id, 200)
+
+    projection_state =
+      DurableSoupDb.load_soup_feed_projection(db_path, state.tenant_id, %{
+        "consumer" => "reporter",
+        "projection" => "news-morning",
+        "limit" => "1"
+      })
+
+    assert length(projection_state.stories) == 1
+    assert projection_state.story_reader_deltas == []
+
+    assert length(projection_state.inputs) <
+             DurableSoupDb.table_count(db_path, "inputs", state.tenant_id)
+
+    body =
+      :get
+      |> conn("/api/v1/soup/feed?consumer=reporter&projection=news-morning&limit=1")
+      |> put_req_header("authorization", "Bearer internal-token")
+      |> Router.call(Keyword.put(@opts, :state, {:durable_soup_db, db_path, state.tenant_id}))
+      |> json()
+
+    assert [item] = body["items"]
+    assert item["story_card_version_id"]
+    assert [_source | _] = item["magazine_contract"]["sources"]
+    assert item["changed_since_seen"]["state"] == "unavailable"
+  end
+
   test "durable soup API projection loader preserves story-card feed shape", %{state: _state} do
     state =
       source_ready_state([
@@ -1094,6 +1141,76 @@ defmodule Primeradiant.SoupApiTest do
       duration_ms: 1
     }
   end
+
+  defp inflate_unrelated_feed_rows!(db_path, tenant_id, count) do
+    sql = """
+    WITH RECURSIVE n(x) AS (
+      VALUES(1)
+      UNION ALL
+      SELECT x + 1 FROM n WHERE x < #{count}
+    )
+    INSERT INTO inputs (
+      id, tenant_id, fixture_id, source_type, external_id, observed_at, title, body_text,
+      object_uri, content_sha256, acl, normalized, facts, background, questions, colors,
+      topic_tokens, inserted_at, updated_at
+    )
+    SELECT
+      'unrelated-feed-input-' || x,
+      tenant_id,
+      fixture_id,
+      source_type,
+      'unrelated-feed-external-' || x,
+      observed_at,
+      title,
+      body_text,
+      object_uri,
+      'unrelated-feed-sha-' || x,
+      acl,
+      normalized,
+      facts,
+      background,
+      questions,
+      colors,
+      topic_tokens,
+      inserted_at,
+      updated_at
+    FROM (SELECT * FROM inputs WHERE tenant_id = #{sql_quote(tenant_id)} LIMIT 1), n;
+
+    WITH RECURSIVE n(x) AS (
+      VALUES(1)
+      UNION ALL
+      SELECT x + 1 FROM n WHERE x < #{count}
+    )
+    INSERT OR IGNORE INTO story_reader_deltas (
+      id, tenant_id, user_id, story_id, seen_state_id, prior_seen_story_version,
+      prior_seen_card_version_id, current_story_version, current_card_version_id,
+      material_unseen_deltas, nonmaterial_exclusions, producing_agent_run_id,
+      evidence_refs, provenance_refs, inserted_at, updated_at
+    )
+    SELECT
+      'unrelated-feed-delta-' || x,
+      tenant_id,
+      user_id,
+      story_id,
+      seen_state_id,
+      prior_seen_story_version,
+      prior_seen_card_version_id,
+      current_story_version,
+      current_card_version_id,
+      material_unseen_deltas,
+      nonmaterial_exclusions,
+      producing_agent_run_id,
+      evidence_refs,
+      provenance_refs,
+      inserted_at,
+      updated_at
+    FROM (SELECT * FROM story_reader_deltas WHERE tenant_id = #{sql_quote(tenant_id)} LIMIT 1), n;
+    """
+
+    {_, 0} = System.cmd("sqlite3", [db_path, sql], stderr_to_stdout: true)
+  end
+
+  defp sql_quote(value), do: "'#{String.replace(to_string(value), "'", "''")}'"
 
   defp json(conn), do: Jason.decode!(conn.resp_body)
 end
