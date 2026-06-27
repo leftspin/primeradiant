@@ -657,6 +657,48 @@ defmodule Primeradiant.SoupApiTest do
     assert [_item] = body["items"]
   end
 
+  test "durable ready API avoids reader delta hydration", %{state: _state} do
+    state =
+      source_ready_state([
+        source_item("ready-reader-delta-1", title: "Ready should not load reader deltas")
+      ])
+
+    db_path =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-soup-ready-lightweight-#{System.system_time(:nanosecond)}-#{System.unique_integer([:positive])}.sqlite3"
+      )
+
+    DurableSoupDb.persist!(db_path, state, %{
+      source_kind: "soup_api_test",
+      source_db_path: "real_ingestion",
+      source_row_count: length(state.inputs)
+    })
+
+    projection_state = DurableSoupDb.load_soup_ready_projection(db_path, state.tenant_id)
+    full_state = DurableSoupDb.load_soup_projection(db_path, state.tenant_id)
+
+    assert projection_state.story_reader_deltas == []
+    assert length(full_state.story_reader_deltas) == length(state.story_reader_deltas)
+    assert projection_state.inputs != []
+    assert projection_state.stories != []
+    assert projection_state.story_events != []
+    assert projection_state.story_card_change_sets != []
+
+    body =
+      :get
+      |> conn("/api/v1/soup/ready?consumer=reporter&projection=news-morning")
+      |> put_req_header("authorization", "Bearer internal-token")
+      |> Router.call(Keyword.put(@opts, :state, {:durable_soup_db, db_path, state.tenant_id}))
+      |> json()
+
+    assert body["contract_version"] == "soup.v1"
+    assert body["blockers"] == []
+    assert body["freshness"]["latest_source_at"]
+    assert body["freshness"]["latest_story_event_at"]
+    assert is_binary(body["substrate_cursor"])
+  end
+
   test "durable soup API projection loader preserves story-card feed shape", %{state: _state} do
     state =
       source_ready_state([

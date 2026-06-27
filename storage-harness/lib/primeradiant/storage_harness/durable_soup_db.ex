@@ -314,6 +314,38 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
     end
   end
 
+  def load_soup_ready_projection(db_path, tenant_id) do
+    if File.regular?(db_path) do
+      state = Primeradiant.StorageHarness.State.new(tenant_id: tenant_id, user_id: "flynn")
+
+      state
+      |> put_rows(
+        :inputs,
+        load_rows(db_path, "inputs", tenant_id, Primeradiant.StorageHarness.Input)
+      )
+      |> put_rows(
+        :stories,
+        load_rows(db_path, "stories", tenant_id, Primeradiant.StorageHarness.Story)
+      )
+      |> put_rows(
+        :story_events,
+        load_rows(db_path, "story_events", tenant_id, Primeradiant.StorageHarness.StoryEvent)
+      )
+      |> put_rows(
+        :story_card_change_sets,
+        load_rows(
+          db_path,
+          "story_card_change_sets",
+          tenant_id,
+          Primeradiant.StorageHarness.StoryCardChangeSet
+        )
+      )
+      |> rebuild_source_ids()
+    else
+      Primeradiant.StorageHarness.State.new(tenant_id: tenant_id, user_id: "flynn")
+    end
+  end
+
   def tenant_revision(db_path, tenant_id) do
     if File.regular?(db_path) do
       db_path
