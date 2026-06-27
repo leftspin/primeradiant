@@ -313,6 +313,166 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
     end
   end
 
+  def load_soup_feed_projection(db_path, tenant_id, params \\ %{}) do
+    if File.regular?(db_path) do
+      limit = parse_projection_limit(params["limit"] || params[:limit], 50)
+      state = Primeradiant.StorageHarness.State.new(tenant_id: tenant_id, user_id: "flynn")
+
+      stories =
+        load_rows(db_path, "stories", tenant_id, Primeradiant.StorageHarness.Story)
+
+      card_versions =
+        load_rows(
+          db_path,
+          "story_card_versions",
+          tenant_id,
+          Primeradiant.StorageHarness.StoryCardVersion
+        )
+
+      story_ids =
+        stories
+        |> feed_story_window(card_versions, limit)
+        |> Enum.map(& &1.id)
+
+      story_id_sql = sql_in(story_ids)
+
+      story_events =
+        load_rows_where(
+          db_path,
+          "story_events",
+          tenant_id,
+          "story_id IN #{story_id_sql}",
+          Primeradiant.StorageHarness.StoryEvent
+        )
+
+      input_ids = story_events |> Enum.map(& &1.input_id) |> Enum.reject(&is_nil/1) |> Enum.uniq()
+      input_id_sql = sql_in(input_ids)
+
+      selected_card_versions =
+        Enum.filter(card_versions, &(&1.story_id in story_ids))
+
+      card_version_ids =
+        selected_card_versions |> Enum.map(& &1.id) |> Enum.reject(&is_nil/1) |> Enum.uniq()
+
+      card_version_id_sql = sql_in(card_version_ids)
+
+      state
+      |> put_rows(
+        :inputs,
+        load_rows_where(
+          db_path,
+          "inputs",
+          tenant_id,
+          "id IN #{input_id_sql}",
+          Primeradiant.StorageHarness.Input
+        )
+      )
+      |> put_rows(:stories, Enum.filter(stories, &(&1.id in story_ids)))
+      |> put_rows(
+        :soup_nodes,
+        load_rows_where(
+          db_path,
+          "soup_nodes",
+          tenant_id,
+          "(story_id IN #{story_id_sql} OR input_id IN #{input_id_sql})",
+          Primeradiant.StorageHarness.SoupNode
+        )
+      )
+      |> put_rows(
+        :edges,
+        load_rows_where(
+          db_path,
+          "edges",
+          tenant_id,
+          """
+          (
+            from_node_id IN (
+              SELECT id FROM soup_nodes
+              WHERE tenant_id = #{sql_quote(tenant_id)}
+                AND input_id IN #{input_id_sql}
+            )
+            OR to_node_id IN (
+              SELECT id FROM soup_nodes
+              WHERE tenant_id = #{sql_quote(tenant_id)}
+                AND story_id IN #{story_id_sql}
+            )
+          )
+          """,
+          Primeradiant.StorageHarness.Edge
+        )
+      )
+      |> put_rows(
+        :story_fact_versions,
+        load_rows_where(
+          db_path,
+          "story_fact_versions",
+          tenant_id,
+          "story_id IN #{story_id_sql}",
+          Primeradiant.StorageHarness.StoryFactVersion
+        )
+      )
+      |> put_rows(:story_events, story_events)
+      |> put_rows(:story_card_versions, selected_card_versions)
+      |> put_rows(
+        :story_source_coverage,
+        load_rows_where(
+          db_path,
+          "story_source_coverage",
+          tenant_id,
+          "story_card_version_id IN #{card_version_id_sql}",
+          Primeradiant.StorageHarness.StorySourceCoverage
+        )
+      )
+      |> put_rows(
+        :story_key_claims,
+        load_rows_where(
+          db_path,
+          "story_key_claims",
+          tenant_id,
+          "story_card_version_id IN #{card_version_id_sql}",
+          Primeradiant.StorageHarness.StoryKeyClaim
+        )
+      )
+      |> put_rows(
+        :story_card_change_sets,
+        load_rows_where(
+          db_path,
+          "story_card_change_sets",
+          tenant_id,
+          "story_id IN #{story_id_sql}",
+          Primeradiant.StorageHarness.StoryCardChangeSet
+        )
+      )
+      |> put_rows(
+        :evidence_refs,
+        load_rows_where(
+          db_path,
+          "evidence_refs",
+          tenant_id,
+          """
+          (
+            input_id IN #{input_id_sql}
+            OR subject_id IN (
+              SELECT id FROM story_events
+              WHERE tenant_id = #{sql_quote(tenant_id)}
+                AND story_id IN #{story_id_sql}
+            )
+            OR subject_id IN (
+              SELECT id FROM story_fact_versions
+              WHERE tenant_id = #{sql_quote(tenant_id)}
+                AND story_id IN #{story_id_sql}
+            )
+          )
+          """,
+          Primeradiant.StorageHarness.EvidenceRef
+        )
+      )
+      |> rebuild_source_ids()
+    else
+      Primeradiant.StorageHarness.State.new(tenant_id: tenant_id, user_id: "flynn")
+    end
+  end
+
   def load_soup_ready_projection(db_path, tenant_id) do
     if File.regular?(db_path) do
       state = Primeradiant.StorageHarness.State.new(tenant_id: tenant_id, user_id: "flynn")
@@ -902,6 +1062,64 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
     |> Enum.map(&row_struct(module, &1))
   rescue
     _ -> []
+  end
+
+  defp load_rows_where(db_path, table, tenant_id, where_sql, module) do
+    query_table_json(
+      db_path,
+      "SELECT * FROM #{table} WHERE tenant_id = #{sql_quote(tenant_id)} AND #{where_sql};"
+    )
+    |> Enum.map(&row_struct(module, &1))
+  rescue
+    _ -> []
+  end
+
+  defp feed_story_window(stories, card_versions, limit) do
+    stories
+    |> Enum.sort_by(
+      &{feed_story_card_rank(card_versions, &1.id), &1.updated_at_story},
+      fn {left_rank, left_updated_at}, {right_rank, right_updated_at} ->
+        left_rank < right_rank or
+          (left_rank == right_rank and DateTime.compare(left_updated_at, right_updated_at) != :lt)
+      end
+    )
+    |> Enum.take(limit)
+  end
+
+  defp feed_story_card_rank(card_versions, story_id) do
+    case current_feed_card_version(card_versions, story_id) do
+      %{status: "complete"} -> 0
+      _ -> 1
+    end
+  end
+
+  defp current_feed_card_version(card_versions, story_id) do
+    card_versions
+    |> Enum.filter(&(&1.story_id == story_id))
+    |> Enum.sort_by(& &1.card_version, :desc)
+    |> List.first()
+  end
+
+  defp parse_projection_limit(nil, default), do: default
+  defp parse_projection_limit(limit, _default) when is_integer(limit), do: max(limit, 0)
+
+  defp parse_projection_limit(limit, default) do
+    limit
+    |> to_string()
+    |> Integer.parse()
+    |> case do
+      {value, ""} -> max(value, 0)
+      _ -> default
+    end
+  end
+
+  defp sql_in([]), do: "(NULL)"
+
+  defp sql_in(values) do
+    values
+    |> Enum.map(&sql_quote/1)
+    |> Enum.join(", ")
+    |> then(&"(#{&1})")
   end
 
   defp query_table_json(db_path, sql) do
