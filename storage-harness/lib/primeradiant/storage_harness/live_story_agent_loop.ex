@@ -458,7 +458,8 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
         malformed_story_synthesis_refusal_adapter(adapter)
       end
 
-    {state, run, synthesis} = invoke_agent(state, config, packet, actor_id, adapter, correlation_id)
+    {state, run, synthesis} =
+      invoke_agent(state, config, packet, actor_id, adapter, correlation_id)
 
     case validate_story_synthesis_output(synthesis.output, packet, run) do
       :ok ->
@@ -522,9 +523,27 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
         adapter.(config, packet, ctx)
       rescue
         _error in [Jason.DecodeError] ->
-          malformed_story_synthesis_refusal(config, packet, ctx)
+          repair_packet = malformed_story_synthesis_repair_packet(packet)
+
+          try do
+            adapter.(config, repair_packet, ctx)
+          rescue
+            _error in [Jason.DecodeError] ->
+              malformed_story_synthesis_refusal(config, repair_packet, ctx)
+          end
       end
     end
+  end
+
+  defp malformed_story_synthesis_repair_packet(packet) do
+    packet
+    |> Map.put(:packet_id, "#{packet.packet_id}:model-output-repair")
+    |> Map.put(:model_output_repair_request, %{
+      reason: "story_synthesis_malformed_model_output",
+      instruction:
+        "Your previous response was malformed or truncated JSON. Return exactly one complete JSON object matching output_schema. Do not add commentary, markdown, or partial JSON.",
+      required_schema: config(:story_synthesis).output_schema
+    })
   end
 
   defp oversized_story_synthesis_refusal(_config, packet, _ctx) do
@@ -688,7 +707,8 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
   defp story_synthesis_source_coverage_row?(row) do
     case row do
       %{"source_ref" => source_ref} when is_binary(source_ref) and source_ref != "" ->
-        optional_contribution_reason?(row["contribution_reason"]) and materiality?(row["materiality"]) and
+        optional_contribution_reason?(row["contribution_reason"]) and
+          materiality?(row["materiality"]) and
           model_state_map?(row["source_posture"]) and model_state_map?(row["source_weight"])
 
       _ ->
@@ -722,17 +742,22 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
 
   defp story_synthesis_field_completeness?(completeness) when is_map(completeness) do
     allowed_keys =
-      MapSet.new(~w(title deck summary key_claims topic_salience canonical_public_url source_label publication source_coverage overall))
+      MapSet.new(
+        ~w(title deck summary key_claims topic_salience canonical_public_url source_label publication source_coverage overall)
+      )
 
-    required_keys = MapSet.new(~w(title deck summary key_claims source_coverage topic_salience overall))
+    required_keys =
+      MapSet.new(~w(title deck summary key_claims source_coverage topic_salience overall))
+
     source_level_keys = MapSet.new(~w(canonical_public_url source_label publication))
 
     supplied_keys = MapSet.new(Map.keys(completeness))
 
     MapSet.subset?(required_keys, supplied_keys) and
       Enum.all?(completeness, fn {key, value} ->
-      is_binary(key) and MapSet.member?(allowed_keys, key) and
-        ((MapSet.member?(source_level_keys, key) and value == "source_level") or value == "complete")
+        is_binary(key) and MapSet.member?(allowed_keys, key) and
+          ((MapSet.member?(source_level_keys, key) and value == "source_level") or
+             value == "complete")
       end)
   end
 
@@ -755,7 +780,11 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
 
   defp optional_contribution_reason?(nil), do: true
 
-  defp optional_contribution_reason?(%{"state" => "complete", "text" => text, "provenance_refs" => refs})
+  defp optional_contribution_reason?(%{
+         "state" => "complete",
+         "text" => text,
+         "provenance_refs" => refs
+       })
        when is_binary(text) and text != "" and is_list(refs) and refs != [],
        do: true
 
@@ -1778,7 +1807,9 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
     |> case do
       sources when is_list(sources) ->
         sources
-        |> Enum.map(fn source -> Map.get(source, :source_ref) || Map.get(source, "source_ref") end)
+        |> Enum.map(fn source ->
+          Map.get(source, :source_ref) || Map.get(source, "source_ref")
+        end)
         |> Enum.reject(&is_nil/1)
         |> Enum.uniq()
 

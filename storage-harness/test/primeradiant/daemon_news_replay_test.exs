@@ -1267,7 +1267,7 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert latest_coverage == []
   end
 
-  test "recurring story-card synthesis refuses malformed Gibson JSON without crashing" do
+  test "recurring story-card synthesis repairs malformed Gibson JSON before product save" do
     tmp =
       Path.join(
         System.tmp_dir!(),
@@ -1305,12 +1305,83 @@ defmodule Primeradiant.DaemonNewsReplayTest do
       LiveStoryAgentLoop.refresh_story_cards(state, "flynn",
         cadence: :hourly_story_card_synthesis,
         limit: 1,
-        adapter: &malformed_gibson_story_synthesis_agent/3
+        adapter: &repairable_malformed_gibson_story_synthesis_agent/3
       )
 
     assert cadence_report.source_behavior == :recurring_cadence_over_admitted_soup
     assert cadence_report.source_admission_performed == false
     assert cadence_report.refreshed_count == 1
+
+    [refresh] = cadence_report.refreshes
+    assert refresh.story_card_status == "complete"
+    assert refresh.model_route == "test://story-synthesis"
+
+    assert_receive {:story_synthesis_packet, first_packet}, 1_000
+    assert_receive {:story_synthesis_packet, repair_packet}, 1_000
+    refute Map.has_key?(first_packet, :model_output_repair_request)
+
+    assert repair_packet.model_output_repair_request.reason ==
+             "story_synthesis_malformed_model_output"
+
+    latest_card = Enum.max_by(refreshed.story_card_versions, & &1.card_version)
+    assert latest_card.status == "complete"
+    assert latest_card.field_completeness["overall"] == "complete"
+
+    coverage =
+      Enum.filter(
+        refreshed.story_source_coverage,
+        &(&1.story_card_version_id == latest_card.id)
+      )
+
+    assert coverage != []
+  end
+
+  test "recurring story-card synthesis refuses malformed Gibson JSON after bounded repair failure" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-recurring-unrepairable-gibson-story-card-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    soup_db_path = Path.join(tmp, "primeradiant-event-soup.sqlite3")
+    raw_path = Path.join(tmp, "archive.jsonl")
+
+    [row] = [
+      envelope(
+        "Recurring Civic Clinic unrepairable Gibson packet",
+        "Recurring Civic Clinic unrepairable Gibson packet creates the story."
+      )
+    ]
+
+    [{offset, length}] = write_archive!(raw_path, [row])
+
+    event =
+      committed_source_item_event(
+        "event-unrepairable-gibson-news-1",
+        raw_path,
+        offset,
+        length,
+        row
+      )
+
+    {:ok, state, _report} =
+      DaemonNewsEvent.consume_event(event,
+        soup_db_path: soup_db_path,
+        tenant_id: @tenant,
+        actor_id: "flynn",
+        story_agent_loop?: true,
+        story_agent_opts: [adapter: &stub_story_agent/3]
+      )
+
+    {refreshed, cadence_report} =
+      LiveStoryAgentLoop.refresh_story_cards(state, "flynn",
+        cadence: :hourly_story_card_synthesis,
+        limit: 1,
+        adapter: &malformed_gibson_story_synthesis_agent/3
+      )
 
     [refresh] = cadence_report.refreshes
     assert refresh.story_card_status == "refused"
@@ -1320,9 +1391,19 @@ defmodule Primeradiant.DaemonNewsReplayTest do
 
     assert refresh.producer_kind == "deterministic_product_logic"
 
+    assert_receive {:story_synthesis_packet, first_packet}, 1_000
+    assert_receive {:story_synthesis_packet, repair_packet}, 1_000
+    refute Map.has_key?(first_packet, :model_output_repair_request)
+
+    assert repair_packet.model_output_repair_request.reason ==
+             "story_synthesis_malformed_model_output"
+
     latest_card = Enum.max_by(refreshed.story_card_versions, & &1.card_version)
     assert latest_card.status == "refused"
     assert latest_card.field_completeness["overall"] == "refused"
+
+    assert Enum.filter(refreshed.story_key_claims, &(&1.story_card_version_id == latest_card.id)) ==
+             []
 
     coverage =
       Enum.filter(
@@ -1437,9 +1518,12 @@ defmodule Primeradiant.DaemonNewsReplayTest do
       |> List.last()
 
     assert reloaded_run.scope["attempted_model_route"] == "test://invalid-story-synthesis"
+
     assert reloaded_run.scope["model_route"] ==
              "internal://story-synthesis/story_synthesis_invalid_model_output"
+
     assert reloaded_run.scope["final_story_synthesis_source"] == "refused"
+
     assert reloaded_run.scope["fallback_gap"] ==
              "no_supported_codex_oauth_spark_story_synthesis_route"
 
@@ -2751,11 +2835,25 @@ defmodule Primeradiant.DaemonNewsReplayTest do
   defp stub_story_agent_oversized_retry_previous_output(config, packet, ctx),
     do: stub_story_agent(config, packet, ctx)
 
-  defp malformed_gibson_story_synthesis_agent(%{role: :story_synthesis}, _packet, _ctx) do
+  defp malformed_gibson_story_synthesis_agent(%{role: :story_synthesis}, packet, _ctx) do
+    send(self(), {:story_synthesis_packet, packet})
     raise Jason.DecodeError, data: "{\"summary\":{\"text\":\"partial", position: 10_068
   end
 
   defp malformed_gibson_story_synthesis_agent(config, packet, ctx),
+    do: stub_story_agent(config, packet, ctx)
+
+  defp repairable_malformed_gibson_story_synthesis_agent(%{role: :story_synthesis}, packet, _ctx) do
+    send(self(), {:story_synthesis_packet, packet})
+
+    if Map.has_key?(packet, :model_output_repair_request) do
+      stub_story_synthesis(packet)
+    else
+      raise Jason.DecodeError, data: "{\"summary\":{\"text\":\"partial", position: 10_068
+    end
+  end
+
+  defp repairable_malformed_gibson_story_synthesis_agent(config, packet, ctx),
     do: stub_story_agent(config, packet, ctx)
 
   defp invalid_schema_story_synthesis_agent(%{role: :story_synthesis}, packet, _ctx) do
