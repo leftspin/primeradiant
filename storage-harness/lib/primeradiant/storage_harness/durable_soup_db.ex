@@ -319,22 +319,19 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
       state = Primeradiant.StorageHarness.State.new(tenant_id: tenant_id, user_id: "flynn")
 
       stories =
-        load_rows(db_path, "stories", tenant_id, Primeradiant.StorageHarness.Story)
+        load_feed_stories(db_path, tenant_id, limit)
+
+      story_ids = Enum.map(stories, & &1.id)
+      story_id_sql = sql_in(story_ids)
 
       card_versions =
-        load_rows(
+        load_rows_where(
           db_path,
           "story_card_versions",
           tenant_id,
+          "story_id IN #{story_id_sql}",
           Primeradiant.StorageHarness.StoryCardVersion
         )
-
-      story_ids =
-        stories
-        |> feed_story_window(card_versions, limit)
-        |> Enum.map(& &1.id)
-
-      story_id_sql = sql_in(story_ids)
 
       story_events =
         load_rows_where(
@@ -348,11 +345,8 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
       input_ids = story_events |> Enum.map(& &1.input_id) |> Enum.reject(&is_nil/1) |> Enum.uniq()
       input_id_sql = sql_in(input_ids)
 
-      selected_card_versions =
-        Enum.filter(card_versions, &(&1.story_id in story_ids))
-
       card_version_ids =
-        selected_card_versions |> Enum.map(& &1.id) |> Enum.reject(&is_nil/1) |> Enum.uniq()
+        card_versions |> Enum.map(& &1.id) |> Enum.reject(&is_nil/1) |> Enum.uniq()
 
       card_version_id_sql = sql_in(card_version_ids)
 
@@ -367,7 +361,7 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
           Primeradiant.StorageHarness.Input
         )
       )
-      |> put_rows(:stories, Enum.filter(stories, &(&1.id in story_ids)))
+      |> put_rows(:stories, stories)
       |> put_rows(
         :soup_nodes,
         load_rows_where(
@@ -412,7 +406,7 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
         )
       )
       |> put_rows(:story_events, story_events)
-      |> put_rows(:story_card_versions, selected_card_versions)
+      |> put_rows(:story_card_versions, card_versions)
       |> put_rows(
         :story_source_coverage,
         load_rows_where(
@@ -1074,30 +1068,38 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
     _ -> []
   end
 
-  defp feed_story_window(stories, card_versions, limit) do
-    stories
-    |> Enum.sort_by(
-      &{feed_story_card_rank(card_versions, &1.id), &1.updated_at_story},
-      fn {left_rank, left_updated_at}, {right_rank, right_updated_at} ->
-        left_rank < right_rank or
-          (left_rank == right_rank and DateTime.compare(left_updated_at, right_updated_at) != :lt)
-      end
+  defp load_feed_stories(db_path, tenant_id, limit) do
+    query_table_json(
+      db_path,
+      """
+      WITH latest_story_cards AS (
+        SELECT story_id, status
+        FROM (
+          SELECT
+            story_id,
+            status,
+            row_number() OVER (
+              PARTITION BY story_id
+              ORDER BY card_version DESC, id DESC
+            ) AS row_number
+          FROM story_card_versions
+          WHERE tenant_id = #{sql_quote(tenant_id)}
+        )
+        WHERE row_number = 1
+      )
+      SELECT stories.*
+      FROM stories
+      LEFT JOIN latest_story_cards ON latest_story_cards.story_id = stories.id
+      WHERE stories.tenant_id = #{sql_quote(tenant_id)}
+      ORDER BY
+        CASE WHEN latest_story_cards.status = 'complete' THEN 0 ELSE 1 END ASC,
+        stories.updated_at_story DESC
+      LIMIT #{limit};
+      """
     )
-    |> Enum.take(limit)
-  end
-
-  defp feed_story_card_rank(card_versions, story_id) do
-    case current_feed_card_version(card_versions, story_id) do
-      %{status: "complete"} -> 0
-      _ -> 1
-    end
-  end
-
-  defp current_feed_card_version(card_versions, story_id) do
-    card_versions
-    |> Enum.filter(&(&1.story_id == story_id))
-    |> Enum.sort_by(& &1.card_version, :desc)
-    |> List.first()
+    |> Enum.map(&row_struct(Primeradiant.StorageHarness.Story, &1))
+  rescue
+    _ -> []
   end
 
   defp parse_projection_limit(nil, default), do: default

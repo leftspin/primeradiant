@@ -733,6 +733,12 @@ defmodule Primeradiant.SoupApiTest do
     assert length(projection_state.inputs) <
              DurableSoupDb.table_count(db_path, "inputs", state.tenant_id)
 
+    assert length(projection_state.stories) <
+             DurableSoupDb.table_count(db_path, "stories", state.tenant_id)
+
+    assert length(projection_state.story_card_versions) <
+             DurableSoupDb.table_count(db_path, "story_card_versions", state.tenant_id)
+
     body =
       :get
       |> conn("/api/v1/soup/feed?consumer=reporter&projection=news-morning&limit=1")
@@ -1175,6 +1181,72 @@ defmodule Primeradiant.SoupApiTest do
       inserted_at,
       updated_at
     FROM (SELECT * FROM inputs WHERE tenant_id = #{sql_quote(tenant_id)} LIMIT 1), n;
+
+    WITH RECURSIVE n(x) AS (
+      VALUES(1)
+      UNION ALL
+      SELECT x + 1 FROM n WHERE x < #{count}
+    )
+    INSERT OR IGNORE INTO stories (
+      id, tenant_id, story_key, title, state, version, first_observed_at,
+      updated_at_story, last_material_at, structural_facts, background_facts,
+      colors, questions, topic_tokens, attrs, inserted_at, updated_at
+    )
+    SELECT
+      'unrelated-feed-story-' || x,
+      tenant_id,
+      'unrelated-feed-story-key-' || x,
+      'Unrelated feed story ' || x,
+      state,
+      version,
+      '2020-01-01T00:00:00Z',
+      '2020-01-01T00:00:00Z',
+      '2020-01-01T00:00:00Z',
+      structural_facts,
+      background_facts,
+      colors,
+      questions,
+      topic_tokens,
+      attrs,
+      inserted_at,
+      updated_at
+    FROM (SELECT * FROM stories WHERE tenant_id = #{sql_quote(tenant_id)} LIMIT 1), n;
+
+    WITH RECURSIVE n(x) AS (
+      VALUES(1)
+      UNION ALL
+      SELECT x + 1 FROM n WHERE x < #{count}
+    )
+    INSERT OR IGNORE INTO story_card_versions (
+      id, tenant_id, story_id, story_version, card_version, status, supersedes_id,
+      refresh_reason, producing_agent_run_id, packet_hash, prompt_config_hash,
+      output_hash, field_provenance_manifest_id, title, deck, summary, freshness,
+      field_completeness, topic_salience, provenance, inserted_at, updated_at
+    )
+    SELECT
+      'unrelated-feed-card-version-' || x,
+      tenant_id,
+      'unrelated-feed-story-' || x,
+      story_version,
+      1,
+      'refused',
+      NULL,
+      refresh_reason,
+      producing_agent_run_id,
+      'unrelated-feed-packet-hash-' || x,
+      prompt_config_hash,
+      'unrelated-feed-output-hash-' || x,
+      field_provenance_manifest_id,
+      title,
+      deck,
+      summary,
+      freshness,
+      field_completeness,
+      topic_salience,
+      provenance,
+      inserted_at,
+      updated_at
+    FROM (SELECT * FROM story_card_versions WHERE tenant_id = #{sql_quote(tenant_id)} LIMIT 1), n;
 
     WITH RECURSIVE n(x) AS (
       VALUES(1)
