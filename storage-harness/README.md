@@ -36,6 +36,23 @@ admits the item immediately, and writes only primeradiant-owned soup/output rows
 The emitter script is a read-only, one-shot proof helper. It does not install,
 register, or enable a persistent source publisher.
 
+Ingest uveal cancer research items from an existing Gibson morning-research
+metadata artifact into Prime Radiant soup:
+
+```sh
+mix primeradiant.uveal_research_soup_ingest \
+  --meta /Users/mike/.openclaw/workspace/www/news/2026-06-14-vr-ai-news-morning.meta.json \
+  --soup-db /tmp/primeradiant-uveal-research-soup.sqlite3 \
+  --tenant 00000000-0000-0000-0000-00000000t328
+```
+
+The adapter reads only `category = "cancer"` items from the morning metadata,
+maps each research item into `manual_real_ingest_v1`, and persists through
+`Primeradiant.StorageHarness.RealIngestion.ingest_items/2` plus
+`DurableSoupDb.persist!/3`. It does not mutate cron, source artifacts, Reporter,
+or service persistence; wiring Gibson/cron/runtime activation to this command is
+a separate approved deploy step.
+
 Replay already-stored daemon news rows without mutating the source SQLite
 database:
 
