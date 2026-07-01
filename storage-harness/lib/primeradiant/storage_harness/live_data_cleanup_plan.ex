@@ -90,6 +90,24 @@ defmodule Primeradiant.StorageHarness.LiveDataCleanupPlan do
     Map.put(body, "plan_hash", stable_hash(body))
   end
 
+  def verify_plan_hash!(%{} = plan, expected_hash) when is_binary(expected_hash) do
+    actual_hash = stable_hash(Map.delete(plan, "plan_hash"))
+    embedded_hash = Map.fetch!(plan, "plan_hash")
+
+    cond do
+      embedded_hash != expected_hash ->
+        raise ArgumentError,
+              "plan hash mismatch: expected #{expected_hash}, plan contains #{embedded_hash}"
+
+      actual_hash != expected_hash ->
+        raise ArgumentError,
+              "plan hash mismatch: expected #{expected_hash}, recomputed #{actual_hash}"
+
+      true ->
+        :ok
+    end
+  end
+
   defp candidate_cards(db_path, tenant_id, limit, statuses, inserted_before) do
     status_sql = statuses |> Enum.map(&quote_sql/1) |> Enum.join(",")
 
