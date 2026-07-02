@@ -55,16 +55,30 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
   """
 
   @synthesis_prompt """
-  Maintain the current living story card from committed story state and linked source evidence.
-  Return deck, summary, key_claims, source_coverage, contribution explanations, salience hints, and changed fields.
-  For every article in committed_story_state.linked_sources, return exactly one matching source_coverage row keyed by source_ref.
-  Do not cover only the newest source_ref. The story card source list is incomplete unless every linked source_ref has source_coverage.
-  Each source_coverage row must include contribution_reason.text: a concise plain-language explanation of why that article matters to this story, suitable for a reader-facing News source popup.
-  Use contribution_reason unavailable/refused with a specific non-sentinel reason only when the linked article text truly cannot support a reader-facing salience explanation.
-  Examples: "Adds the funding amount and names the investor" or "Provides the primary quote from the company."
-  If any required source display or story-card field is unavailable, return explicit unavailable/refused/incomplete field state with reason and provenance.
-  If the packet includes source_coverage_repair_request, repair the prior omission by returning source_coverage for every missing source_ref.
+  Maintain the current living Prime Radiant grounded story synopsis artifact from committed story state and linked source evidence for downstream consumers.
+  Return exactly one JSON object and no markdown.
+  Return status "complete" when the packet contains enough headline/body evidence to write grounded story synopsis, evidence, source coverage, and claim fields. Do not refuse merely because publisher metadata, canonical URL, or full article text is missing; those are source-level display fields handled outside this output.
+  For complete output, return title, exact_happening, deck, summary, key_claims, source_links, source_coverage, contribution explanations, topic salience hints, changed fields, change_summary, and field_completeness.
+  Every complete text field must be an object with state "complete", non-empty text, and provenance_refs copied from bounded packet evidence.
+  For each linked source in committed_story_state.linked_sources, emit exactly one source_links row and exactly one source_coverage row whose source_ref exactly equals that linked source_ref.
+  Each source_coverage row must include contribution_reason.state "complete", non-empty contribution_reason.text explaining what the article contributes, materiality "material" or "nonmaterial", source_posture.state "complete" with a short value, and source_weight.state "complete" with a numeric value.
+  For answerable current-news packets, include at least one key_claim with claim_ref, text, status "current", materiality "material", evidence_refs, conflict_refs, uncertainty, and appears_in_current_synopsis true.
+  Use status "refused" only for honest evidence-limited refusal. A valid refusal must include refusal_provenance with reason, evidence_refs, and quarantine_recommendation. Schema uncertainty is not an honest refusal.
+  If the packet includes source_coverage_repair_request, repair the prior omission by returning source_coverage and source_links for every required_source_ref. Do not omit missing_source_refs.
   """
+
+  def story_synthesis_eval_contract do
+    config = config(:story_synthesis)
+
+    %{
+      system_prompt: config.system_prompt,
+      task_prompt: config.task_prompt,
+      output_schema: config.output_schema,
+      max_tokens: config.max_tokens,
+      config_version: config.config_version,
+      prompt_version_hash: config.prompt_version_hash
+    }
+  end
 
   def run(%State{} = state, admissions, actor_id, opts \\ []) when is_list(admissions) do
     adapter = Keyword.get(opts, :adapter, &__MODULE__.invoke_live_agent/3)
@@ -464,7 +478,12 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
         correlation_id
       )
 
-    missing_refs = missing_source_contribution_refs(synthesis.output, packet)
+    missing_refs =
+      if synthesis.output["status"] == "complete" do
+        missing_source_contribution_refs(synthesis.output, packet)
+      else
+        []
+      end
 
     if missing_refs == [] do
       {state, [run], synthesis}
@@ -624,9 +643,16 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
   defp story_synthesis_refusal(packet, reason, route_reason, provenance_reason) do
     provenance_refs = ["story-synthesis:#{provenance_reason}:#{packet.story_key}"]
 
+    refusal_provenance = %{
+      "reason" => reason,
+      "evidence_refs" => packet.evidence_refs || provenance_refs,
+      "quarantine_recommendation" => "quarantine_story_synopsis_output"
+    }
+
     %{
       output: %{
         "status" => "refused",
+        "refusal_provenance" => refusal_provenance,
         "title" => %{
           "text" => get_in(packet, [:committed_story_state, :title]) || packet.story_key,
           "state" => "complete",
@@ -680,10 +706,10 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
        do: :ok
 
   defp validate_story_synthesis_output(output, packet, _run) when is_map(output) do
-    if output["status"] == "complete" do
-      validate_trusted_story_synthesis_output(output, packet)
-    else
-      {:error, "story_synthesis_invalid_model_output"}
+    case output["status"] do
+      "complete" -> validate_trusted_story_synthesis_output(output, packet)
+      "refused" -> validate_story_synthesis_refusal(output, packet)
+      _ -> {:error, "story_synthesis_invalid_model_output"}
     end
   end
 
@@ -698,6 +724,9 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
       not story_synthesis_field?(output["title"]) ->
         {:error, "story_synthesis_invalid_model_output"}
 
+      not story_synthesis_field?(output["exact_happening"]) ->
+        {:error, "story_synthesis_invalid_model_output"}
+
       not story_synthesis_field?(output["deck"]) ->
         {:error, "story_synthesis_invalid_model_output"}
 
@@ -707,7 +736,10 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
       not story_synthesis_key_claims?(output["key_claims"]) ->
         {:error, "story_synthesis_invalid_model_output"}
 
-      not story_synthesis_source_coverage?(output["source_coverage"], packet) ->
+      not story_synthesis_source_coverage_refs?(output["source_coverage"], packet) ->
+        {:error, "story_synthesis_invalid_model_output"}
+
+      not story_synthesis_source_links?(output["source_links"], packet) ->
         {:error, "story_synthesis_invalid_model_output"}
 
       not story_synthesis_topic_salience?(output["topic_salience"]) ->
@@ -720,6 +752,36 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
         {:error, "story_synthesis_invalid_model_output"}
 
       not story_synthesis_field_completeness?(output["field_completeness"]) ->
+        {:error, "story_synthesis_invalid_model_output"}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp validate_story_synthesis_refusal(output, packet) do
+    proof = output["refusal_provenance"]
+
+    cond do
+      output["status"] != "refused" ->
+        {:error, "story_synthesis_invalid_model_output"}
+
+      not story_synthesis_field?(output["title"]) ->
+        {:error, "story_synthesis_invalid_model_output"}
+
+      not is_map(proof) ->
+        {:error, "story_synthesis_invalid_model_output"}
+
+      not non_empty_string?(proof["reason"]) ->
+        {:error, "story_synthesis_invalid_model_output"}
+
+      not provenance_refs?(proof["evidence_refs"]) ->
+        {:error, "story_synthesis_invalid_model_output"}
+
+      not non_empty_string?(proof["quarantine_recommendation"]) ->
+        {:error, "story_synthesis_invalid_model_output"}
+
+      Enum.any?(proof["evidence_refs"], &(&1 not in packet.evidence_refs)) ->
         {:error, "story_synthesis_invalid_model_output"}
 
       true ->
@@ -740,31 +802,39 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
     do: false
 
   defp story_synthesis_key_claims?(claims) when is_list(claims),
-    do: Enum.all?(claims, &valid_agent_claim?/1)
+    do: claims != [] and Enum.all?(claims, &valid_agent_claim?/1)
 
   defp story_synthesis_key_claims?(_claims), do: false
 
-  defp story_synthesis_source_coverage?(coverage, packet) when is_list(coverage) do
+  defp story_synthesis_source_coverage_refs?(coverage, packet) when is_list(coverage) do
     required_refs = linked_source_refs(packet)
     coverage_refs = Enum.map(coverage, &Map.get(&1, "source_ref"))
 
     Enum.sort(coverage_refs) == Enum.sort(required_refs) and
-      Enum.all?(coverage, &story_synthesis_source_coverage_row?/1)
+      Enum.all?(coverage, fn
+        %{"source_ref" => source_ref} when is_binary(source_ref) and source_ref != "" -> true
+        _ -> false
+      end)
   end
 
-  defp story_synthesis_source_coverage?(_coverage, _packet), do: false
+  defp story_synthesis_source_coverage_refs?(_coverage, _packet), do: false
 
-  defp story_synthesis_source_coverage_row?(row) do
-    case row do
-      %{"source_ref" => source_ref} when is_binary(source_ref) and source_ref != "" ->
-        optional_contribution_reason?(row["contribution_reason"]) and
-          materiality?(row["materiality"]) and
-          model_state_map?(row["source_posture"]) and model_state_map?(row["source_weight"])
+  defp story_synthesis_source_links?(links, packet) when is_list(links) do
+    required_refs = linked_source_refs(packet)
+    link_refs = Enum.map(links, &Map.get(&1, "source_ref"))
 
-      _ ->
-        false
-    end
+    Enum.sort(link_refs) == Enum.sort(required_refs) and
+      Enum.all?(links, fn
+        %{"source_ref" => source_ref, "evidence_refs" => evidence_refs}
+        when is_binary(source_ref) and source_ref != "" ->
+          provenance_refs?(evidence_refs)
+
+        _ ->
+          false
+      end)
   end
+
+  defp story_synthesis_source_links?(_links, _packet), do: false
 
   defp story_synthesis_topic_salience?(salience) when is_map(salience) do
     explanation_valid? =
@@ -783,7 +853,9 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
 
   defp story_synthesis_changed_field_keys?(keys) when is_list(keys) do
     allowed =
-      MapSet.new(~w(title deck summary source_coverage key_claims topic_salience change_summary))
+      MapSet.new(
+        ~w(title exact_happening deck summary source_links source_coverage key_claims topic_salience change_summary)
+      )
 
     Enum.all?(keys, &(is_binary(&1) and MapSet.member?(allowed, &1)))
   end
@@ -793,11 +865,13 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
   defp story_synthesis_field_completeness?(completeness) when is_map(completeness) do
     allowed_keys =
       MapSet.new(
-        ~w(title deck summary key_claims topic_salience canonical_public_url source_label publication source_coverage overall)
+        ~w(title exact_happening deck summary key_claims topic_salience canonical_public_url source_label publication source_links source_coverage overall)
       )
 
     required_keys =
-      MapSet.new(~w(title deck summary key_claims source_coverage topic_salience overall))
+      MapSet.new(
+        ~w(title exact_happening deck summary key_claims source_links source_coverage topic_salience overall)
+      )
 
     source_level_keys = MapSet.new(~w(canonical_public_url source_label publication))
 
@@ -812,42 +886,6 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
   end
 
   defp story_synthesis_field_completeness?(_completeness), do: false
-
-  defp materiality?(value), do: value in ["material", "nonmaterial"]
-
-  defp model_state_map?(%{"state" => "complete"} = value),
-    do: model_state_value?(Map.get(value, "value"))
-
-  defp model_state_map?(%{"state" => state, "reason" => reason})
-       when state in ["unavailable", "refused"] and is_binary(reason) and reason != "",
-       do: true
-
-  defp model_state_map?(_value), do: false
-
-  defp model_state_value?(value) when is_binary(value), do: value != ""
-  defp model_state_value?(value) when is_number(value), do: true
-  defp model_state_value?(_value), do: false
-
-  defp optional_contribution_reason?(nil), do: true
-
-  defp optional_contribution_reason?(%{
-         "state" => "complete",
-         "text" => text,
-         "provenance_refs" => refs
-       })
-       when is_binary(text) and text != "" and is_list(refs) and refs != [],
-       do: true
-
-  defp optional_contribution_reason?(%{
-         "state" => state,
-         "reason" => reason,
-         "provenance_refs" => refs
-       })
-       when state in ["unavailable", "refused"] and is_binary(reason) and reason != "" and
-              is_list(refs) and refs != [],
-       do: true
-
-  defp optional_contribution_reason?(_value), do: false
 
   defp optional_topic_nodes?(map, key) do
     case Map.fetch(map, key) do
@@ -1868,16 +1906,6 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
     end
   end
 
-  defp usable_contribution_reason?(%{"state" => state, "reason" => reason})
-       when state in ["unavailable", "refused"] and is_binary(reason) and reason != "" and
-              reason != "story_synthesis_agent_did_not_supply_field",
-       do: true
-
-  defp usable_contribution_reason?(%{state: state, reason: reason})
-       when state in ["unavailable", "refused"] and is_binary(reason) and reason != "" and
-              reason != "story_synthesis_agent_did_not_supply_field",
-       do: true
-
   defp usable_contribution_reason?(value), do: complete_text_field?(value)
 
   defp complete_text_field?(%{"state" => "complete", "text" => text})
@@ -2114,7 +2142,12 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
         conflict_refs: claim["conflict_refs"] || [],
         uncertainty:
           claim["uncertainty"] || %{"state" => "unavailable", "reason" => "not_supplied"},
-        appears_in_current_card: Map.get(claim, "appears_in_current_card", true)
+        appears_in_current_card:
+          Map.get(
+            claim,
+            "appears_in_current_synopsis",
+            Map.get(claim, "appears_in_current_card", true)
+          )
       })
     end)
   end
@@ -2239,75 +2272,91 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
 
   defp config(:story_synthesis) do
     :story_synthesis
-    |> config("story-synthesis.v2.t1311.article-link-salience", @synthesis_prompt, %{
-      status: "complete | incomplete | refused | unavailable",
-      title: %{text: "string", state: "complete | unavailable", provenance_refs: ["string"]},
-      deck: %{
-        text: "string or null",
-        state: "complete | unavailable",
-        reason: "string or null",
-        provenance_refs: ["string"]
-      },
-      summary: %{
-        text: "string or null",
-        state: "complete | unavailable",
-        reason: "string or null",
-        provenance_refs: ["string"]
-      },
-      key_claims: [
-        %{
-          claim_ref: "claim ref",
-          text: "claim text",
-          status: "current | disputed | stale | background | unresolved",
-          materiality: "material | background | unresolved",
-          evidence_refs: ["evidence ref"],
-          conflict_refs: ["conflict ref"],
-          uncertainty: %{state: "known | unavailable", reason: "string or null"},
-          appears_in_current_card: true
-        }
-      ],
-      source_coverage: [
-        %{
-          source_ref:
-            "must exactly match one committed_story_state.linked_sources[].source_ref; include one row for every linked source_ref",
-          contribution_reason: %{
-            text:
-              "concise reader-facing reason this article matters to the story; required for every committed_story_state.linked_sources source_ref unless state is unavailable/refused with a specific non-sentinel reason, for example Adds the funding amount and names the investor",
-            state: "complete | unavailable | refused",
-            reason: "string or null; required when state is unavailable/refused",
-            provenance_refs: ["string"]
-          },
-          materiality: "material | nonmaterial",
-          source_posture: %{
-            state: "complete | unavailable | refused",
-            value: "string or null; required when state is complete",
-            reason: "string or null; required when state is unavailable/refused"
-          },
-          source_weight: %{
-            state: "complete | unavailable | refused",
-            value: "number or null; required when state is complete",
-            reason: "string or null; required when state is unavailable/refused"
-          }
-        }
-      ],
-      topic_salience: %{
-        salience_explanation: %{
-          text: "story-to-topic salience explanation",
+    |> config(
+      "story-synthesis.v3.t1501.grounded-synopsis-evidence-contract",
+      @synthesis_prompt,
+      %{
+        status: "complete | refused",
+        title: %{text: "string", state: "complete", provenance_refs: ["string"]},
+        exact_happening: %{
+          text: "specific happening this synopsis artifact is about",
           state: "complete",
           provenance_refs: ["string"]
         },
-        global_salience: "hint",
-        flynn_priority: "hint"
-      },
-      changed_field_keys: ["field_key"],
-      change_summary: %{
-        text: "story-agent-authored change summary",
-        state: "complete",
-        provenance_refs: ["string"]
-      },
-      field_completeness: %{}
-    })
-    |> Map.put(:max_tokens, 4096)
+        deck: %{
+          text: "string",
+          state: "complete",
+          provenance_refs: ["string"]
+        },
+        summary: %{
+          text: "string",
+          state: "complete",
+          provenance_refs: ["string"]
+        },
+        key_claims: [
+          %{
+            claim_ref: "claim ref",
+            text: "claim text",
+            status: "current | disputed | stale | background | unresolved",
+            materiality: "material | background | unresolved",
+            evidence_refs: ["evidence ref"],
+            conflict_refs: ["conflict ref"],
+            uncertainty: %{state: "known | unavailable", reason: "string or null"},
+            appears_in_current_synopsis: true
+          }
+        ],
+        source_coverage: [
+          %{
+            source_ref:
+              "must exactly match one committed_story_state.linked_sources[].source_ref; include one row for every linked source_ref",
+            contribution_reason: %{
+              text:
+                "concise reader-facing reason this article matters to the story; required for every committed_story_state.linked_sources source_ref, for example Adds the funding amount and names the investor",
+              state: "complete",
+              provenance_refs: ["string"]
+            },
+            materiality: "material | nonmaterial",
+            source_posture: %{
+              state: "complete",
+              value: "string"
+            },
+            source_weight: %{
+              state: "complete",
+              value: "number"
+            }
+          }
+        ],
+        source_links: [
+          %{
+            source_ref:
+              "must exactly match one committed_story_state.linked_sources[].source_ref; include one row for every linked source_ref",
+            evidence_refs: ["evidence ref"]
+          }
+        ],
+        topic_salience: %{
+          salience_explanation: %{
+            text: "story-to-topic salience explanation",
+            state: "complete",
+            provenance_refs: ["string"]
+          },
+          global_salience: "hint",
+          flynn_priority: "hint"
+        },
+        changed_field_keys: ["field_key"],
+        change_summary: %{
+          text: "story-agent-authored change summary",
+          state: "complete",
+          provenance_refs: ["string"]
+        },
+        field_completeness: %{},
+        refusal_provenance: %{
+          reason: "required when status is refused",
+          evidence_refs: ["evidence ref"],
+          quarantine_recommendation: "string"
+        }
+      }
+    )
+    |> Map.put(:max_tokens, 8192)
   end
 
   defp config(role, version, task_prompt, output_schema) do

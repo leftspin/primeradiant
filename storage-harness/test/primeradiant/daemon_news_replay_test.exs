@@ -1128,7 +1128,7 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert source_link.source_ref == coverage.source_ref
   end
 
-  test "story-card synthesis accepts explicit non-sentinel unavailable source reasons" do
+  test "story-card synthesis rejects unavailable source reasons as incomplete under strict contract" do
     tmp =
       Path.join(
         System.tmp_dir!(),
@@ -1169,20 +1169,17 @@ defmodule Primeradiant.DaemonNewsReplayTest do
       )
 
     [chain] = report.live_story_agent_loop.correlation_chains
-    assert chain.story_card_status == "complete"
+    assert chain.story_card_status == "incomplete"
 
     [card] = state.story_card_versions
-    assert card.status == "complete"
+    assert card.status == "incomplete"
 
-    [coverage] = state.story_source_coverage
-    assert coverage.contribution_reason["state"] == "unavailable"
-    assert coverage.contribution_reason["reason"] == "source_text_withheld"
+    assert state.story_source_coverage == []
 
     feed = Soup.feed(state, %{"consumer" => "reporter", "projection" => "news-morning"})
     [item] = feed.items
-    assert item.status == "complete"
-    [source_link] = item.source_links
-    assert source_link.contribution_reason["reason"] == "source_text_withheld"
+    assert item.status == "incomplete"
+    assert item.source_links == []
   end
 
   test "recurring cadence refreshes Reporter story cards over admitted soup without source admission" do
@@ -1274,8 +1271,8 @@ defmodule Primeradiant.DaemonNewsReplayTest do
       )
 
     assert agent_run["agent_run_key"] in [
-             "agent-run:story-synthesis.v2.t1311.article-link-salience:#{refresh.correlation_id}",
-             "agent-run:story-synthesis.v2.t1311.article-link-salience:#{refresh.correlation_id}:source-coverage-repair"
+             "agent-run:story-synthesis.v3.t1501.grounded-synopsis-evidence-contract:#{refresh.correlation_id}",
+             "agent-run:story-synthesis.v3.t1501.grounded-synopsis-evidence-contract:#{refresh.correlation_id}:source-coverage-repair"
            ]
   end
 
@@ -3668,7 +3665,7 @@ defmodule Primeradiant.DaemonNewsReplayTest do
 
   defp refusing_story_synthesis_agent_with_config_assertion(config, packet, ctx) do
     assert config.role == :story_synthesis
-    assert config.max_tokens == 4096
+    assert config.max_tokens == 8192
 
     assert get_in(config.output_schema, [:topic_salience, :salience_explanation, :state]) ==
              "complete"
@@ -3686,16 +3683,19 @@ defmodule Primeradiant.DaemonNewsReplayTest do
              "material | nonmaterial"
 
     assert get_in(config.output_schema, [:source_coverage, Access.at(0), :source_posture, :state]) ==
-             "complete | unavailable | refused"
+             "complete"
 
-    assert get_in(config.output_schema, [:source_coverage, Access.at(0), :source_posture, :reason]) ==
-             "string or null; required when state is unavailable/refused"
+    assert get_in(config.output_schema, [:source_coverage, Access.at(0), :source_posture, :value]) ==
+             "string"
 
     assert get_in(config.output_schema, [:source_coverage, Access.at(0), :source_weight, :state]) ==
-             "complete | unavailable | refused"
+             "complete"
 
-    assert get_in(config.output_schema, [:source_coverage, Access.at(0), :source_weight, :reason]) ==
-             "string or null; required when state is unavailable/refused"
+    assert get_in(config.output_schema, [:source_coverage, Access.at(0), :source_weight, :value]) ==
+             "number"
+
+    assert get_in(config.output_schema, [:refusal_provenance, :quarantine_recommendation]) ==
+             "string"
 
     refusing_story_synthesis_agent(config, packet, ctx)
   end
@@ -3729,6 +3729,11 @@ defmodule Primeradiant.DaemonNewsReplayTest do
           "state" => "complete",
           "provenance_refs" => ["fieldprov:test"]
         },
+        "exact_happening" => %{
+          "text" => "Civic Clinic triage remains active from linked source evidence.",
+          "state" => "complete",
+          "provenance_refs" => ["fieldprov:test"]
+        },
         "deck" => %{
           "text" => "Civic Clinic triage remains the active story card.",
           "state" => "complete",
@@ -3749,7 +3754,7 @@ defmodule Primeradiant.DaemonNewsReplayTest do
             "evidence_refs" => packet.evidence_refs,
             "conflict_refs" => [],
             "uncertainty" => %{"state" => "unavailable", "reason" => "not_supplied"},
-            "appears_in_current_card" => true
+            "appears_in_current_synopsis" => true
           }
         ],
         "source_coverage" =>
@@ -3764,6 +3769,13 @@ defmodule Primeradiant.DaemonNewsReplayTest do
               "materiality" => "material",
               "source_posture" => %{"state" => "complete", "value" => "reported"},
               "source_weight" => %{"state" => "complete", "value" => 1.0}
+            }
+          end),
+        "source_links" =>
+          Enum.map(source_refs, fn source_ref ->
+            %{
+              "source_ref" => source_ref,
+              "evidence_refs" => packet.evidence_refs
             }
           end),
         "topic_salience" => %{
@@ -3788,9 +3800,11 @@ defmodule Primeradiant.DaemonNewsReplayTest do
         },
         "field_completeness" => %{
           "title" => "complete",
+          "exact_happening" => "complete",
           "deck" => "complete",
           "summary" => "complete",
           "key_claims" => "complete",
+          "source_links" => "complete",
           "source_coverage" => "complete",
           "topic_salience" => "complete",
           "canonical_public_url" => "source_level",

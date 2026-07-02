@@ -10,7 +10,10 @@ defmodule Primeradiant.Soup do
     generated_at = now()
     blockers = blockers(state, params) ++ story_ecology_blockers(state, params)
     freshness = freshness(state, generated_at)
-    status = if blockers == [], do: freshness_status(freshness), else: "blocked"
+    synthesis_health = synthesis_health(state)
+    health_blockers = synthesis_health_blockers(synthesis_health)
+    all_blockers = if blockers == [], do: health_blockers, else: blockers
+    status = if all_blockers == [], do: freshness_status(freshness), else: "blocked"
 
     %{
       contract_version: @contract_version,
@@ -19,7 +22,8 @@ defmodule Primeradiant.Soup do
       substrate_cursor: cursor_for(state),
       substrate_epoch: epoch(state),
       freshness: freshness,
-      blockers: blockers
+      synthesis_health: synthesis_health,
+      blockers: all_blockers
     }
   end
 
@@ -296,6 +300,117 @@ defmodule Primeradiant.Soup do
   defp freshness_status(%{is_stale: true}), do: "degraded"
   defp freshness_status(_), do: "ready"
 
+  defp synthesis_health(state) do
+    stories = visible_stories(state)
+    current_cards = Enum.map(stories, &current_story_card_version(state, &1.id))
+    complete_current_count = Enum.count(current_cards, &complete_story_card?/1)
+    failure_streak = current_synthesis_failure_streak(state)
+
+    failures =
+      []
+      |> maybe_add_zero_complete_synopsis_failure(stories, complete_current_count)
+      |> maybe_add_synthesis_failure_streak(failure_streak)
+
+    %{
+      status: if(failures == [], do: "healthy", else: "failed"),
+      checked_story_count: length(stories),
+      complete_current_synopsis_count: complete_current_count,
+      current_synopsis_artifact: %{
+        required: true,
+        status: if(complete_current_count > 0, do: "present", else: "missing")
+      },
+      refused_or_invalid_streak_count: length(failure_streak),
+      refused_or_invalid_streak_threshold: 3,
+      failures: failures
+    }
+  end
+
+  defp maybe_add_zero_complete_synopsis_failure(failures, [], _count), do: failures
+
+  defp maybe_add_zero_complete_synopsis_failure(failures, _stories, count) when count > 0,
+    do: failures
+
+  defp maybe_add_zero_complete_synopsis_failure(failures, stories, 0) do
+    [
+      %{
+        code: "zero_complete_current_synopsis_artifacts",
+        message:
+          "Prime Radiant has admitted current story material but no complete current grounded synopsis artifacts",
+        story_count: length(stories)
+      }
+      | failures
+    ]
+  end
+
+  defp maybe_add_synthesis_failure_streak(failures, streak) when length(streak) < 3, do: failures
+
+  defp maybe_add_synthesis_failure_streak(failures, streak) do
+    [
+      %{
+        code: "story_synthesis_refused_or_invalid_streak",
+        message:
+          "Prime Radiant story synthesis has repeatedly refused or quarantined invalid current synopsis output",
+        streak_count: length(streak),
+        latest_reasons: streak |> Enum.map(& &1.reason) |> Enum.uniq()
+      }
+      | failures
+    ]
+  end
+
+  defp synthesis_health_blockers(%{failures: []}), do: []
+
+  defp synthesis_health_blockers(%{failures: failures}) do
+    Enum.map(failures, fn failure ->
+      %{
+        code: failure.code,
+        message: failure.message,
+        health_surface: "synthesis_health"
+      }
+    end)
+  end
+
+  defp current_synthesis_failure_streak(state) do
+    state.story_card_versions
+    |> Enum.filter(&(&1.refresh_reason == "story_card_hourly_synthesis"))
+    |> Enum.sort_by(&{time_sort_value(&1.inserted_at), &1.card_version}, :desc)
+    |> Enum.reduce_while([], fn card, streak ->
+      if synthesis_failure_card?(card) do
+        {:cont,
+         [%{story_card_version_id: card.id, reason: synthesis_failure_reason(card)} | streak]}
+      else
+        {:halt, streak}
+      end
+    end)
+  end
+
+  defp synthesis_failure_card?(%{status: "refused"}), do: true
+
+  defp synthesis_failure_card?(card) when is_map(card) do
+    synthesis_failure_reason(card) in [
+      "story_synthesis_invalid_model_output",
+      "story_synthesis_malformed_model_output"
+    ]
+  end
+
+  defp synthesis_failure_card?(_), do: false
+
+  defp synthesis_failure_reason(card) do
+    card.provenance["reason"] ||
+      card.provenance[:reason] ||
+      card.deck["reason"] ||
+      card.deck[:reason] ||
+      card.summary["reason"] ||
+      card.summary[:reason] ||
+      card.field_completeness["overall"] ||
+      card.field_completeness[:overall] ||
+      card.status
+  end
+
+  defp time_sort_value(nil), do: 0
+  defp time_sort_value(%DateTime{} = value), do: DateTime.to_unix(value, :microsecond)
+  defp time_sort_value(value) when is_binary(value), do: value
+  defp time_sort_value(_), do: 0
+
   defp delta_projection(state, requested, limit) do
     changes = ordered_card_changes(state)
     next_changes = changes |> Enum.drop(requested["event_index"]) |> Enum.take(limit)
@@ -536,7 +651,8 @@ defmodule Primeradiant.Soup do
   defp reader_visible_source_link?(row),
     do: reader_visible_contribution_reason?(row.contribution_reason)
 
-  defp complete_story_card?(card), do: card.status == "complete"
+  defp complete_story_card?(%{status: "complete"}), do: true
+  defp complete_story_card?(_), do: false
 
   defp reader_visible_contribution_reason?(%{"state" => "complete", "text" => text})
        when is_binary(text) and text != "",

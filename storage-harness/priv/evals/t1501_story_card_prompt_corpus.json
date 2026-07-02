@@ -1,0 +1,365 @@
+{
+  "corpus_id": "T1501-CORPUS-20260702-live-refused-retained-v1",
+  "source": {
+    "host": "eurisko",
+    "soup_db": "/home/clu/.local/state/primeradiant/soup-api/soup.sqlite3",
+    "query_mode": "sqlite3 -readonly",
+    "captured_at": "2026-07-02T04:34:43Z",
+    "selection": "8 stable real refused grounded story synthesis records with retained linked source text"
+  },
+  "items": [
+    {
+      "item_id": "T1501-CORPUS-1a2061ee",
+      "story_id": "5ee30c79-f909-4032-b4ba-7df6fa40cc70",
+      "story_key": "ukraine-war-russia-refinery-strikes-2026",
+      "story_title": "[\"Putin\u2019s economy is running on fumes after Ukrainian attacks - politico.eu\"]",
+      "version": 5,
+      "card_status": "refused",
+      "latest_card_at": "2026-07-02T04:17:26.687361Z",
+      "evidence_refs": [
+        "source:news_article:356cff50-785f-44c6-a495-aa805518b852:body_text:0:559",
+        "source:news_article:b33f6a41-ec88-4498-8962-092a829b7f5e:body_text:0:516",
+        "source:news_article:e6e74243-ef3b-481a-a8bc-85d64c6794e9:body_text:0:419",
+        "source:news_article:c6367ad3-7961-476d-b6b8-28141f98979f:body_text:0:522",
+        "source:news_article:ecde579c-2757-458f-90d7-5ac91a847b36:body_text:0:472"
+      ],
+      "sources": [
+        {
+          "source_ref": "source:news_article:356cff50-785f-44c6-a495-aa805518b852",
+          "article_ref": "356cff50-785f-44c6-a495-aa805518b852",
+          "article_title": "[\"Zelenskyy says Ukraine has hit a Russian oil refinery for the second time in a week - AP News\"]",
+          "canonical_uri": null,
+          "source_name": null,
+          "observed_at": "2026-07-01T20:31:19.660472Z",
+          "body_text": "Zelenskyy says Ukraine has hit a Russian oil refinery for the second time in a week - AP News\n\nZelenskyy says Ukraine has hit a Russian oil refinery for the second time in a week AP News Putin Faces Increased Pressure as Moscow Is Again Attacked by Drones The New York Times Is Ukraine\u2019s campaign of targeting Russian refineries working? Al Jazeera Ukraine strikes Russian oil refinery as Zelenskyy calls for Moscow to end war ABC News - Breaking News, Latest News and Videos Unease deepens in Russia as Ukraine steps up long-range strikes The Washington Post"
+        },
+        {
+          "source_ref": "source:news_article:b33f6a41-ec88-4498-8962-092a829b7f5e",
+          "article_ref": "b33f6a41-ec88-4498-8962-092a829b7f5e",
+          "article_title": "[\"Ukraine hits Russian oil refinery for second time, Zelenskyy says - Euronews.com\"]",
+          "canonical_uri": null,
+          "source_name": null,
+          "observed_at": "2026-07-01T22:00:51.496876Z",
+          "body_text": "Ukraine hits Russian oil refinery for second time, Zelenskyy says - Euronews.com\n\nUkraine hits Russian oil refinery for second time, Zelenskyy says Euronews.com Putin Faces Increased Pressure as Moscow Is Again Attacked by Drones The New York Times Is Ukraine\u2019s campaign of targeting Russian refineries working? Al Jazeera Ukraine strikes Russian oil refinery as Zelenskyy calls for Moscow to end war ABC News - Breaking News, Latest News and Videos 3 Killed in Ukrainian Drone Attacks Across Russia The Moscow Times"
+        },
+        {
+          "source_ref": "source:news_article:e6e74243-ef3b-481a-a8bc-85d64c6794e9",
+          "article_ref": "e6e74243-ef3b-481a-a8bc-85d64c6794e9",
+          "article_title": "[\"Ukraine Takes the War to Russia - The New York Times\"]",
+          "canonical_uri": null,
+          "source_name": null,
+          "observed_at": "2026-07-02T00:17:58.584821Z",
+          "body_text": "Ukraine Takes the War to Russia - The New York Times\n\nUkraine Takes the War to Russia The New York Times Ukraine\u2019s Plan to Unnerve Putin The Atlantic Ukraine has brought the (drone) war to Russia. But it may prolong the fighting. The Christian Science Monitor Ukraine\u2019s Expanding Strike Campaign Undercuts Putin\u2019s Claims of Steady Progress The Jamestown Foundation How Ukraine Is Bringing the War to Russia The Dispatch"
+        },
+        {
+          "source_ref": "source:news_article:c6367ad3-7961-476d-b6b8-28141f98979f",
+          "article_ref": "c6367ad3-7961-476d-b6b8-28141f98979f",
+          "article_title": "[\"Russian missile and drone strikes in Ukraine capital kill at least eight and injure dozens - The Guardian\"]",
+          "canonical_uri": null,
+          "source_name": null,
+          "observed_at": "2026-07-02T04:10:21.803381Z",
+          "body_text": "Russian missile and drone strikes in Ukraine capital kill at least eight and injure dozens - The Guardian\n\nRussian missile and drone strikes in Ukraine capital kill at least eight and injure dozens The Guardian Russia Strikes Ukraine as Explosions Rock Capital of Kyiv The New York Times Russia launches major drone and missile attack on Kyiv DW.com Strong explosions rock Kyiv hours after Zelensky warned of \u2018massive\u2019 Russian attack CNN Kyiv attacked after Ukraine\u2019s Zelenskyy warns of \u2018massive Russian strike\u2019 Al Jazeera"
+        },
+        {
+          "source_ref": "source:news_article:ecde579c-2757-458f-90d7-5ac91a847b36",
+          "article_ref": "ecde579c-2757-458f-90d7-5ac91a847b36",
+          "article_title": "[\"Putin\u2019s economy is running on fumes after Ukrainian attacks - politico.eu\"]",
+          "canonical_uri": null,
+          "source_name": null,
+          "observed_at": "2026-07-02T04:16:21.534724Z",
+          "body_text": "Putin\u2019s economy is running on fumes after Ukrainian attacks - politico.eu\n\nPutin\u2019s economy is running on fumes after Ukrainian attacks politico.eu Ukrainian drone attacks on oil refineries plunge Russia into a summer fuel crisis AP News WATCH: Fights break out at Russian gas stations as Putin admits fuel shortages Fox News Russian fuel crisis pushes some pump prices past 100 roubles Reuters Russian Gasoline Prices Rise Again After Ukraine Hits Refineries Bloomberg.com"
+        }
+      ],
+      "expected": {
+        "answerable": true,
+        "required_source_refs": [
+          "source:news_article:356cff50-785f-44c6-a495-aa805518b852",
+          "source:news_article:b33f6a41-ec88-4498-8962-092a829b7f5e",
+          "source:news_article:e6e74243-ef3b-481a-a8bc-85d64c6794e9",
+          "source:news_article:c6367ad3-7961-476d-b6b8-28141f98979f",
+          "source:news_article:ecde579c-2757-458f-90d7-5ac91a847b36"
+        ]
+      }
+    },
+    {
+      "item_id": "T1501-CORPUS-e0801d97",
+      "story_id": "5565e679-57d2-46ee-ace7-1ddecc88e1f4",
+      "story_key": "sony-playstation-physical-discs-end-2028",
+      "story_title": "[\"Sony to end physical PlayStation game discs for new releases starting in 2028 - Fox Business\"]",
+      "version": 2,
+      "card_status": "refused",
+      "latest_card_at": "2026-07-02T03:34:14.593652Z",
+      "evidence_refs": [
+        "source:news_article:99bd2c04-1e8a-44f7-975a-8a1c9c7f2286:body_text:0:508",
+        "source:news_article:72d9241b-a205-4e3a-9db1-285ca2c4f5dd:body_text:0:539"
+      ],
+      "sources": [
+        {
+          "source_ref": "source:news_article:99bd2c04-1e8a-44f7-975a-8a1c9c7f2286",
+          "article_ref": "99bd2c04-1e8a-44f7-975a-8a1c9c7f2286",
+          "article_title": "[\"Sony to end physical PlayStation game discs for new releases starting in 2028 - Fox Business\"]",
+          "canonical_uri": null,
+          "source_name": null,
+          "observed_at": "2026-07-01T23:04:49.445042Z",
+          "body_text": "Sony to end physical PlayStation game discs for new releases starting in 2028 - Fox Business\n\nSony to end physical PlayStation game discs for new releases starting in 2028 Fox Business Physical disc production ending in January 2028 for new games releasing on PlayStation consoles PlayStation.Blog The funeral for PlayStation discs has begun The Verge Sony announces end of PlayStation discs, parts of digital store in the same day Ars Technica Sony\u2019s PlayStation Puts a Nail in Physical Media\u2019s Coffin WIRED"
+        },
+        {
+          "source_ref": "source:news_article:72d9241b-a205-4e3a-9db1-285ca2c4f5dd",
+          "article_ref": "72d9241b-a205-4e3a-9db1-285ca2c4f5dd",
+          "article_title": "[\"Sony to end physical PlayStation game discs for new releases starting in 2028 - Fox Business\"]",
+          "canonical_uri": null,
+          "source_name": null,
+          "observed_at": "2026-07-02T03:33:14.460675Z",
+          "body_text": "Sony to end physical PlayStation game discs for new releases starting in 2028 - Fox Business\n\nSony to end physical PlayStation game discs for new releases starting in 2028 Fox Business Physical disc production ending in January 2028 for new games releasing on PlayStation consoles PlayStation.Blog Sony announces end of PlayStation discs, parts of digital store in the same day Ars Technica PlayStation abandons physical games as Xbox and Sony lose sight of players Windows Central PlayStation Is Getting Yelled At Everywhere Online Kotaku"
+        }
+      ],
+      "expected": {
+        "answerable": true,
+        "required_source_refs": [
+          "source:news_article:99bd2c04-1e8a-44f7-975a-8a1c9c7f2286",
+          "source:news_article:72d9241b-a205-4e3a-9db1-285ca2c4f5dd"
+        ]
+      }
+    },
+    {
+      "item_id": "T1501-CORPUS-1ac8005b",
+      "story_id": "cb728490-0d2f-46fc-ad8d-b2eccd1f6a0f",
+      "story_key": "unknown-worlds-ceo-resignation-krafton-bonus-settlement",
+      "story_title": "[\"Krafton settles with Subnautica 2 developer after drawn-out dispute over $250 million - The Verge\"]",
+      "version": 2,
+      "card_status": "refused",
+      "latest_card_at": "2026-07-02T03:10:12.670449Z",
+      "evidence_refs": [
+        "source:news_article:d8382178-edc6-4f01-a77f-02c08a76a194:body_text:0:580",
+        "source:news_article:87b00e14-7826-406c-8123-82cb78c14c33:body_text:0:582"
+      ],
+      "sources": [
+        {
+          "source_ref": "source:news_article:d8382178-edc6-4f01-a77f-02c08a76a194",
+          "article_ref": "d8382178-edc6-4f01-a77f-02c08a76a194",
+          "article_title": "[\"Subnautica 2 studio Unknown Worlds' CEO resigns as Krafton agrees to pay $250m bonus - GamesIndustry.biz\"]",
+          "canonical_uri": null,
+          "source_name": null,
+          "observed_at": "2026-07-01T21:23:27.960112Z",
+          "body_text": "Subnautica 2 studio Unknown Worlds' CEO resigns as Krafton agrees to pay $250m bonus - GamesIndustry.biz\n\nSubnautica 2 studio Unknown Worlds' CEO resigns as Krafton agrees to pay $250m bonus GamesIndustry.biz Krafton Agrees to Pay \u2018Subnautica 2\u2019 Bonuses as Developer\u2019s CEO Resigns Bloomberg.com Subnautica 2 Developer's Entire Staff Get Their Bonuses After Krafton Agrees to Settlement, but CEO Steps Down IGN Krafton settles with Subnautica 2 developer after drawn-out dispute over $250 million The Verge Long Legal Battle Over Subanutica 2 Ends With Bonuses & CEO Leaving Kotaku"
+        },
+        {
+          "source_ref": "source:news_article:87b00e14-7826-406c-8123-82cb78c14c33",
+          "article_ref": "87b00e14-7826-406c-8123-82cb78c14c33",
+          "article_title": "[\"Krafton settles with Subnautica 2 developer after drawn-out dispute over $250 million - The Verge\"]",
+          "canonical_uri": null,
+          "source_name": null,
+          "observed_at": "2026-07-02T03:09:14.560569Z",
+          "body_text": "Krafton settles with Subnautica 2 developer after drawn-out dispute over $250 million - The Verge\n\nKrafton settles with Subnautica 2 developer after drawn-out dispute over $250 million The Verge Krafton Agrees to Pay \u2018Subnautica 2\u2019 Bonuses as Developer\u2019s CEO Resigns Bloomberg.com Subnautica 2 Developer's Entire Staff Get Their Bonuses After Krafton Agrees to Settlement, but CEO Steps Down IGN Subnautica 2 studio Unknown Worlds' CEO resigns as Krafton agrees to pay $250m bonus GamesIndustry.biz Subnautica 2 Devs Will Actually Get Even More Money As Krafton Drama Ends Aftermath"
+        }
+      ],
+      "expected": {
+        "answerable": true,
+        "required_source_refs": [
+          "source:news_article:d8382178-edc6-4f01-a77f-02c08a76a194",
+          "source:news_article:87b00e14-7826-406c-8123-82cb78c14c33"
+        ]
+      }
+    },
+    {
+      "item_id": "T1501-CORPUS-d9b6eff8",
+      "story_id": "ccdcb2b4-84b3-4745-a3ec-2c0775b13e91",
+      "story_key": "mexican-batman-vigilante",
+      "story_title": "[\"Mexican Bike Thieves Should Fear This Vigilante - Newser\"]",
+      "version": 2,
+      "card_status": "refused",
+      "latest_card_at": "2026-07-02T02:02:51.437233Z",
+      "evidence_refs": [
+        "source:news_article:e9ec3f30-5a44-40f9-98f3-24fb58a1595d:body_text:0:445",
+        "source:news_article:164c1ae9-fe4f-4419-8f14-e444698fc869:body_text:0:410"
+      ],
+      "sources": [
+        {
+          "source_ref": "source:news_article:e9ec3f30-5a44-40f9-98f3-24fb58a1595d",
+          "article_ref": "e9ec3f30-5a44-40f9-98f3-24fb58a1595d",
+          "article_title": "[\"Mexican vigilante, the \u2018Batman,\u2019 wanted by police: Report - NewsNation\"]",
+          "canonical_uri": null,
+          "source_name": null,
+          "observed_at": "2026-07-01T19:02:56.477421Z",
+          "body_text": "Mexican vigilante, the \u2018Batman,\u2019 wanted by police: Report - NewsNation\n\nMexican vigilante, the \u2018Batman,\u2019 wanted by police: Report NewsNation \u2018Mexican Batman\u2019 Is Duct-Taping Motorcycle Thieves to Lampposts. Muy Bueno Yahoo \u2018Mexican Batman\u2019 tapes men to lamp posts The Telegraph Mexican Bike Thieves Should Fear This Vigilante Newser Mexican \u2018batman\u2019 vigilante wanted for chasing down suspected thieves and taping them to lampposts The Independent"
+        },
+        {
+          "source_ref": "source:news_article:164c1ae9-fe4f-4419-8f14-e444698fc869",
+          "article_ref": "164c1ae9-fe4f-4419-8f14-e444698fc869",
+          "article_title": "[\"Mexican Bike Thieves Should Fear This Vigilante - Newser\"]",
+          "canonical_uri": null,
+          "source_name": null,
+          "observed_at": "2026-07-02T02:02:09.537389Z",
+          "body_text": "Mexican Bike Thieves Should Fear This Vigilante - Newser\n\nMexican Bike Thieves Should Fear This Vigilante Newser Mexican Police Hunt Vigilante Accused Of Taping Motorcycle Thieves To Utility Poles Yahoo Mexican vigilante, the \u2018Batman,\u2019 wanted by police: Report NewsNation \u2018Mexican Batman\u2019 tapes men to lamp posts The Telegraph Mexico\u2019s \u2018Batman\u2019 Is Hunting Suspected Thieves and Taping Them to Streetlights VICE"
+        }
+      ],
+      "expected": {
+        "answerable": true,
+        "required_source_refs": [
+          "source:news_article:e9ec3f30-5a44-40f9-98f3-24fb58a1595d",
+          "source:news_article:164c1ae9-fe4f-4419-8f14-e444698fc869"
+        ]
+      }
+    },
+    {
+      "item_id": "T1501-CORPUS-a50bd7c3",
+      "story_id": "fc437c3b-9d4e-4768-a30e-6d62bc8383b0",
+      "story_key": "esa-minecraft-private-servers-piracy-clarification",
+      "story_title": "[\"'This Is Borderline Evil' - Minecraft Creator Speaks Out Against ESA Calling Private Servers 'Illegal' - IGN\"]",
+      "version": 2,
+      "card_status": "refused",
+      "latest_card_at": "2026-07-01T22:19:24.628673Z",
+      "evidence_refs": [
+        "source:news_article:c405c73d-9747-4452-97cd-bf26d0ae9ddb:body_text:0:698",
+        "source:news_article:ff11a66d-c377-4e66-ad01-2fdc9c3c61c8:body_text:0:615"
+      ],
+      "sources": [
+        {
+          "source_ref": "source:news_article:c405c73d-9747-4452-97cd-bf26d0ae9ddb",
+          "article_ref": "c405c73d-9747-4452-97cd-bf26d0ae9ddb",
+          "article_title": "[\"ESA clarifies views on private servers after saying Minecraft servers are \u2018illegal\u2019 and \u2018considered piracy\u2019 - Video Games Chronicle\"]",
+          "canonical_uri": null,
+          "source_name": null,
+          "observed_at": "2026-07-01T19:23:56.450167Z",
+          "body_text": "ESA clarifies views on private servers after saying Minecraft servers are \u2018illegal\u2019 and \u2018considered piracy\u2019 - Video Games Chronicle\n\nESA clarifies views on private servers after saying Minecraft servers are \u2018illegal\u2019 and \u2018considered piracy\u2019 Video Games Chronicle US bill requiring paid games to be playable after they shut down has failed to pass a Senate vote Video Games Chronicle \"Protect Our Games\" Act Fails in California\u2014Stop Killing Games Prepares Next Move TechPowerUp Caught Red-Handed: Why Game Lobbyists Tried to Trick the Government Into Banning Community Servers Yahoo The ESA is up to its tired old tricks in helping to block a California games preservation bill Massively Overpowered"
+        },
+        {
+          "source_ref": "source:news_article:ff11a66d-c377-4e66-ad01-2fdc9c3c61c8",
+          "article_ref": "ff11a66d-c377-4e66-ad01-2fdc9c3c61c8",
+          "article_title": "[\"'This Is Borderline Evil' - Minecraft Creator Speaks Out Against ESA Calling Private Servers 'Illegal' - IGN\"]",
+          "canonical_uri": null,
+          "source_name": null,
+          "observed_at": "2026-07-01T22:18:51.832838Z",
+          "body_text": "'This Is Borderline Evil' - Minecraft Creator Speaks Out Against ESA Calling Private Servers 'Illegal' - IGN\n\n'This Is Borderline Evil' - Minecraft Creator Speaks Out Against ESA Calling Private Servers 'Illegal' IGN US bill requiring paid games to be playable after they shut down has failed to pass a Senate vote Video Games Chronicle ESA Tries To Walk Back Calling Private and Community Servers Illegal TechRaptor \"Protect Our Games\" Act Fails in California\u2014Stop Killing Games Prepares Next Move TechPowerUp Caught Red-Handed: Why Game Lobbyists Tried to Trick the Government Into Banning Community Servers Yahoo"
+        }
+      ],
+      "expected": {
+        "answerable": true,
+        "required_source_refs": [
+          "source:news_article:c405c73d-9747-4452-97cd-bf26d0ae9ddb",
+          "source:news_article:ff11a66d-c377-4e66-ad01-2fdc9c3c61c8"
+        ]
+      }
+    },
+    {
+      "item_id": "T1501-CORPUS-9138c68c",
+      "story_id": "845962c0-809a-46f9-a310-2b48110041b6",
+      "story_key": "catholic-church-schism-sspox-bishops-ordination",
+      "story_title": "[\"Defying Pope Leo XIV, traditionalists go ahead with bishop consecrations in Switzerland - AP News\"]",
+      "version": 2,
+      "card_status": "refused",
+      "latest_card_at": "2026-07-01T21:38:56.064728Z",
+      "evidence_refs": [
+        "source:news_article:8555a22d-b898-4c8b-a58f-f42bf98a537f:body_text:0:492",
+        "source:news_article:2e49aa7f-cd5a-4036-9609-793e6e375da7:body_text:0:526"
+      ],
+      "sources": [
+        {
+          "source_ref": "source:news_article:8555a22d-b898-4c8b-a58f-f42bf98a537f",
+          "article_ref": "8555a22d-b898-4c8b-a58f-f42bf98a537f",
+          "article_title": "[\"Controversial bishops ordained as Pope warns of 'schism' in Catholic Church - BBC\"]",
+          "canonical_uri": null,
+          "source_name": null,
+          "observed_at": "2026-07-01T20:40:19.722710Z",
+          "body_text": "Controversial bishops ordained as Pope warns of 'schism' in Catholic Church - BBC\n\nControversial bishops ordained as Pope warns of 'schism' in Catholic Church BBC Parolin: \u2018Deep sorrow\u2019 over SSPX ordinations Crux | Taking the Catholic Pulse What to know about the breakaway traditionalist Catholics defying Pope Leo XIV Yahoo Rebel Catholic Group Consecrates 4 Bishops, Risking Break With Vatican The New York Times Lefebvrians consecrate four new bishops without a papal mandate Vatican News"
+        },
+        {
+          "source_ref": "source:news_article:2e49aa7f-cd5a-4036-9609-793e6e375da7",
+          "article_ref": "2e49aa7f-cd5a-4036-9609-793e6e375da7",
+          "article_title": "[\"Defying Pope Leo XIV, traditionalists go ahead with bishop consecrations in Switzerland - AP News\"]",
+          "canonical_uri": null,
+          "source_name": null,
+          "observed_at": "2026-07-01T21:38:27.745678Z",
+          "body_text": "Defying Pope Leo XIV, traditionalists go ahead with bishop consecrations in Switzerland - AP News\n\nDefying Pope Leo XIV, traditionalists go ahead with bishop consecrations in Switzerland AP News Rebel Catholic Group Consecrates 4 Bishops, Risking Break With Vatican The New York Times What to know about the breakaway traditionalist Catholics defying Pope Leo XIV Yahoo Controversial bishops ordained as Pope warns of 'schism' in Catholic Church BBC Lefebvrians consecrate four new bishops without a papal mandate Vatican News"
+        }
+      ],
+      "expected": {
+        "answerable": true,
+        "required_source_refs": [
+          "source:news_article:8555a22d-b898-4c8b-a58f-f42bf98a537f",
+          "source:news_article:2e49aa7f-cd5a-4036-9609-793e6e375da7"
+        ]
+      }
+    },
+    {
+      "item_id": "T1501-CORPUS-ea6f32f2",
+      "story_id": "d491bf9d-8a55-42ca-8ab9-f493993315d5",
+      "story_key": "oregon-yugioh-tournament-hygiene-complaints",
+      "story_title": "[\"Oregon store suspends Yu-Gi-Oh tournaments due to hygiene concerns - upi.com\"]",
+      "version": 2,
+      "card_status": "refused",
+      "latest_card_at": "2026-07-01T21:11:53.479193Z",
+      "evidence_refs": [
+        "source:news_article:fb00f342-9923-450f-ae02-378e96c34645:body_text:0:570",
+        "source:news_article:87baa119-0484-4cf7-9740-9d9286c52087:body_text:0:541"
+      ],
+      "sources": [
+        {
+          "source_ref": "source:news_article:fb00f342-9923-450f-ae02-378e96c34645",
+          "article_ref": "fb00f342-9923-450f-ae02-378e96c34645",
+          "article_title": "[\"No shower, no go: Oregon card shop halts Yu\u2011Gi\u2011Oh tournaments over player hygiene complaints - Malay Mail\"]",
+          "canonical_uri": null,
+          "source_name": null,
+          "observed_at": "2026-07-01T20:04:19.482697Z",
+          "body_text": "No shower, no go: Oregon card shop halts Yu\u2011Gi\u2011Oh tournaments over player hygiene complaints - Malay Mail\n\nNo shower, no go: Oregon card shop halts Yu\u2011Gi\u2011Oh tournaments over player hygiene complaints Malay Mail Oregon store suspends Yu-Gi-Oh tournaments due to hygiene concerns upi.com Oregon store pauses Yu-Gi-Oh! card game competitions after complaints about players\u2019 hygiene The Independent 'You are Expected to be Clean' \u2014 Oregon Card Shop Suspends Yu-Gi-Oh Tournaments Due to Smelly Players IGN Yui-Gi-Oh Tournament Postponed Because Players Were Too Smelly Kotaku"
+        },
+        {
+          "source_ref": "source:news_article:87baa119-0484-4cf7-9740-9d9286c52087",
+          "article_ref": "87baa119-0484-4cf7-9740-9d9286c52087",
+          "article_title": "[\"Oregon store suspends Yu-Gi-Oh tournaments due to hygiene concerns - upi.com\"]",
+          "canonical_uri": null,
+          "source_name": null,
+          "observed_at": "2026-07-01T21:11:27.677964Z",
+          "body_text": "Oregon store suspends Yu-Gi-Oh tournaments due to hygiene concerns - upi.com\n\nOregon store suspends Yu-Gi-Oh tournaments due to hygiene concerns upi.com Oregon store pauses Yu-Gi-Oh! card game competitions after complaints about players\u2019 hygiene The Independent 'You are Expected to be Clean' \u2014 Oregon Card Shop Suspends Yu-Gi-Oh Tournaments Due to Smelly Players IGN Yui-Gi-Oh Tournament Postponed Because Players Were Too Smelly Kotaku No shower, no go: Oregon card shop halts Yu\u2011Gi\u2011Oh tournaments over player hygiene complaints Malay Mail"
+        }
+      ],
+      "expected": {
+        "answerable": true,
+        "required_source_refs": [
+          "source:news_article:fb00f342-9923-450f-ae02-378e96c34645",
+          "source:news_article:87baa119-0484-4cf7-9740-9d9286c52087"
+        ]
+      }
+    },
+    {
+      "item_id": "T1501-CORPUS-f01c20f8",
+      "story_id": "a65f7c06-6375-4dc3-a67c-74b488ead1e4",
+      "story_key": "ukraine-talion-interceptor-drone-shahed",
+      "story_title": "[\"Video shows a Ukrainian unit running down a Russian Shahed \u2014the kind of kill the US is racing to reproduce - Defense News\"]",
+      "version": 2,
+      "card_status": "refused",
+      "latest_card_at": "2026-07-01T20:19:41.912719Z",
+      "evidence_refs": [
+        "source:news_article:f684a346-13e0-40af-9b58-2cb570bd982d:body_text:0:593",
+        "source:news_article:ac2e7353-6174-4e14-a3a7-d89e76385500:body_text:0:676"
+      ],
+      "sources": [
+        {
+          "source_ref": "source:news_article:f684a346-13e0-40af-9b58-2cb570bd982d",
+          "article_ref": "f684a346-13e0-40af-9b58-2cb570bd982d",
+          "article_title": "[\"Video purportedly shows Ukrainian unit running down Russian Shahed. The US is paying attention. - Military Times\"]",
+          "canonical_uri": null,
+          "source_name": null,
+          "observed_at": "2026-07-01T19:35:56.739277Z",
+          "body_text": "Video purportedly shows Ukrainian unit running down Russian Shahed. The US is paying attention. - Military Times\n\nVideo purportedly shows Ukrainian unit running down Russian Shahed. The US is paying attention. Military Times Interceptor and loitering munition: what makes Ukraine's new TALION unmanned aerial system unique \u041c\u0456\u043d\u0456\u0441\u0442\u0435\u0440\u0441\u0442\u0432\u043e \u043e\u0431\u043e\u0440\u043e\u043d\u0438 \u0423\u043a\u0440\u0430\u0457\u043d\u0438 Ukraine Unveils ZIRKA Interceptor Drone Built to Down Shaheds Kyiv Post Ukraine\u2019s Defense Ministry deploys Talion kamikaze drone to intercept enemy UAVs mezha.net Inside Ukraine\u2019s Interceptor Drone Race: A Pilot\u2019s View Ukraine's Arms Monitor"
+        },
+        {
+          "source_ref": "source:news_article:ac2e7353-6174-4e14-a3a7-d89e76385500",
+          "article_ref": "ac2e7353-6174-4e14-a3a7-d89e76385500",
+          "article_title": "[\"Video shows a Ukrainian unit running down a Russian Shahed \u2014the kind of kill the US is racing to reproduce - Defense News\"]",
+          "canonical_uri": null,
+          "source_name": null,
+          "observed_at": "2026-07-01T20:19:19.497917Z",
+          "body_text": "Video shows a Ukrainian unit running down a Russian Shahed \u2014the kind of kill the US is racing to reproduce - Defense News\n\nVideo shows a Ukrainian unit running down a Russian Shahed \u2014the kind of kill the US is racing to reproduce Defense News Video purportedly shows Ukrainian unit running down Russian Shahed. The US is paying attention. Military Times Interceptor and loitering munition: what makes Ukraine's new TALION unmanned aerial system unique \u041c\u0456\u043d\u0456\u0441\u0442\u0435\u0440\u0441\u0442\u0432\u043e \u043e\u0431\u043e\u0440\u043e\u043d\u0438 \u0423\u043a\u0440\u0430\u0457\u043d\u0438 Ukraine Introduces ZIRKA Interceptor Drone to Counter Shaheds UNITED24 Media Ukraine took Soviet Strela-10 and built its own air-defense system on it. RYF is already guarding sky Euromaidan Press"
+        }
+      ],
+      "expected": {
+        "answerable": true,
+        "required_source_refs": [
+          "source:news_article:f684a346-13e0-40af-9b58-2cb570bd982d",
+          "source:news_article:ac2e7353-6174-4e14-a3a7-d89e76385500"
+        ]
+      }
+    }
+  ]
+}
