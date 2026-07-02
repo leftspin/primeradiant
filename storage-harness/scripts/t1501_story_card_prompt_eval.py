@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import json
 import re
+import signal
 import subprocess
 import sys
 import time
@@ -8,6 +9,7 @@ import urllib.request
 
 ENDPOINT = "http://gibson:8080/v1/chat/completions"
 MODEL = "Qwen3.6-35B-A3B-UD-Q4_K_M.gguf"
+REQUEST_TIMEOUT_SECONDS = 180
 
 SYSTEM_PROMPT = """You are a Prime Radiant story agent. Use only the bounded packet supplied in the user message.
 Source admission is evidence only; you own story/meaning output only when it is packet-grounded.
@@ -145,6 +147,12 @@ def packet(item):
         "prior_story_card_version": None
     }
 
+class RequestDeadlineExceeded(TimeoutError):
+    pass
+
+def _deadline_exceeded(_signum, _frame):
+    raise RequestDeadlineExceeded(f"model request exceeded {REQUEST_TIMEOUT_SECONDS}s")
+
 def invoke(prompt, schema, item, max_tokens):
     user = json.dumps({
         "instruction": prompt,
@@ -159,8 +167,18 @@ def invoke(prompt, schema, item, max_tokens):
     }).encode()
     req = urllib.request.Request(ENDPOINT, data=payload, headers={"Content-Type": "application/json"})
     started = time.time()
-    with urllib.request.urlopen(req, timeout=120) as res:
-        body = json.loads(res.read())
+    previous_handler = signal.signal(signal.SIGALRM, _deadline_exceeded)
+    signal.alarm(REQUEST_TIMEOUT_SECONDS)
+    try:
+        with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT_SECONDS) as res:
+            body = json.loads(res.read())
+    except RequestDeadlineExceeded as exc:
+        return None, str(exc), "model_request_timeout"
+    except TimeoutError as exc:
+        return None, str(exc), "model_request_timeout"
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous_handler)
     content = body["choices"][0]["message"]["content"]
     match = re.search(r"\{.*\}", re.sub(r"<think>.*?</think>", "", content, flags=re.S), flags=re.S)
     if not match:
@@ -223,6 +241,7 @@ def main():
     for name, prompt, schema, max_tokens, contract_version in variants:
         rows = []
         for item in corpus["items"]:
+            print(f"running {name} {item['item_id']}", file=sys.stderr, flush=True)
             output, raw, parse_error = invoke(prompt, schema, item, max_tokens)
             matrix, reason = score_output(output, item, parse_error)
             rows.append({"item_id": item["item_id"], "failure_reason": reason, "matrix": matrix, "raw_excerpt": raw[:500]})

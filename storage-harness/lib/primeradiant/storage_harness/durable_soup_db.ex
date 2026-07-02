@@ -486,6 +486,15 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
         load_rows(db_path, "story_events", tenant_id, Primeradiant.StorageHarness.StoryEvent)
       )
       |> put_rows(
+        :story_card_versions,
+        load_rows(
+          db_path,
+          "story_card_versions",
+          tenant_id,
+          Primeradiant.StorageHarness.StoryCardVersion
+        )
+      )
+      |> put_rows(
         :story_card_change_sets,
         load_rows(
           db_path,

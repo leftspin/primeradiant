@@ -22,7 +22,12 @@ defmodule Primeradiant.SoupApiTest do
     {:ok, state: state}
   end
 
-  test "ready returns ready soup metadata for Reporter story cards", %{state: state} do
+  test "ready returns ready soup metadata for Reporter story cards", %{state: _state} do
+    state =
+      source_ready_state([
+        source_item("ready-complete-card", title: "Ready complete card")
+      ])
+
     body =
       :get
       |> conn("/api/v1/soup/ready?consumer=reporter&projection=story_cards")
@@ -35,10 +40,17 @@ defmodule Primeradiant.SoupApiTest do
     assert is_binary(body["substrate_cursor"])
     assert is_binary(body["substrate_epoch"])
     assert body["freshness"]["latest_source_at"]
+    assert body["synthesis_health"]["status"] == "healthy"
+    assert body["synthesis_health"]["complete_current_synopsis_count"] > 0
     assert body["blockers"] == []
   end
 
-  test "ready accepts Reporter news-morning as the story-card projection", %{state: state} do
+  test "ready accepts Reporter news-morning as the story-card projection", %{state: _state} do
+    state =
+      source_ready_state([
+        source_item("ready-news-morning-complete-card", title: "Ready news morning complete card")
+      ])
+
     body =
       :get
       |> conn("/api/v1/soup/ready?consumer=reporter&projection=news-morning")
@@ -48,7 +60,77 @@ defmodule Primeradiant.SoupApiTest do
 
     assert body["contract_version"] == "soup.v1"
     assert body["status"] in ["ready", "degraded"]
+    assert body["synthesis_health"]["status"] == "healthy"
     assert body["blockers"] == []
+  end
+
+  test "ready fails when admitted current stories have no complete grounded synopsis artifacts",
+       %{
+         state: state
+       } do
+    body =
+      :get
+      |> conn("/api/v1/soup/ready?consumer=reporter&projection=story_cards")
+      |> put_req_header("authorization", "Bearer internal-token")
+      |> Router.call(Keyword.put(@opts, :state, state))
+      |> json()
+
+    assert body["status"] == "blocked"
+    assert body["synthesis_health"]["status"] == "failed"
+    assert body["synthesis_health"]["complete_current_synopsis_count"] == 0
+
+    assert Enum.any?(
+             body["blockers"],
+             &(&1["code"] == "zero_complete_current_synopsis_artifacts")
+           )
+  end
+
+  test "ready fails when current synthesis repeatedly refuses or quarantines invalid output", %{
+    state: _state
+  } do
+    state =
+      source_ready_state([
+        source_item("refused-streak-card", title: "Refused streak card")
+      ])
+
+    [card] = state.story_card_versions
+
+    refused_cards =
+      Enum.map(1..3, fn index ->
+        at = DateTime.add(card.inserted_at || DateTime.utc_now(), index, :second)
+
+        %{
+          card
+          | id: "00000000-0000-4000-8000-00000000050#{index}",
+            card_version: card.card_version + index,
+            status: "refused",
+            refresh_reason: "story_card_hourly_synthesis",
+            inserted_at: at,
+            updated_at: at,
+            deck: %{"state" => "refused", "reason" => "story_synthesis_invalid_model_output"},
+            summary: %{"state" => "refused", "reason" => "story_synthesis_invalid_model_output"},
+            field_completeness: %{"overall" => "refused"},
+            provenance: %{"reason" => "story_synthesis_invalid_model_output"}
+        }
+      end)
+
+    state = %{state | story_card_versions: state.story_card_versions ++ refused_cards}
+
+    body =
+      :get
+      |> conn("/api/v1/soup/ready?consumer=reporter&projection=story_cards")
+      |> put_req_header("authorization", "Bearer internal-token")
+      |> Router.call(Keyword.put(@opts, :state, state))
+      |> json()
+
+    assert body["status"] == "blocked"
+    assert body["synthesis_health"]["status"] == "failed"
+    assert body["synthesis_health"]["refused_or_invalid_streak_count"] >= 3
+
+    assert Enum.any?(
+             body["blockers"],
+             &(&1["code"] == "story_synthesis_refused_or_invalid_streak")
+           )
   end
 
   test "ready blocks unsupported projection instead of allowing render", %{state: state} do
@@ -1145,7 +1227,14 @@ defmodule Primeradiant.SoupApiTest do
           "global_salience" => "test",
           "flynn_priority" => "test"
         },
-        "changed_field_keys" => ["exact_happening", "deck", "summary", "source_links", "source_coverage", "key_claims"],
+        "changed_field_keys" => [
+          "exact_happening",
+          "deck",
+          "summary",
+          "source_links",
+          "source_coverage",
+          "key_claims"
+        ],
         "change_summary" => %{
           "text" => "Story card synthesized by test stub.",
           "state" => "complete",
