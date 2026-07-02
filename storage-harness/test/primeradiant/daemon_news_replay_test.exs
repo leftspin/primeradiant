@@ -1274,8 +1274,8 @@ defmodule Primeradiant.DaemonNewsReplayTest do
       )
 
     assert agent_run["agent_run_key"] in [
-             "agent-run:story-synthesis.v2.t1311.article-link-salience:#{refresh.correlation_id}",
-             "agent-run:story-synthesis.v2.t1311.article-link-salience:#{refresh.correlation_id}:source-coverage-repair"
+             "agent-run:story-synthesis.v3.t1501.magazine-card-contract:#{refresh.correlation_id}",
+             "agent-run:story-synthesis.v3.t1501.magazine-card-contract:#{refresh.correlation_id}:source-coverage-repair"
            ]
   end
 
@@ -3729,6 +3729,11 @@ defmodule Primeradiant.DaemonNewsReplayTest do
           "state" => "complete",
           "provenance_refs" => ["fieldprov:test"]
         },
+        "exact_happening" => %{
+          "text" => "Civic Clinic triage remains active from linked source evidence.",
+          "state" => "complete",
+          "provenance_refs" => ["fieldprov:test"]
+        },
         "deck" => %{
           "text" => "Civic Clinic triage remains the active story card.",
           "state" => "complete",
@@ -3766,6 +3771,13 @@ defmodule Primeradiant.DaemonNewsReplayTest do
               "source_weight" => %{"state" => "complete", "value" => 1.0}
             }
           end),
+        "source_links" =>
+          Enum.map(source_refs, fn source_ref ->
+            %{
+              "source_ref" => source_ref,
+              "evidence_refs" => packet.evidence_refs
+            }
+          end),
         "topic_salience" => %{
           "salience_explanation" => %{
             "text" => "clinic triage story has local service salience",
@@ -3788,9 +3800,11 @@ defmodule Primeradiant.DaemonNewsReplayTest do
         },
         "field_completeness" => %{
           "title" => "complete",
+          "exact_happening" => "complete",
           "deck" => "complete",
           "summary" => "complete",
           "key_claims" => "complete",
+          "source_links" => "complete",
           "source_coverage" => "complete",
           "topic_salience" => "complete",
           "canonical_public_url" => "source_level",

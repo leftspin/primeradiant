@@ -55,13 +55,16 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
   """
 
   @synthesis_prompt """
-  Maintain the current living story card from committed story state and linked source evidence.
-  Return deck, summary, key_claims, source_coverage, contribution explanations, salience hints, and changed fields.
+  Maintain the current living Magazine story card from committed story state and linked source evidence.
+  Return title, exact_happening, deck, summary, key_claims, source_links, source_coverage, contribution explanations, salience hints, and changed fields.
+  Return status complete when the packet contains enough headline/body evidence to write reader-facing fields. Do not refuse merely because publisher metadata, canonical URL, or full article text is missing; those are source-level display fields handled outside this output.
+  Every complete text field must be an object with state complete, non-empty text, and provenance_refs copied from packet evidence.
   For every article in committed_story_state.linked_sources, return exactly one matching source_coverage row keyed by source_ref.
   Do not cover only the newest source_ref. The story card source list is incomplete unless every linked source_ref has source_coverage.
   Each source_coverage row must include contribution_reason.text: a concise plain-language explanation of why that article matters to this story, suitable for a reader-facing News source popup.
   Use contribution_reason unavailable/refused with a specific non-sentinel reason only when the linked article text truly cannot support a reader-facing salience explanation.
   Examples: "Adds the funding amount and names the investor" or "Provides the primary quote from the company."
+  Use status refused only for honest evidence-limited refusal. A valid refusal must include refusal_provenance with reason, evidence_refs, and quarantine_recommendation. Schema uncertainty is not an honest refusal.
   If any required source display or story-card field is unavailable, return explicit unavailable/refused/incomplete field state with reason and provenance.
   If the packet includes source_coverage_repair_request, repair the prior omission by returning source_coverage for every missing source_ref.
   """
@@ -698,6 +701,9 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
       not story_synthesis_field?(output["title"]) ->
         {:error, "story_synthesis_invalid_model_output"}
 
+      not story_synthesis_field?(output["exact_happening"]) ->
+        {:error, "story_synthesis_invalid_model_output"}
+
       not story_synthesis_field?(output["deck"]) ->
         {:error, "story_synthesis_invalid_model_output"}
 
@@ -708,6 +714,9 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
         {:error, "story_synthesis_invalid_model_output"}
 
       not story_synthesis_source_coverage?(output["source_coverage"], packet) ->
+        {:error, "story_synthesis_invalid_model_output"}
+
+      not story_synthesis_source_links?(output["source_links"], packet) ->
         {:error, "story_synthesis_invalid_model_output"}
 
       not story_synthesis_topic_salience?(output["topic_salience"]) ->
@@ -754,6 +763,23 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
 
   defp story_synthesis_source_coverage?(_coverage, _packet), do: false
 
+  defp story_synthesis_source_links?(links, packet) when is_list(links) do
+    required_refs = linked_source_refs(packet)
+    link_refs = Enum.map(links, &Map.get(&1, "source_ref"))
+
+    Enum.sort(link_refs) == Enum.sort(required_refs) and
+      Enum.all?(links, fn
+        %{"source_ref" => source_ref, "evidence_refs" => evidence_refs}
+        when is_binary(source_ref) and source_ref != "" ->
+          provenance_refs?(evidence_refs)
+
+        _ ->
+          false
+      end)
+  end
+
+  defp story_synthesis_source_links?(_links, _packet), do: false
+
   defp story_synthesis_source_coverage_row?(row) do
     case row do
       %{"source_ref" => source_ref} when is_binary(source_ref) and source_ref != "" ->
@@ -783,7 +809,9 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
 
   defp story_synthesis_changed_field_keys?(keys) when is_list(keys) do
     allowed =
-      MapSet.new(~w(title deck summary source_coverage key_claims topic_salience change_summary))
+      MapSet.new(
+        ~w(title exact_happening deck summary source_links source_coverage key_claims topic_salience change_summary)
+      )
 
     Enum.all?(keys, &(is_binary(&1) and MapSet.member?(allowed, &1)))
   end
@@ -793,11 +821,13 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
   defp story_synthesis_field_completeness?(completeness) when is_map(completeness) do
     allowed_keys =
       MapSet.new(
-        ~w(title deck summary key_claims topic_salience canonical_public_url source_label publication source_coverage overall)
+        ~w(title exact_happening deck summary key_claims topic_salience canonical_public_url source_label publication source_links source_coverage overall)
       )
 
     required_keys =
-      MapSet.new(~w(title deck summary key_claims source_coverage topic_salience overall))
+      MapSet.new(
+        ~w(title exact_happening deck summary key_claims source_links source_coverage topic_salience overall)
+      )
 
     source_level_keys = MapSet.new(~w(canonical_public_url source_label publication))
 
@@ -2239,9 +2269,14 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
 
   defp config(:story_synthesis) do
     :story_synthesis
-    |> config("story-synthesis.v2.t1311.article-link-salience", @synthesis_prompt, %{
+    |> config("story-synthesis.v3.t1501.magazine-card-contract", @synthesis_prompt, %{
       status: "complete | incomplete | refused | unavailable",
       title: %{text: "string", state: "complete | unavailable", provenance_refs: ["string"]},
+      exact_happening: %{
+        text: "specific happening this card is about",
+        state: "complete | unavailable",
+        provenance_refs: ["string"]
+      },
       deck: %{
         text: "string or null",
         state: "complete | unavailable",
@@ -2288,6 +2323,13 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
             value: "number or null; required when state is complete",
             reason: "string or null; required when state is unavailable/refused"
           }
+        }
+      ],
+      source_links: [
+        %{
+          source_ref:
+            "must exactly match one committed_story_state.linked_sources[].source_ref; include one row for every linked source_ref",
+          evidence_refs: ["evidence ref"]
         }
       ],
       topic_salience: %{

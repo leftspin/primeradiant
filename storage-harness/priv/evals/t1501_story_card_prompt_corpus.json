@@ -1,0 +1,93 @@
+{
+  "corpus_id": "t1501_eurisko_story_card_failures_20260702_v1",
+  "source": {
+    "host": "eurisko",
+    "soup_db": "/home/clu/.local/state/primeradiant/soup-api/soup.sqlite3",
+    "query_mode": "sqlite3 -readonly",
+    "captured_at": "2026-07-02T04:00:00Z",
+    "selection": "latest refused story_card_versions joined to retained inputs.body_text"
+  },
+  "items": [
+    {
+      "item_id": "T1501-001",
+      "external_id": "62844798-6594-48b8-a3a1-ec5d47e6e90a",
+      "source_ref": "news_article:62844798-6594-48b8-a3a1-ec5d47e6e90a",
+      "story_id": "ad91831a-b8e1-4326-bc4e-3e0b16709806",
+      "story_key": "us-iran-indirect-talks-doha-2026",
+      "story_title": "US-Iran talks gain momentum in Doha as Hormuz tensions ease ahead of Khamenei funeral - Fox News",
+      "card_id": "ea99b257-9a3a-4cea-bae1-d530abe2c0ae",
+      "card_status": "refused",
+      "refresh_reason": "source_linked",
+      "prompt_config_hash": "fbda4782f35c0cbf10f091d7336716bc142971ec5ea0a87804ee680cc7ae5643",
+      "packet_hash": "39de2b6829c9001f129cf65375eee2ee9081955cf4fab5cb6d2b1613790438a8",
+      "evidence_refs": [
+        "evidence:news_article:62844798-6594-48b8-a3a1-ec5d47e6e90a:body_text:0:513"
+      ],
+      "article_title": "US-Iran talks gain momentum in Doha as Hormuz tensions ease ahead of Khamenei funeral - Fox News",
+      "body_text": "US-Iran talks gain momentum in Doha as Hormuz tensions ease ahead of Khamenei funeral - Fox News\n\nUS-Iran talks gain momentum in Doha as Hormuz tensions ease ahead of Khamenei funeral Fox News US, Iran talks conclude in Doha, focused on Strait of Hormuz Reuters Iran war live: 'Positive progress' as US, Tehran wrap up indirect talks Al Jazeera Live updates: Qatar says indirect US-Iran talks have made 'positive progress' CNN US Says Witkoff, Kushner Had Positive Talks in Doha on Iran Deal Bloomberg.com",
+      "canonical_uri": null,
+      "source_name": null,
+      "observed_at": "2026-07-02T01:38:03Z",
+      "expected": {
+        "answerable": true,
+        "required_source_refs": [
+          "news_article:62844798-6594-48b8-a3a1-ec5d47e6e90a"
+        ]
+      }
+    },
+    {
+      "item_id": "T1501-002",
+      "external_id": "ca87c8e6-1aa6-4a71-9898-6eea99edcf99",
+      "source_ref": "news_article:ca87c8e6-1aa6-4a71-9898-6eea99edcf99",
+      "story_id": "290df1fb-e656-425d-876c-d857f7a9282d",
+      "story_key": "apple-seeks-to-buy-chinese-made-memory-chips-by-lobbying-us-hanford-sentinel",
+      "story_title": "[\"Apple seeks to buy Chinese-made memory chips by lobbying US - Hanford Sentinel\"]",
+      "card_id": "a39d5590-c78d-4315-8dae-58cea3f571ff",
+      "card_status": "refused",
+      "refresh_reason": "story_created",
+      "prompt_config_hash": "fbda4782f35c0cbf10f091d7336716bc142971ec5ea0a87804ee680cc7ae5643",
+      "packet_hash": "c98a51b9d3d77197855d72d1623c163c6d2cfc12338e8a481ac7ab2d3c456fcc",
+      "evidence_refs": [
+        "evidence:news_article:ca87c8e6-1aa6-4a71-9898-6eea99edcf99:body_text:0:156"
+      ],
+      "article_title": "[\"Apple seeks to buy Chinese-made memory chips by lobbying US - Hanford Sentinel\"]",
+      "body_text": "Apple seeks to buy Chinese-made memory chips by lobbying US - Hanford Sentinel\n\nApple seeks to buy Chinese-made memory chips by lobbying US Hanford Sentinel",
+      "canonical_uri": null,
+      "source_name": null,
+      "observed_at": "2026-07-02T01:33:00Z",
+      "expected": {
+        "answerable": true,
+        "required_source_refs": [
+          "news_article:ca87c8e6-1aa6-4a71-9898-6eea99edcf99"
+        ]
+      }
+    },
+    {
+      "item_id": "T1501-003",
+      "external_id": "b2673f6e-cd7e-4efb-91d2-8d02d4346fa0",
+      "source_ref": "news_article:b2673f6e-cd7e-4efb-91d2-8d02d4346fa0",
+      "story_id": "b14fb3d2-ce3a-4835-bba3-bcc60732f712",
+      "story_key": "bethesda-shows-off-oblivion-remastered-switch-2-physical-release-nintendo-life",
+      "story_title": "[\"Bethesda Shows Off Oblivion Remastered Switch 2 Physical Release - Nintendo Life\"]",
+      "card_id": "521f4c2b-213a-4422-bde1-17a754d6bfa1",
+      "card_status": "refused",
+      "refresh_reason": "story_created",
+      "prompt_config_hash": "fbda4782f35c0cbf10f091d7336716bc142971ec5ea0a87804ee680cc7ae5643",
+      "packet_hash": "181aeb7c502f72e473e80feaf9f3250e5d36f617a74ff243c6707e6298d6c4ac",
+      "evidence_refs": [
+        "evidence:news_article:b2673f6e-cd7e-4efb-91d2-8d02d4346fa0:body_text:0:572"
+      ],
+      "article_title": "[\"Bethesda Shows Off Oblivion Remastered Switch 2 Physical Release - Nintendo Life\"]",
+      "body_text": "Bethesda Shows Off Oblivion Remastered Switch 2 Physical Release - Nintendo Life\n\nBethesda Shows Off Oblivion Remastered Switch 2 Physical Release Nintendo Life The Elder Scrolls IV: Oblivion Remastered Comes to Nintendo Switch 2 on August 11 Bethesda.net The Elder Scrolls IV: Oblivion Remastered Physical Edition Puts All the Content on a Physical Cart IGN Bad news for Fallout 3 fans as Bethesda announces release date for different remaster Daily Express Sure would be great if Oblivion Remastered got patched on PC to coincide with the Switch 2 release Yahoo Tech",
+      "canonical_uri": null,
+      "source_name": null,
+      "observed_at": "2026-07-02T00:45:00Z",
+      "expected": {
+        "answerable": true,
+        "required_source_refs": [
+          "news_article:b2673f6e-cd7e-4efb-91d2-8d02d4346fa0"
+        ]
+      }
+    }
+  ]
+}
