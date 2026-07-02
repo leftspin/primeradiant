@@ -1343,6 +1343,7 @@ defmodule Primeradiant.DaemonNewsReplayTest do
 
     assert agent_run["agent_run_key"] in [
              "agent-run:story-synthesis.v3.t1501.grounded-synopsis-evidence-contract:#{refresh.correlation_id}",
+             "agent-run:story-synthesis.v3.t1501.grounded-synopsis-evidence-contract:#{refresh.correlation_id}:schema-repair",
              "agent-run:story-synthesis.v3.t1501.grounded-synopsis-evidence-contract:#{refresh.correlation_id}:source-coverage-repair"
            ]
   end
@@ -1669,6 +1670,161 @@ defmodule Primeradiant.DaemonNewsReplayTest do
       )
 
     assert latest_coverage == []
+  end
+
+  test "recurring story-card synthesis keeps title-only live output refused after bounded repair fails" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-recurring-title-only-story-card-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    soup_db_path = Path.join(tmp, "primeradiant-event-soup.sqlite3")
+    raw_path = Path.join(tmp, "archive.jsonl")
+
+    [row] = [
+      envelope(
+        "Recurring Civic Clinic title-only Gibson packet",
+        "Recurring Civic Clinic title-only Gibson packet creates the story."
+      )
+    ]
+
+    [{offset, length}] = write_archive!(raw_path, [row])
+
+    event =
+      committed_source_item_event("event-title-only-gibson-news-1", raw_path, offset, length, row)
+
+    {:ok, state, _report} =
+      DaemonNewsEvent.consume_event(event,
+        soup_db_path: soup_db_path,
+        tenant_id: @tenant,
+        actor_id: "flynn",
+        story_agent_loop?: true,
+        story_agent_opts: [adapter: &stub_story_agent/3]
+      )
+
+    {refreshed, cadence_report} =
+      LiveStoryAgentLoop.refresh_story_cards(state, "flynn",
+        cadence: :hourly_story_card_synthesis,
+        limit: 1,
+        adapter: &title_only_story_synthesis_agent/3
+      )
+
+    [refresh] = cadence_report.refreshes
+    assert refresh.story_card_status == "refused"
+
+    assert refresh.model_route ==
+             "internal://story-synthesis/story_synthesis_invalid_model_output"
+
+    latest_card = Enum.max_by(refreshed.story_card_versions, & &1.card_version)
+    assert latest_card.status == "refused"
+    assert latest_card.title["state"] == "complete"
+    assert latest_card.deck["reason"] == "story_synthesis_invalid_model_output"
+    assert latest_card.summary["reason"] == "story_synthesis_invalid_model_output"
+
+    assert Enum.filter(refreshed.story_key_claims, &(&1.story_card_version_id == latest_card.id)) ==
+             []
+
+    assert latest_card.field_completeness["overall"] == "refused"
+
+    latest_run =
+      refreshed.agent_runs
+      |> Enum.filter(&(&1.agent_type == "story_synthesis"))
+      |> List.last()
+
+    assert latest_run.scope["repair_reason"] == "story_synthesis_invalid_model_output"
+    assert is_binary(latest_run.scope["repair_of_agent_run_id"])
+    assert latest_run.scope["final_story_synthesis_source"] == "refused"
+
+    assert Enum.any?(refreshed.audit_events, fn
+             %{
+               event: :story_synthesis_model_output_repair_attempted,
+               reason: "story_synthesis_invalid_model_output"
+             } ->
+               true
+
+             _ ->
+               false
+           end)
+  end
+
+  test "recurring story-card synthesis retries title-only live output and saves repaired complete artifact" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-recurring-title-only-repaired-story-card-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    soup_db_path = Path.join(tmp, "primeradiant-event-soup.sqlite3")
+    raw_path = Path.join(tmp, "archive.jsonl")
+
+    [row] = [
+      envelope(
+        "Recurring Civic Clinic repaired title-only Gibson packet",
+        "Recurring Civic Clinic repaired title-only Gibson packet creates the story."
+      )
+    ]
+
+    [{offset, length}] = write_archive!(raw_path, [row])
+
+    event =
+      committed_source_item_event(
+        "event-title-only-repaired-gibson-news-1",
+        raw_path,
+        offset,
+        length,
+        row
+      )
+
+    {:ok, state, _report} =
+      DaemonNewsEvent.consume_event(event,
+        soup_db_path: soup_db_path,
+        tenant_id: @tenant,
+        actor_id: "flynn",
+        story_agent_loop?: true,
+        story_agent_opts: [adapter: &stub_story_agent/3]
+      )
+
+    {refreshed, cadence_report} =
+      LiveStoryAgentLoop.refresh_story_cards(state, "flynn",
+        cadence: :hourly_story_card_synthesis,
+        limit: 1,
+        adapter: &repairing_title_only_story_synthesis_agent/3
+      )
+
+    assert_receive {:story_synthesis_repair_packet, repair_packet}, 1_000
+
+    assert repair_packet.story_synthesis_output_repair_request.validation_error ==
+             "story_synthesis_invalid_model_output"
+
+    [refresh] = cadence_report.refreshes
+    assert refresh.story_card_status == "complete"
+
+    latest_card = Enum.max_by(refreshed.story_card_versions, & &1.card_version)
+    assert latest_card.status == "complete"
+    assert latest_card.deck["state"] == "complete"
+    assert latest_card.summary["state"] == "complete"
+
+    assert [_claim] =
+             Enum.filter(
+               refreshed.story_key_claims,
+               &(&1.story_card_version_id == latest_card.id)
+             )
+
+    latest_run =
+      refreshed.agent_runs
+      |> Enum.filter(&(&1.agent_type == "story_synthesis"))
+      |> List.last()
+
+    assert latest_run.scope["repair_reason"] == "story_synthesis_invalid_model_output"
+    assert is_binary(latest_run.scope["repair_of_agent_run_id"])
+    refute latest_run.scope["final_story_synthesis_source"] == "refused"
   end
 
   test "recurring story-card synthesis refuses malformed Gibson JSON without crashing" do
@@ -3386,6 +3542,54 @@ defmodule Primeradiant.DaemonNewsReplayTest do
   end
 
   defp stub_story_agent_oversized_retry_previous_output(config, packet, ctx),
+    do: stub_story_agent(config, packet, ctx)
+
+  defp title_only_story_synthesis_agent(%{role: :story_synthesis}, packet, _ctx) do
+    synthesis = stub_story_synthesis(packet)
+
+    output = %{
+      "status" => "complete",
+      "title" => %{
+        "text" => story_synthesis_title(packet),
+        "state" => "complete",
+        "provenance_refs" => packet.evidence_refs
+      }
+    }
+
+    %{
+      synthesis
+      | output: output,
+        model: "stub-live-model",
+        model_route: "test://title-only-story-synthesis",
+        producer_kind: "live_model_inference",
+        decision_source: "live_gibson_qwen_inference"
+    }
+  end
+
+  defp title_only_story_synthesis_agent(config, packet, ctx),
+    do: stub_story_agent(config, packet, ctx)
+
+  defp repairing_title_only_story_synthesis_agent(
+         %{role: :story_synthesis} = _config,
+         %{story_synthesis_output_repair_request: _request} = packet,
+         _ctx
+       ) do
+    send(self(), {:story_synthesis_repair_packet, packet})
+
+    packet
+    |> stub_story_synthesis()
+    |> Map.merge(%{
+      model: "stub-live-model",
+      model_route: "test://repaired-title-only-story-synthesis",
+      producer_kind: "live_model_inference",
+      decision_source: "live_gibson_qwen_inference"
+    })
+  end
+
+  defp repairing_title_only_story_synthesis_agent(%{role: :story_synthesis}, packet, ctx),
+    do: title_only_story_synthesis_agent(%{role: :story_synthesis}, packet, ctx)
+
+  defp repairing_title_only_story_synthesis_agent(config, packet, ctx),
     do: stub_story_agent(config, packet, ctx)
 
   defp malformed_gibson_story_synthesis_agent(%{role: :story_synthesis}, _packet, _ctx) do

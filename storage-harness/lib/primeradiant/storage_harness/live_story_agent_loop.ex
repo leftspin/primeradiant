@@ -65,6 +65,7 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
   For answerable current-news packets, include at least one key_claim with claim_ref, text, status "current", materiality "material", evidence_refs, conflict_refs, uncertainty, and appears_in_current_synopsis true.
   Use status "refused" only for honest evidence-limited refusal. A valid refusal must include refusal_provenance with reason, evidence_refs, and quarantine_recommendation. Schema uncertainty is not an honest refusal.
   If the packet includes source_coverage_repair_request, repair the prior omission by returning source_coverage and source_links for every required_source_ref. Do not omit missing_source_refs.
+  If the packet includes story_synthesis_output_repair_request, the previous output failed validation. Repair it by returning one complete schema-conforming object grounded only in the packet, or a valid evidence-limited refused object with refusal_provenance. Do not return a title-only or partial object.
   """
 
   def story_synthesis_eval_contract do
@@ -558,55 +559,116 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
         {state, run, synthesis}
 
       {:error, reason} ->
-        fallback = supported_story_synthesis_fallback(packet)
-        refusal = story_synthesis_refusal(packet, reason, reason, reason)
-        refused_output_hash = hash(refusal.output)
-        attempted_output_hash = run.scope["output_hash"]
-        attempted_model_route = run.scope["model_route"]
-        attempted_producer_kind = run.scope["producer_kind"]
-        attempted_decision_source = run.scope["decision_source"]
+        if retryable_story_synthesis_output?(run, packet) do
+          retry_correlation_id = "#{correlation_id}:schema-repair"
 
-        synthesis =
-          %{synthesis | output: normalize_output(refusal.output)}
+          retry_packet =
+            packet
+            |> Map.put(:packet_id, "packet:story_synthesis:#{retry_correlation_id}")
+            |> Map.put(:story_synthesis_output_repair_request, %{
+              validation_error: reason,
+              previous_output: synthesis.output,
+              instruction:
+                "The previous story_synthesis output failed validation. Return a complete schema-conforming grounded synopsis artifact, or a valid evidence-limited refusal with refusal_provenance. Do not return title-only, partial, or unavailable fields for a complete artifact."
+            })
 
-        run =
-          ChangesetStore.update!(run, %{
-            model: refusal.model,
-            scope:
-              Map.merge(run.scope, %{
-                "attempted_output_hash" => attempted_output_hash,
-                "attempted_model_route" => attempted_model_route,
-                "attempted_producer_kind" => attempted_producer_kind,
-                "attempted_decision_source" => attempted_decision_source,
-                "output_hash" => refused_output_hash,
-                "model_route" => refusal.model_route,
-                "producer_kind" => refusal.producer_kind,
-                "decision_source" => refusal.decision_source,
-                "final_story_synthesis_source" => "refused",
-                "fallback_route" => fallback.route,
-                "fallback_gap" => fallback.gap,
-                "validation_error" => reason,
-                "refused_output_hash" => refused_output_hash
-              })
-          })
+          {state, retry_run, retry_synthesis} =
+            invoke_bounded_story_synthesis_agent(
+              state,
+              config,
+              retry_packet,
+              actor_id,
+              adapter,
+              retry_correlation_id
+            )
 
-        state =
-          state
-          |> State.replace(:agent_runs, run.id, run)
-          |> State.audit(%{
-            event: :story_synthesis_model_output_refused,
-            agent_run_id: run.id,
-            packet_id: packet.packet_id,
-            packet_hash: synthesis.packet_hash,
-            model_route_attempted: synthesis.run.scope["model_route"],
-            final_model_route: refusal.model_route,
-            fallback_route: fallback.route,
-            fallback_gap: fallback.gap,
-            reason: reason
-          })
+          retry_run =
+            ChangesetStore.update!(retry_run, %{
+              scope:
+                Map.merge(retry_run.scope, %{
+                  "repair_of_agent_run_id" => run.id,
+                  "repair_reason" => reason
+                })
+            })
 
-        {state, run, %{synthesis | run: run}}
+          state =
+            state
+            |> State.replace(:agent_runs, retry_run.id, retry_run)
+            |> State.audit(%{
+              event: :story_synthesis_model_output_repair_attempted,
+              agent_run_id: retry_run.id,
+              repair_of_agent_run_id: run.id,
+              packet_id: retry_packet.packet_id,
+              reason: reason
+            })
+
+          {state, retry_run, %{retry_synthesis | run: retry_run}}
+        else
+          refuse_invalid_story_synthesis_output(
+            state,
+            run,
+            synthesis,
+            packet,
+            reason
+          )
+        end
     end
+  end
+
+  defp retryable_story_synthesis_output?(run, packet) do
+    is_nil(Map.get(packet, :story_synthesis_output_repair_request)) and
+      get_in(run.scope, ["producer_kind"]) != "deterministic_product_logic"
+  end
+
+  defp refuse_invalid_story_synthesis_output(state, run, synthesis, packet, reason) do
+    fallback = supported_story_synthesis_fallback(packet)
+    refusal = story_synthesis_refusal(packet, reason, reason, reason)
+    refused_output_hash = hash(refusal.output)
+    attempted_output_hash = run.scope["output_hash"]
+    attempted_model_route = run.scope["model_route"]
+    attempted_producer_kind = run.scope["producer_kind"]
+    attempted_decision_source = run.scope["decision_source"]
+
+    synthesis =
+      %{synthesis | output: normalize_output(refusal.output)}
+
+    run =
+      ChangesetStore.update!(run, %{
+        model: refusal.model,
+        scope:
+          Map.merge(run.scope, %{
+            "attempted_output_hash" => attempted_output_hash,
+            "attempted_model_route" => attempted_model_route,
+            "attempted_producer_kind" => attempted_producer_kind,
+            "attempted_decision_source" => attempted_decision_source,
+            "output_hash" => refused_output_hash,
+            "model_route" => refusal.model_route,
+            "producer_kind" => refusal.producer_kind,
+            "decision_source" => refusal.decision_source,
+            "final_story_synthesis_source" => "refused",
+            "fallback_route" => fallback.route,
+            "fallback_gap" => fallback.gap,
+            "validation_error" => reason,
+            "refused_output_hash" => refused_output_hash
+          })
+      })
+
+    state =
+      state
+      |> State.replace(:agent_runs, run.id, run)
+      |> State.audit(%{
+        event: :story_synthesis_model_output_refused,
+        agent_run_id: run.id,
+        packet_id: packet.packet_id,
+        packet_hash: synthesis.packet_hash,
+        model_route_attempted: synthesis.run.scope["model_route"],
+        final_model_route: refusal.model_route,
+        fallback_route: fallback.route,
+        fallback_gap: fallback.gap,
+        reason: reason
+      })
+
+    {state, run, %{synthesis | run: run}}
   end
 
   defp malformed_story_synthesis_refusal_adapter(adapter) do
