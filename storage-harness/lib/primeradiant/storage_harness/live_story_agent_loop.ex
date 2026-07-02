@@ -548,6 +548,11 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
     {state, run, synthesis} =
       invoke_agent(state, config, packet, actor_id, adapter, correlation_id)
 
+    synthesis = %{
+      synthesis
+      | output: normalize_story_synthesis_completion_status(synthesis.output, packet)
+    }
+
     case validate_story_synthesis_output(synthesis.output, packet, run) do
       :ok ->
         {state, run, synthesis}
@@ -715,6 +720,17 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
 
   defp validate_story_synthesis_output(_output, _packet, _run),
     do: {:error, "story_synthesis_invalid_model_output"}
+
+  defp normalize_story_synthesis_completion_status(%{"status" => "refused"} = output, packet) do
+    complete_output = %{output | "status" => "complete"}
+
+    case validate_trusted_story_synthesis_output(complete_output, packet) do
+      :ok -> complete_output
+      {:error, _reason} -> output
+    end
+  end
+
+  defp normalize_story_synthesis_completion_status(output, _packet), do: output
 
   defp validate_trusted_story_synthesis_output(output, packet) do
     cond do
