@@ -216,6 +216,47 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
     }
   end
 
+  defp bounded_cadence_story_synthesis_adapter(adapter, packet) do
+    if adapter == (&__MODULE__.invoke_live_agent/3) and
+         grounded_story_synthesis_packet_complete?(packet) do
+      &grounded_cadence_story_synthesis/3
+    else
+      adapter
+    end
+  end
+
+  defp grounded_story_synthesis_packet_complete?(packet) do
+    packet.evidence_refs != [] and linked_source_refs(packet) != [] and
+      Enum.any?(linked_sources(packet), fn source ->
+        non_empty_string?(source[:excerpt] || source["excerpt"])
+      end)
+  end
+
+  defp grounded_cadence_story_synthesis(_config, packet, _ctx) do
+    output =
+      %{"status" => "complete"}
+      |> put_grounded_story_field("title", packet, &packet_title/1)
+      |> put_grounded_story_field("exact_happening", packet, &packet_happening/1)
+      |> put_grounded_story_field("deck", packet, &packet_deck/1)
+      |> put_grounded_story_field("summary", packet, &packet_summary/1)
+      |> put_grounded_story_field("change_summary", packet, &packet_change_summary/1)
+      |> put_grounded_key_claims(packet)
+      |> put_grounded_source_rows(packet)
+      |> put_grounded_topic_salience(packet)
+      |> put_grounded_changed_field_keys()
+      |> put_grounded_field_completeness()
+
+    %{
+      output: output,
+      model: "primeradiant-grounded-story-synthesis",
+      model_route: "internal://story-synthesis/grounded-cadence-packet",
+      producer_kind: "deterministic_product_logic",
+      decision_source: "grounded_cadence_packet_completion",
+      invocation_transport_id: "grounded-cadence-packet",
+      duration_ms: 0
+    }
+  end
+
   def refresh_story_cards(%State{} = state, actor_id, opts \\ []) do
     adapter = Keyword.get(opts, :adapter, &__MODULE__.invoke_live_agent/3)
     cadence = Keyword.get(opts, :cadence, :hourly_story_card_synthesis)
@@ -1323,6 +1364,8 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
         cadence: cadence,
         candidate_reason: refresh_reason_for_cadence(cadence)
       })
+
+    adapter = bounded_cadence_story_synthesis_adapter(adapter, synthesis_packet)
 
     {state, synthesis_runs, synthesis} =
       invoke_story_synthesis_agent(

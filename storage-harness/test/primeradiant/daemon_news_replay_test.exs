@@ -1336,6 +1336,92 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     refute latest_run.scope["final_story_synthesis_source"] == "refused"
   end
 
+  test "recurring cadence uses bounded grounded packet completion instead of live model when current source evidence is sufficient" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-recurring-grounded-default-cadence-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    soup_db_path = Path.join(tmp, "primeradiant-event-soup.sqlite3")
+    raw_path = Path.join(tmp, "archive.jsonl")
+
+    [row] = [
+      envelope(
+        "Recurring Civic Clinic default bounded cadence",
+        "Recurring Civic Clinic default bounded cadence has enough current source evidence for a complete grounded story artifact."
+      )
+    ]
+
+    [{offset, length}] = write_archive!(raw_path, [row])
+
+    event =
+      committed_source_item_event(
+        "event-recurring-grounded-default-cadence",
+        raw_path,
+        offset,
+        length,
+        row
+      )
+
+    {:ok, state, _report} =
+      DaemonNewsEvent.consume_event(event,
+        soup_db_path: soup_db_path,
+        tenant_id: @tenant,
+        actor_id: "flynn",
+        story_agent_loop?: true,
+        story_agent_opts: [adapter: &stub_story_agent/3]
+      )
+
+    {refreshed, cadence_report} =
+      LiveStoryAgentLoop.refresh_story_cards(state, "flynn",
+        cadence: :hourly_story_card_synthesis,
+        limit: 1
+      )
+
+    [refresh] = cadence_report.refreshes
+    assert refresh.story_card_status == "complete"
+    assert refresh.model_route == "internal://story-synthesis/grounded-cadence-packet"
+    assert refresh.producer_kind == "deterministic_product_logic"
+    assert refresh.decision_source == "grounded_cadence_packet_completion"
+
+    latest_card = Enum.max_by(refreshed.story_card_versions, & &1.card_version)
+    assert latest_card.status == "complete"
+    assert latest_card.field_completeness["overall"] == "complete"
+    assert latest_card.deck["state"] == "complete"
+    assert latest_card.summary["state"] == "complete"
+
+    assert [_claim] =
+             Enum.filter(
+               refreshed.story_key_claims,
+               &(&1.story_card_version_id == latest_card.id)
+             )
+
+    [coverage] =
+      Enum.filter(
+        refreshed.story_source_coverage,
+        &(&1.story_card_version_id == latest_card.id)
+      )
+
+    assert coverage.contribution_reason["state"] == "complete"
+    assert coverage.contribution_reason["text"] != ""
+
+    latest_run =
+      refreshed.agent_runs
+      |> Enum.filter(&(&1.agent_type == "story_synthesis"))
+      |> List.last()
+
+    assert latest_run.model == "primeradiant-grounded-story-synthesis"
+
+    assert latest_run.scope["model_route"] ==
+             "internal://story-synthesis/grounded-cadence-packet"
+
+    assert latest_run.scope["producer_kind"] == "deterministic_product_logic"
+  end
+
   test "recurring cadence keeps title-only live synthesis refused" do
     tmp =
       Path.join(
