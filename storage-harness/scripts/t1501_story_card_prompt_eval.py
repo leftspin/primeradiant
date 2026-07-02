@@ -99,7 +99,22 @@ VARIANT_SCHEMA = {
     "field_completeness": {}
 }
 
+def item_sources(item):
+    sources = item.get("sources")
+    if isinstance(sources, list) and sources:
+        return sources
+    return [{
+        "source_ref": item["source_ref"],
+        "article_ref": item["external_id"],
+        "article_title": item["article_title"],
+        "canonical_uri": item["canonical_uri"],
+        "source_name": item["source_name"],
+        "observed_at": item["observed_at"],
+        "body_text": item["body_text"]
+    }]
+
 def packet(item):
+    sources = item_sources(item)
     return {
         "packet_id": f"t1501:{item['item_id']}",
         "story_key": item["story_key"],
@@ -107,24 +122,24 @@ def packet(item):
         "committed_story_state": {
             "title": item["story_title"],
             "state": "active",
-            "version": 1,
-            "structural_facts": {},
-            "background_facts": {},
-            "topic_tokens": [],
+            "version": item.get("version", 1),
+            "structural_facts": item.get("structural_facts", {}),
+            "background_facts": item.get("background_facts", {}),
+            "topic_tokens": item.get("topic_tokens", []),
             "linked_sources": [{
-                "source_ref": item["source_ref"],
-                "article_ref": item["external_id"],
-                "article_title": item["article_title"],
-                "canonical_uri": item["canonical_uri"],
-                "source_name": item["source_name"],
-                "observed_at": item["observed_at"],
-                "excerpt": item["body_text"][:240],
+                "source_ref": source["source_ref"],
+                "article_ref": source.get("article_ref") or source.get("external_id"),
+                "article_title": source.get("article_title"),
+                "canonical_uri": source.get("canonical_uri"),
+                "source_name": source.get("source_name"),
+                "observed_at": source.get("observed_at"),
+                "excerpt": (source.get("body_text") or "")[:420],
                 "excerpt_state": "bounded"
-            }],
+            } for source in sources],
             "packet_bounds": {
-                "source_count": 1,
-                "source_excerpt_chars": 240,
-                "truncated_source_count": 0
+                "source_count": len(sources),
+                "source_excerpt_chars": 420,
+                "truncated_source_count": sum(1 for source in sources if len(source.get("body_text") or "") > 420)
             }
         },
         "prior_story_card_version": None
@@ -140,7 +155,7 @@ def invoke(prompt, schema, item):
         "model": MODEL,
         "messages": [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": user}],
         "temperature": 0.1,
-        "max_tokens": 4096
+        "max_tokens": 8192
     }).encode()
     req = urllib.request.Request(ENDPOINT, data=payload, headers={"Content-Type": "application/json"})
     started = time.time()

@@ -1074,6 +1074,11 @@ defmodule Primeradiant.SoupApiTest do
           "state" => "complete",
           "provenance_refs" => packet.evidence_refs
         },
+        "exact_happening" => %{
+          "text" => "Reporter-ready exact happening for #{packet.external_id}",
+          "state" => "complete",
+          "provenance_refs" => packet.evidence_refs
+        },
         "deck" => %{
           "text" => "Reporter-ready deck for #{packet.external_id}",
           "state" => "complete",
@@ -1109,11 +1114,19 @@ defmodule Primeradiant.SoupApiTest do
             "source_weight" => %{"state" => "complete", "value" => 1.0}
           }
         ],
+        "source_links" => [
+          %{
+            "source_ref" => packet.source_ref,
+            "evidence_refs" => packet.evidence_refs
+          }
+        ],
         "field_completeness" => %{
           "title" => "complete",
+          "exact_happening" => "complete",
           "deck" => "complete",
           "summary" => "complete",
           "key_claims" => "complete",
+          "source_links" => "complete",
           "source_coverage" => "complete",
           "topic_salience" => "complete",
           "overall" => "complete"
@@ -1132,7 +1145,7 @@ defmodule Primeradiant.SoupApiTest do
           "global_salience" => "test",
           "flynn_priority" => "test"
         },
-        "changed_field_keys" => ["deck", "summary", "source_coverage", "key_claims"],
+        "changed_field_keys" => ["exact_happening", "deck", "summary", "source_links", "source_coverage", "key_claims"],
         "change_summary" => %{
           "text" => "Story card synthesized by test stub.",
           "state" => "complete",
