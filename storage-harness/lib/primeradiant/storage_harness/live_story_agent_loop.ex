@@ -1098,9 +1098,9 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
   end
 
   defp packet_title(packet) do
-    get_in(packet, [:committed_story_state, :title]) ||
-      packet.story_key ||
-      first_linked_source_value(packet, :article_title) ||
+    scalar_title(get_in(packet, [:committed_story_state, :title])) ||
+      scalar_title(first_linked_source_value(packet, :article_title)) ||
+      scalar_title(packet.story_key) ||
       "current story"
   end
 

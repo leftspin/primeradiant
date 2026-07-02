@@ -1502,6 +1502,119 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert latest_run.scope["decision_source"] == "story_synthesis_insufficient_bounded_evidence"
   end
 
+  test "cadence projection avoids historical reader deltas and delta persist preserves them" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-cadence-delta-persist-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    soup_db_path = Path.join(tmp, "primeradiant-event-soup.sqlite3")
+    raw_path = Path.join(tmp, "archive.jsonl")
+
+    [row] = [
+      envelope(
+        "Recurring Civic Clinic delta persist cadence",
+        "Recurring Civic Clinic delta persist cadence has enough source evidence for a grounded story card."
+      )
+    ]
+
+    [{offset, length}] = write_archive!(raw_path, [row])
+
+    event =
+      committed_source_item_event(
+        "event-recurring-delta-persist-cadence",
+        raw_path,
+        offset,
+        length,
+        row
+      )
+
+    {:ok, state, _report} =
+      DaemonNewsEvent.consume_event(event,
+        soup_db_path: soup_db_path,
+        tenant_id: @tenant,
+        actor_id: "flynn",
+        story_agent_loop?: true,
+        story_agent_opts: [adapter: &stub_story_agent/3]
+      )
+
+    latest_card = Enum.max_by(state.story_card_versions, & &1.card_version)
+    latest_run = List.last(state.agent_runs)
+    story = List.first(state.stories)
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond) |> DateTime.to_iso8601()
+
+    large_delta =
+      %{
+        "items" =>
+          Enum.map(1..250, fn index ->
+            %{
+              "claim_ref" => "historical-reader-delta-#{index}",
+              "text" => String.duplicate("reader delta payload ", 20)
+            }
+          end)
+      }
+      |> Jason.encode!()
+      |> sql_string()
+
+    sql = """
+    INSERT INTO story_reader_deltas (
+      id, tenant_id, user_id, story_id, seen_state_id,
+      prior_seen_story_version, prior_seen_card_version_id,
+      current_story_version, current_card_version_id,
+      material_unseen_deltas, nonmaterial_exclusions,
+      producing_agent_run_id, evidence_refs, provenance_refs,
+      inserted_at, updated_at
+    ) VALUES (
+      'reader-delta-cadence-preserve',
+      '#{@tenant}',
+      'flynn',
+      '#{story.id}',
+      NULL,
+      0,
+      NULL,
+      #{story.version},
+      '#{latest_card.id}',
+      '#{large_delta}',
+      '[]',
+      '#{latest_run.id}',
+      '[]',
+      '["reader-delta-cadence-preserve"]',
+      '#{now}',
+      '#{now}'
+    );
+    """
+
+    {_out, 0} = System.cmd("sqlite3", [soup_db_path, sql])
+    reader_delta_count = DurableSoupDb.table_count(soup_db_path, "story_reader_deltas", @tenant)
+    assert reader_delta_count >= 1
+
+    loaded = DurableSoupDb.load_soup_ready_projection(soup_db_path, @tenant)
+    assert loaded.story_reader_deltas == []
+
+    {refreshed, report} =
+      LiveStoryAgentLoop.refresh_story_cards(loaded, "flynn",
+        cadence: :hourly_story_card_synthesis,
+        limit: 1
+      )
+
+    assert report.candidate_count == 1
+    assert report.refreshed_count == 1
+
+    DurableSoupDb.persist_delta!(soup_db_path, loaded, refreshed, %{
+      source_kind: "recurring-soup-cadence",
+      source_db_path: soup_db_path,
+      source_row_count: 0,
+      expected_tenant_revision: DurableSoupDb.tenant_revision(soup_db_path, @tenant)
+    })
+
+    assert DurableSoupDb.table_count(soup_db_path, "story_reader_deltas", @tenant) ==
+             reader_delta_count
+  end
+
   test "recurring cadence keeps title-only live synthesis refused" do
     tmp =
       Path.join(
