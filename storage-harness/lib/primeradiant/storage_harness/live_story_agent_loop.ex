@@ -216,8 +216,8 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
     }
   end
 
-  defp bounded_cadence_story_synthesis_adapter(adapter, packet) do
-    if adapter == (&__MODULE__.invoke_live_agent/3) do
+  defp bounded_cadence_story_synthesis_adapter(adapter, packet, custom_adapter?) do
+    if not custom_adapter? do
       if grounded_story_synthesis_packet_complete?(packet) do
         &grounded_cadence_story_synthesis/3
       else
@@ -270,6 +270,7 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
   end
 
   def refresh_story_cards(%State{} = state, actor_id, opts \\ []) do
+    custom_adapter? = Keyword.has_key?(opts, :adapter)
     adapter = Keyword.get(opts, :adapter, &__MODULE__.invoke_live_agent/3)
     cadence = Keyword.get(opts, :cadence, :hourly_story_card_synthesis)
     limit = Keyword.get(opts, :limit, 8)
@@ -297,7 +298,15 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
 
           input ->
             {state, refresh} =
-              refresh_story_card_for_story(state, story, input, actor_id, adapter, cadence)
+              refresh_story_card_for_story(
+                state,
+                story,
+                input,
+                actor_id,
+                adapter,
+                cadence,
+                custom_adapter?
+              )
 
             {state, refreshes ++ [refresh]}
         end
@@ -1332,7 +1341,15 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
 
   defp run_packet_id(run), do: run.scope["packet_id"]
 
-  defp refresh_story_card_for_story(state, story, input, actor_id, adapter, cadence) do
+  defp refresh_story_card_for_story(
+         state,
+         story,
+         input,
+         actor_id,
+         adapter,
+         cadence,
+         custom_adapter?
+       ) do
     source_ref = Admission.input_ref(input)
     latest_event = latest_story_event(state, story.id, input.id)
 
@@ -1377,7 +1394,7 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
         candidate_reason: refresh_reason_for_cadence(cadence)
       })
 
-    adapter = bounded_cadence_story_synthesis_adapter(adapter, synthesis_packet)
+    adapter = bounded_cadence_story_synthesis_adapter(adapter, synthesis_packet, custom_adapter?)
 
     {state, synthesis_runs, synthesis} =
       invoke_story_synthesis_agent(
