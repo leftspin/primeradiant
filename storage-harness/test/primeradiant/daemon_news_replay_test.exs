@@ -1422,6 +1422,86 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert latest_run.scope["producer_kind"] == "deterministic_product_logic"
   end
 
+  test "default recurring cadence fast-refuses title-only bounded evidence without live model" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-recurring-title-only-default-refusal-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    soup_db_path = Path.join(tmp, "primeradiant-event-soup.sqlite3")
+    raw_path = Path.join(tmp, "archive.jsonl")
+
+    [row] = [
+      envelope(
+        "Recurring Civic Clinic title-only default bounded cadence",
+        "Recurring Civic Clinic title-only default bounded cadence creates the story."
+      )
+    ]
+
+    [{offset, length}] = write_archive!(raw_path, [row])
+
+    event =
+      committed_source_item_event(
+        "event-recurring-title-only-default-cadence",
+        raw_path,
+        offset,
+        length,
+        row
+      )
+
+    {:ok, state, _report} =
+      DaemonNewsEvent.consume_event(event,
+        soup_db_path: soup_db_path,
+        tenant_id: @tenant,
+        actor_id: "flynn",
+        story_agent_loop?: true,
+        story_agent_opts: [adapter: &stub_story_agent/3]
+      )
+
+    title_only_state =
+      update_in(state.inputs, fn inputs ->
+        Enum.map(inputs, &%{&1 | body_text: nil})
+      end)
+
+    {refreshed, cadence_report} =
+      LiveStoryAgentLoop.refresh_story_cards(title_only_state, "flynn",
+        cadence: :hourly_story_card_synthesis,
+        limit: 1
+      )
+
+    [refresh] = cadence_report.refreshes
+    assert refresh.story_card_status == "refused"
+    assert refresh.model_route == "internal://story-synthesis/insufficient-bounded-evidence"
+    assert refresh.producer_kind == "deterministic_product_logic"
+    assert refresh.decision_source == "story_synthesis_insufficient_bounded_evidence"
+
+    latest_card = Enum.max_by(refreshed.story_card_versions, & &1.card_version)
+    assert latest_card.status == "refused"
+    assert latest_card.field_completeness["overall"] == "refused"
+    assert latest_card.deck["reason"] == "story_synthesis_insufficient_bounded_evidence"
+    assert latest_card.summary["reason"] == "story_synthesis_insufficient_bounded_evidence"
+
+    assert Enum.filter(refreshed.story_key_claims, &(&1.story_card_version_id == latest_card.id)) ==
+             []
+
+    latest_run =
+      refreshed.agent_runs
+      |> Enum.filter(&(&1.agent_type == "story_synthesis"))
+      |> List.last()
+
+    assert latest_run.model == "primeradiant-story-synthesis-boundary"
+
+    assert latest_run.scope["model_route"] ==
+             "internal://story-synthesis/insufficient-bounded-evidence"
+
+    assert latest_run.scope["producer_kind"] == "deterministic_product_logic"
+    assert latest_run.scope["decision_source"] == "story_synthesis_insufficient_bounded_evidence"
+  end
+
   test "recurring cadence keeps title-only live synthesis refused" do
     tmp =
       Path.join(

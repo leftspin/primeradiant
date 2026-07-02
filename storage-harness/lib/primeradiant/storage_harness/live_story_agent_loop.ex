@@ -217,9 +217,12 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
   end
 
   defp bounded_cadence_story_synthesis_adapter(adapter, packet) do
-    if adapter == (&__MODULE__.invoke_live_agent/3) and
-         grounded_story_synthesis_packet_complete?(packet) do
-      &grounded_cadence_story_synthesis/3
+    if adapter == (&__MODULE__.invoke_live_agent/3) do
+      if grounded_story_synthesis_packet_complete?(packet) do
+        &grounded_cadence_story_synthesis/3
+      else
+        &bounded_cadence_story_synthesis_refusal/3
+      end
     else
       adapter
     end
@@ -255,6 +258,15 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
       invocation_transport_id: "grounded-cadence-packet",
       duration_ms: 0
     }
+  end
+
+  defp bounded_cadence_story_synthesis_refusal(_config, packet, _ctx) do
+    story_synthesis_refusal(
+      packet,
+      "story_synthesis_insufficient_bounded_evidence",
+      "insufficient-bounded-evidence",
+      "insufficient-bounded-evidence"
+    )
   end
 
   def refresh_story_cards(%State{} = state, actor_id, opts \\ []) do
