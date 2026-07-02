@@ -465,8 +465,9 @@ defmodule Primeradiant.Soup do
   defp projection_id(state), do: "story-cards:#{state.tenant_id}:#{epoch(state)}"
 
   defp feed_visible_stories(state) do
-    Enum.sort_by(
-      state.stories,
+    state.stories
+    |> Enum.reject(&t1421_quarantined?/1)
+    |> Enum.sort_by(
       &{story_card_serving_rank(state, &1), &1.updated_at_story},
       fn {left_rank, left_updated_at}, {right_rank, right_updated_at} ->
         left_rank < right_rank or
@@ -476,13 +477,23 @@ defmodule Primeradiant.Soup do
   end
 
   defp visible_stories(state) do
-    Enum.sort_by(state.stories, & &1.updated_at_story, {:desc, DateTime})
+    state.stories
+    |> Enum.reject(&t1421_quarantined?/1)
+    |> Enum.sort_by(& &1.updated_at_story, {:desc, DateTime})
   end
 
   defp story_card_serving_rank(state, story) do
     case current_story_card_version(state, story.id) do
       %{status: "complete"} -> 0
       _ -> 1
+    end
+  end
+
+  defp t1421_quarantined?(story) do
+    case story.attrs["t1421_quarantine"] || story.attrs[:t1421_quarantine] do
+      %{"active_product_truth" => false} -> true
+      %{active_product_truth: false} -> true
+      _ -> false
     end
   end
 
