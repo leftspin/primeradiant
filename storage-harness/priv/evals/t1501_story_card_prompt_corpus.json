@@ -1,363 +1,291 @@
 {
-  "corpus_id": "T1501-CORPUS-20260702-live-refused-retained-v1",
+  "corpus_id": "t1501_eurisko_story_card_failures_20260702_v2",
   "source": {
     "host": "eurisko",
     "soup_db": "/home/clu/.local/state/primeradiant/soup-api/soup.sqlite3",
     "query_mode": "sqlite3 -readonly",
-    "captured_at": "2026-07-02T04:34:43Z",
-    "selection": "8 stable real refused grounded story synthesis records with retained linked source text"
+    "captured_at": "2026-07-02T22:00:00Z",
+    "selection": "latest refused/incomplete/unavailable story_card_versions per story joined to retained inputs.body_text, ordered by card inserted_at desc",
+    "limit": 10
   },
   "items": [
     {
-      "item_id": "T1501-CORPUS-1a2061ee",
+      "item_id": "T1501-001",
+      "external_id": "d6f64d80-68a9-4d6b-8e9f-71152c2eab11",
+      "source_ref": "news_article:d6f64d80-68a9-4d6b-8e9f-71152c2eab11",
+      "story_id": "0e353a5a-9727-45d3-ad7b-fb32f0f620e1",
+      "story_key": "samsung-galaxy-z-fold-8-teasers",
+      "story_title": "Samsung Galaxy Z Fold 8 Ultra colors leak, including the online exclusive option - PhoneArena",
+      "card_id": "8e82fb49-f736-486b-aacd-b2e524669e46",
+      "card_status": "refused",
+      "refresh_reason": "source_linked",
+      "prompt_config_hash": "604280a382bdf669f61d2e8a350b162666b066fe47351f95195f6e4cce833be0",
+      "packet_hash": "803e89a96adb3b1c8d9bcb530fdc64d138b96b020e475079304e8bd31a7fc32e",
+      "card_inserted_at": "2026-07-02T22:27:32.255122Z",
+      "evidence_refs": [
+        "evidence:news_article:d6f64d80-68a9-4d6b-8e9f-71152c2eab11:body_text:0:530"
+      ],
+      "article_title": "Samsung Galaxy Z Fold 8 Ultra colors leak, including the online exclusive option - PhoneArena",
+      "body_text": "Samsung Galaxy Z Fold 8 Ultra colors leak, including the online exclusive option - PhoneArena\n\nSamsung Galaxy Z Fold 8 Ultra colors leak, including the online exclusive option PhoneArena Samsung Galaxy Z Fold 8 Rumor Roundup: Wider and Ultra Phones May Be Coming cnet.com Samsung Teases Wide-As-Hell New Foldable Engadget Samsung’s confusing ‘Galaxy Z Fold 8 Ultra’ name is basically official in latest leak [Gallery] 9to5Google Samsung RM700 e-voucher for the next foldable now available for Samsung Members! Hitech Century",
+      "canonical_uri": null,
+      "source_name": null,
+      "observed_at": "2026-07-02T09:40:29Z",
+      "expected": {
+        "answerable": true,
+        "required_source_refs": [
+          "news_article:d6f64d80-68a9-4d6b-8e9f-71152c2eab11"
+        ]
+      }
+    },
+    {
+      "item_id": "T1501-002",
+      "external_id": "392bb3bb-849d-44da-9c6a-6947693497fa",
+      "source_ref": "news_article:392bb3bb-849d-44da-9c6a-6947693497fa",
+      "story_id": "e34ac736-4385-479a-a869-8c8a2d9ea060",
+      "story_key": "samsung-removes-vascular-load-galaxy-watch-us",
+      "story_title": "[\"Samsung will remove Vascular Load feature from Galaxy Watches in the US - SamMobile\"]",
+      "card_id": "4777e562-df83-4a1f-84e9-d4e7e3b760e6",
+      "card_status": "refused",
+      "refresh_reason": "story_created",
+      "prompt_config_hash": "604280a382bdf669f61d2e8a350b162666b066fe47351f95195f6e4cce833be0",
+      "packet_hash": "0a245d36f0442ed1bf96e925531f53a93310bdf7355c9eb7c739b4d52be2db0f",
+      "card_inserted_at": "2026-07-02T22:18:52.851111Z",
+      "evidence_refs": [
+        "evidence:news_article:392bb3bb-849d-44da-9c6a-6947693497fa:body_text:0:526"
+      ],
+      "article_title": "[\"Samsung will remove Vascular Load feature from Galaxy Watches in the US - SamMobile\"]",
+      "body_text": "Samsung will remove Vascular Load feature from Galaxy Watches in the US - SamMobile\n\nSamsung will remove Vascular Load feature from Galaxy Watches in the US SamMobile Samsung discontinues Vascular Load feature on Galaxy Watches in US, but here's the alternative Android Authority Samsung Galaxy Watch removing ‘Vascular Load’ in favor of blood pressure trends 9to5Google One UI 9 Watch Beta could be released this month SamMobile Your Galaxy Watch Is About to Lose a Health Feature, Here's What to Do Now Android Headlines",
+      "canonical_uri": null,
+      "source_name": null,
+      "observed_at": "2026-07-02T06:40:00Z",
+      "expected": {
+        "answerable": true,
+        "required_source_refs": [
+          "news_article:392bb3bb-849d-44da-9c6a-6947693497fa"
+        ]
+      }
+    },
+    {
+      "item_id": "T1501-003",
+      "external_id": "2cb88913-d19f-4dd1-980e-0ed274ab3859",
+      "source_ref": "news_article:2cb88913-d19f-4dd1-980e-0ed274ab3859",
+      "story_id": "4ed8a444-df81-426a-ae51-31984d03101a",
+      "story_key": "33-year-old-mother-unborn-twins-killed-in-apple-valley-crash",
+      "story_title": "[\"33-year-old mother, unborn twins killed in Apple Valley crash - ABC7 Los Angeles\"]",
+      "card_id": "639860c9-1615-4f2b-8c98-ba690f571300",
+      "card_status": "refused",
+      "refresh_reason": "story_created",
+      "prompt_config_hash": "604280a382bdf669f61d2e8a350b162666b066fe47351f95195f6e4cce833be0",
+      "packet_hash": "45eb69251cf17b481728dbac0ce7734c7134b87eb1fc4d2db1d94c7a788bf6a7",
+      "card_inserted_at": "2026-07-02T22:10:13.612634Z",
+      "evidence_refs": [
+        "evidence:news_article:2cb88913-d19f-4dd1-980e-0ed274ab3859:body_text:0:160"
+      ],
+      "article_title": "[\"33-year-old mother, unborn twins killed in Apple Valley crash - ABC7 Los Angeles\"]",
+      "body_text": "33-year-old mother, unborn twins killed in Apple Valley crash - ABC7 Los Angeles\n\n33-year-old mother, unborn twins killed in Apple Valley crash ABC7 Los Angeles",
+      "canonical_uri": null,
+      "source_name": null,
+      "observed_at": "2026-07-02T15:44:00Z",
+      "expected": {
+        "answerable": true,
+        "required_source_refs": [
+          "news_article:2cb88913-d19f-4dd1-980e-0ed274ab3859"
+        ]
+      }
+    },
+    {
+      "item_id": "T1501-004",
+      "external_id": "ebca5187-f27d-436a-9176-4c2fdc476603",
+      "source_ref": "news_article:ebca5187-f27d-436a-9176-4c2fdc476603",
+      "story_id": "02e34dad-87d0-4e36-b561-a164616db582",
+      "story_key": "bernard-arnault-believes-imagination-trumps-ai",
+      "story_title": "[\"Imagination Trumps AI, Bernard Arnault Believes - WWD\"]",
+      "card_id": "30d4a1d6-9da5-47bb-92b6-01dac79f1f2e",
+      "card_status": "refused",
+      "refresh_reason": "story_created",
+      "prompt_config_hash": "8cd1b476bec3639f818d55e77e7c875151615677b37af4af137dc631f0421fc8",
+      "packet_hash": "9098ccf2f983033c022e240c08ca09d09de965280fa75955d5d9922eebdeca1b",
+      "card_inserted_at": "2026-07-02T22:01:49.509794Z",
+      "evidence_refs": [
+        "evidence:news_article:ebca5187-f27d-436a-9176-4c2fdc476603:body_text:0:106"
+      ],
+      "article_title": "[\"Imagination Trumps AI, Bernard Arnault Believes - WWD\"]",
+      "body_text": "Imagination Trumps AI, Bernard Arnault Believes - WWD\n\nImagination Trumps AI, Bernard Arnault Believes WWD",
+      "canonical_uri": null,
+      "source_name": null,
+      "observed_at": "2026-07-02T15:42:13Z",
+      "expected": {
+        "answerable": true,
+        "required_source_refs": [
+          "news_article:ebca5187-f27d-436a-9176-4c2fdc476603"
+        ]
+      }
+    },
+    {
+      "item_id": "T1501-005",
+      "external_id": "6009b99b-f34e-4f52-abe1-0d33fc7c9a0e",
+      "source_ref": "news_article:6009b99b-f34e-4f52-abe1-0d33fc7c9a0e",
+      "story_id": "7638af36-038d-408c-a3f0-2e096c15a156",
+      "story_key": "apple-iphone-18-pro-max-battery-capacity-leak",
+      "story_title": "[\"iPhone 18 Pro Max’s huge battery size reportedly leaked - 9to5Mac\"]",
+      "card_id": "01991080-80f9-4d4d-a904-d8bcbd0f759c",
+      "card_status": "refused",
+      "refresh_reason": "source_linked",
+      "prompt_config_hash": "8cd1b476bec3639f818d55e77e7c875151615677b37af4af137dc631f0421fc8",
+      "packet_hash": "94e327efc5824ae79202e2594dbdb2650261d7f5255f82f9cb65d96ebc4fcbd2",
+      "card_inserted_at": "2026-07-02T21:53:36.771323Z",
+      "evidence_refs": [
+        "evidence:news_article:6009b99b-f34e-4f52-abe1-0d33fc7c9a0e:body_text:0:492"
+      ],
+      "article_title": "[\"iPhone 18 Pro Max’s huge battery size reportedly leaked - 9to5Mac\"]",
+      "body_text": "iPhone 18 Pro Max’s huge battery size reportedly leaked - 9to5Mac\n\niPhone 18 Pro Max’s huge battery size reportedly leaked 9to5Mac Apple iPhone 18 Pro And iPhone 18 Pro Max Release Date: iOS 27 Signals September Schedule Forbes Leaked: Photographic evidence of ‘Dark Cherry’ iPhone 18 Pro Macworld iPhone 18 news, leaks, and rumors: Release date, iPhone 18 Pro details, more. Mashable iPhone 18 Pro buyers may face an issue that even Apple won’t be able to solve for them PhoneArena",
+      "canonical_uri": null,
+      "source_name": null,
+      "observed_at": "2026-07-02T15:42:00Z",
+      "expected": {
+        "answerable": true,
+        "required_source_refs": [
+          "news_article:6009b99b-f34e-4f52-abe1-0d33fc7c9a0e"
+        ]
+      }
+    },
+    {
+      "item_id": "T1501-006",
+      "external_id": "25e43af4-3240-4b75-b019-893372fa80f8",
+      "source_ref": "news_article:25e43af4-3240-4b75-b019-893372fa80f8",
       "story_id": "5ee30c79-f909-4032-b4ba-7df6fa40cc70",
       "story_key": "ukraine-war-russia-refinery-strikes-2026",
-      "story_title": "[\"Putin\u2019s economy is running on fumes after Ukrainian attacks - politico.eu\"]",
-      "version": 5,
+      "story_title": "[\"Russian attacks kills at least 21, injures scores in Kyiv after Zelenskyy warned of ‘massive strike’ - NBC News\"]",
+      "card_id": "f74a6ac3-c969-4091-aa02-a3783d33b283",
       "card_status": "refused",
-      "latest_card_at": "2026-07-02T04:17:26.687361Z",
+      "refresh_reason": "source_linked",
+      "prompt_config_hash": "604280a382bdf669f61d2e8a350b162666b066fe47351f95195f6e4cce833be0",
+      "packet_hash": "e8f4096b7d55767d8894073b07b540219e7fc6b1733ae611dd72d4c604b4b0aa",
+      "card_inserted_at": "2026-07-02T21:36:55.287890Z",
       "evidence_refs": [
-        "source:news_article:356cff50-785f-44c6-a495-aa805518b852:body_text:0:559",
-        "source:news_article:b33f6a41-ec88-4498-8962-092a829b7f5e:body_text:0:516",
-        "source:news_article:e6e74243-ef3b-481a-a8bc-85d64c6794e9:body_text:0:419",
-        "source:news_article:c6367ad3-7961-476d-b6b8-28141f98979f:body_text:0:522",
-        "source:news_article:ecde579c-2757-458f-90d7-5ac91a847b36:body_text:0:472"
+        "evidence:news_article:25e43af4-3240-4b75-b019-893372fa80f8:body_text:0:577"
       ],
-      "sources": [
-        {
-          "source_ref": "source:news_article:356cff50-785f-44c6-a495-aa805518b852",
-          "article_ref": "356cff50-785f-44c6-a495-aa805518b852",
-          "article_title": "[\"Zelenskyy says Ukraine has hit a Russian oil refinery for the second time in a week - AP News\"]",
-          "canonical_uri": null,
-          "source_name": null,
-          "observed_at": "2026-07-01T20:31:19.660472Z",
-          "body_text": "Zelenskyy says Ukraine has hit a Russian oil refinery for the second time in a week - AP News\n\nZelenskyy says Ukraine has hit a Russian oil refinery for the second time in a week AP News Putin Faces Increased Pressure as Moscow Is Again Attacked by Drones The New York Times Is Ukraine\u2019s campaign of targeting Russian refineries working? Al Jazeera Ukraine strikes Russian oil refinery as Zelenskyy calls for Moscow to end war ABC News - Breaking News, Latest News and Videos Unease deepens in Russia as Ukraine steps up long-range strikes The Washington Post"
-        },
-        {
-          "source_ref": "source:news_article:b33f6a41-ec88-4498-8962-092a829b7f5e",
-          "article_ref": "b33f6a41-ec88-4498-8962-092a829b7f5e",
-          "article_title": "[\"Ukraine hits Russian oil refinery for second time, Zelenskyy says - Euronews.com\"]",
-          "canonical_uri": null,
-          "source_name": null,
-          "observed_at": "2026-07-01T22:00:51.496876Z",
-          "body_text": "Ukraine hits Russian oil refinery for second time, Zelenskyy says - Euronews.com\n\nUkraine hits Russian oil refinery for second time, Zelenskyy says Euronews.com Putin Faces Increased Pressure as Moscow Is Again Attacked by Drones The New York Times Is Ukraine\u2019s campaign of targeting Russian refineries working? Al Jazeera Ukraine strikes Russian oil refinery as Zelenskyy calls for Moscow to end war ABC News - Breaking News, Latest News and Videos 3 Killed in Ukrainian Drone Attacks Across Russia The Moscow Times"
-        },
-        {
-          "source_ref": "source:news_article:e6e74243-ef3b-481a-a8bc-85d64c6794e9",
-          "article_ref": "e6e74243-ef3b-481a-a8bc-85d64c6794e9",
-          "article_title": "[\"Ukraine Takes the War to Russia - The New York Times\"]",
-          "canonical_uri": null,
-          "source_name": null,
-          "observed_at": "2026-07-02T00:17:58.584821Z",
-          "body_text": "Ukraine Takes the War to Russia - The New York Times\n\nUkraine Takes the War to Russia The New York Times Ukraine\u2019s Plan to Unnerve Putin The Atlantic Ukraine has brought the (drone) war to Russia. But it may prolong the fighting. The Christian Science Monitor Ukraine\u2019s Expanding Strike Campaign Undercuts Putin\u2019s Claims of Steady Progress The Jamestown Foundation How Ukraine Is Bringing the War to Russia The Dispatch"
-        },
-        {
-          "source_ref": "source:news_article:c6367ad3-7961-476d-b6b8-28141f98979f",
-          "article_ref": "c6367ad3-7961-476d-b6b8-28141f98979f",
-          "article_title": "[\"Russian missile and drone strikes in Ukraine capital kill at least eight and injure dozens - The Guardian\"]",
-          "canonical_uri": null,
-          "source_name": null,
-          "observed_at": "2026-07-02T04:10:21.803381Z",
-          "body_text": "Russian missile and drone strikes in Ukraine capital kill at least eight and injure dozens - The Guardian\n\nRussian missile and drone strikes in Ukraine capital kill at least eight and injure dozens The Guardian Russia Strikes Ukraine as Explosions Rock Capital of Kyiv The New York Times Russia launches major drone and missile attack on Kyiv DW.com Strong explosions rock Kyiv hours after Zelensky warned of \u2018massive\u2019 Russian attack CNN Kyiv attacked after Ukraine\u2019s Zelenskyy warns of \u2018massive Russian strike\u2019 Al Jazeera"
-        },
-        {
-          "source_ref": "source:news_article:ecde579c-2757-458f-90d7-5ac91a847b36",
-          "article_ref": "ecde579c-2757-458f-90d7-5ac91a847b36",
-          "article_title": "[\"Putin\u2019s economy is running on fumes after Ukrainian attacks - politico.eu\"]",
-          "canonical_uri": null,
-          "source_name": null,
-          "observed_at": "2026-07-02T04:16:21.534724Z",
-          "body_text": "Putin\u2019s economy is running on fumes after Ukrainian attacks - politico.eu\n\nPutin\u2019s economy is running on fumes after Ukrainian attacks politico.eu Ukrainian drone attacks on oil refineries plunge Russia into a summer fuel crisis AP News WATCH: Fights break out at Russian gas stations as Putin admits fuel shortages Fox News Russian fuel crisis pushes some pump prices past 100 roubles Reuters Russian Gasoline Prices Rise Again After Ukraine Hits Refineries Bloomberg.com"
-        }
-      ],
+      "article_title": "[\"Russian attacks kills at least 21, injures scores in Kyiv after Zelenskyy warned of ‘massive strike’ - NBC News\"]",
+      "body_text": "Russian attacks kills at least 21, injures scores in Kyiv after Zelenskyy warned of ‘massive strike’ - NBC News\n\nRussian attacks kills at least 21, injures scores in Kyiv after Zelenskyy warned of ‘massive strike’ NBC News Russia unleashes biggest attack yet on Kyiv, killing at least 17 people, officials say CBS News Russia Bombards Ukrainian Capital With Deadly Wave of Attacks The New York Times Russia hits Ukraine's capital with a massive drone and missile attack, killing at least 18 NPR Massive Russian Strikes Pound Ukraine’s Capital, Killing at Least 17 WSJ",
+      "canonical_uri": null,
+      "source_name": null,
+      "observed_at": "2026-07-02T15:35:00Z",
       "expected": {
         "answerable": true,
         "required_source_refs": [
-          "source:news_article:356cff50-785f-44c6-a495-aa805518b852",
-          "source:news_article:b33f6a41-ec88-4498-8962-092a829b7f5e",
-          "source:news_article:e6e74243-ef3b-481a-a8bc-85d64c6794e9",
-          "source:news_article:c6367ad3-7961-476d-b6b8-28141f98979f",
-          "source:news_article:ecde579c-2757-458f-90d7-5ac91a847b36"
+          "news_article:25e43af4-3240-4b75-b019-893372fa80f8"
         ]
       }
     },
     {
-      "item_id": "T1501-CORPUS-e0801d97",
-      "story_id": "5565e679-57d2-46ee-ace7-1ddecc88e1f4",
-      "story_key": "sony-playstation-physical-discs-end-2028",
-      "story_title": "[\"Sony to end physical PlayStation game discs for new releases starting in 2028 - Fox Business\"]",
-      "version": 2,
+      "item_id": "T1501-007",
+      "external_id": "b7904b00-5236-450e-835e-ff8f15d1c572",
+      "source_ref": "news_article:b7904b00-5236-450e-835e-ff8f15d1c572",
+      "story_id": "a15736fc-b278-49e9-ab17-7726fcfbfd37",
+      "story_key": "dune-awakening-physical-ps5-release",
+      "story_title": "[\"Dune: Awakening Announces Physical PS5 Release with the Most Unfortunate Timing - Push Square\"]",
+      "card_id": "dda48abc-47b3-4480-a753-1889fef185f5",
       "card_status": "refused",
-      "latest_card_at": "2026-07-02T03:34:14.593652Z",
+      "refresh_reason": "story_created",
+      "prompt_config_hash": "604280a382bdf669f61d2e8a350b162666b066fe47351f95195f6e4cce833be0",
+      "packet_hash": "6971af60c5659db27e52ee3f1e27fa92267e9dc42fbdf51e907db1e457235281",
+      "card_inserted_at": "2026-07-02T21:20:06.438986Z",
       "evidence_refs": [
-        "source:news_article:99bd2c04-1e8a-44f7-975a-8a1c9c7f2286:body_text:0:508",
-        "source:news_article:72d9241b-a205-4e3a-9db1-285ca2c4f5dd:body_text:0:539"
+        "evidence:news_article:b7904b00-5236-450e-835e-ff8f15d1c572:body_text:0:564"
       ],
-      "sources": [
-        {
-          "source_ref": "source:news_article:99bd2c04-1e8a-44f7-975a-8a1c9c7f2286",
-          "article_ref": "99bd2c04-1e8a-44f7-975a-8a1c9c7f2286",
-          "article_title": "[\"Sony to end physical PlayStation game discs for new releases starting in 2028 - Fox Business\"]",
-          "canonical_uri": null,
-          "source_name": null,
-          "observed_at": "2026-07-01T23:04:49.445042Z",
-          "body_text": "Sony to end physical PlayStation game discs for new releases starting in 2028 - Fox Business\n\nSony to end physical PlayStation game discs for new releases starting in 2028 Fox Business Physical disc production ending in January 2028 for new games releasing on PlayStation consoles PlayStation.Blog The funeral for PlayStation discs has begun The Verge Sony announces end of PlayStation discs, parts of digital store in the same day Ars Technica Sony\u2019s PlayStation Puts a Nail in Physical Media\u2019s Coffin WIRED"
-        },
-        {
-          "source_ref": "source:news_article:72d9241b-a205-4e3a-9db1-285ca2c4f5dd",
-          "article_ref": "72d9241b-a205-4e3a-9db1-285ca2c4f5dd",
-          "article_title": "[\"Sony to end physical PlayStation game discs for new releases starting in 2028 - Fox Business\"]",
-          "canonical_uri": null,
-          "source_name": null,
-          "observed_at": "2026-07-02T03:33:14.460675Z",
-          "body_text": "Sony to end physical PlayStation game discs for new releases starting in 2028 - Fox Business\n\nSony to end physical PlayStation game discs for new releases starting in 2028 Fox Business Physical disc production ending in January 2028 for new games releasing on PlayStation consoles PlayStation.Blog Sony announces end of PlayStation discs, parts of digital store in the same day Ars Technica PlayStation abandons physical games as Xbox and Sony lose sight of players Windows Central PlayStation Is Getting Yelled At Everywhere Online Kotaku"
-        }
-      ],
+      "article_title": "[\"Dune: Awakening Announces Physical PS5 Release with the Most Unfortunate Timing - Push Square\"]",
+      "body_text": "Dune: Awakening Announces Physical PS5 Release with the Most Unfortunate Timing - Push Square\n\nDune: Awakening Announces Physical PS5 Release with the Most Unfortunate Timing Push Square Dune Awakening recaps its first year and fall plans and teases post-console plans in new video Massively Overpowered Funcom Releases Dune: Awakening Console Deep Dive, Announces Physical Edition Games Press What Dune: Awakening brings to PlayStation 5 Sept 22 PlayStation.Blog Dune: Awakening Deep Dive: Finally, single-player mode for the desert planet survival game PlayFront",
+      "canonical_uri": null,
+      "source_name": null,
+      "observed_at": "2026-07-02T15:30:00Z",
       "expected": {
         "answerable": true,
         "required_source_refs": [
-          "source:news_article:99bd2c04-1e8a-44f7-975a-8a1c9c7f2286",
-          "source:news_article:72d9241b-a205-4e3a-9db1-285ca2c4f5dd"
+          "news_article:b7904b00-5236-450e-835e-ff8f15d1c572"
         ]
       }
     },
     {
-      "item_id": "T1501-CORPUS-1ac8005b",
-      "story_id": "cb728490-0d2f-46fc-ad8d-b2eccd1f6a0f",
-      "story_key": "unknown-worlds-ceo-resignation-krafton-bonus-settlement",
-      "story_title": "[\"Krafton settles with Subnautica 2 developer after drawn-out dispute over $250 million - The Verge\"]",
-      "version": 2,
+      "item_id": "T1501-008",
+      "external_id": "fda7e4c6-068f-4751-8b2c-44a59330591b",
+      "source_ref": "news_article:fda7e4c6-068f-4751-8b2c-44a59330591b",
+      "story_id": "808778f4-641d-4147-bda1-e68d19e652f4",
+      "story_key": "ontos-game-delayed-to-2027",
+      "story_title": "[\"ONTOS delayed to 2027 - Gematsu\"]",
+      "card_id": "e0a151f9-c042-4a32-aa41-6e9f152975f3",
       "card_status": "refused",
-      "latest_card_at": "2026-07-02T03:10:12.670449Z",
+      "refresh_reason": "story_created",
+      "prompt_config_hash": "604280a382bdf669f61d2e8a350b162666b066fe47351f95195f6e4cce833be0",
+      "packet_hash": "a59dc7125d9080b03808ab63f2d28f1213b61035406bb6029854cbece58a876c",
+      "card_inserted_at": "2026-07-02T21:12:07.991352Z",
       "evidence_refs": [
-        "source:news_article:d8382178-edc6-4f01-a77f-02c08a76a194:body_text:0:580",
-        "source:news_article:87b00e14-7826-406c-8123-82cb78c14c33:body_text:0:582"
+        "evidence:news_article:fda7e4c6-068f-4751-8b2c-44a59330591b:body_text:0:405"
       ],
-      "sources": [
-        {
-          "source_ref": "source:news_article:d8382178-edc6-4f01-a77f-02c08a76a194",
-          "article_ref": "d8382178-edc6-4f01-a77f-02c08a76a194",
-          "article_title": "[\"Subnautica 2 studio Unknown Worlds' CEO resigns as Krafton agrees to pay $250m bonus - GamesIndustry.biz\"]",
-          "canonical_uri": null,
-          "source_name": null,
-          "observed_at": "2026-07-01T21:23:27.960112Z",
-          "body_text": "Subnautica 2 studio Unknown Worlds' CEO resigns as Krafton agrees to pay $250m bonus - GamesIndustry.biz\n\nSubnautica 2 studio Unknown Worlds' CEO resigns as Krafton agrees to pay $250m bonus GamesIndustry.biz Krafton Agrees to Pay \u2018Subnautica 2\u2019 Bonuses as Developer\u2019s CEO Resigns Bloomberg.com Subnautica 2 Developer's Entire Staff Get Their Bonuses After Krafton Agrees to Settlement, but CEO Steps Down IGN Krafton settles with Subnautica 2 developer after drawn-out dispute over $250 million The Verge Long Legal Battle Over Subanutica 2 Ends With Bonuses & CEO Leaving Kotaku"
-        },
-        {
-          "source_ref": "source:news_article:87b00e14-7826-406c-8123-82cb78c14c33",
-          "article_ref": "87b00e14-7826-406c-8123-82cb78c14c33",
-          "article_title": "[\"Krafton settles with Subnautica 2 developer after drawn-out dispute over $250 million - The Verge\"]",
-          "canonical_uri": null,
-          "source_name": null,
-          "observed_at": "2026-07-02T03:09:14.560569Z",
-          "body_text": "Krafton settles with Subnautica 2 developer after drawn-out dispute over $250 million - The Verge\n\nKrafton settles with Subnautica 2 developer after drawn-out dispute over $250 million The Verge Krafton Agrees to Pay \u2018Subnautica 2\u2019 Bonuses as Developer\u2019s CEO Resigns Bloomberg.com Subnautica 2 Developer's Entire Staff Get Their Bonuses After Krafton Agrees to Settlement, but CEO Steps Down IGN Subnautica 2 studio Unknown Worlds' CEO resigns as Krafton agrees to pay $250m bonus GamesIndustry.biz Subnautica 2 Devs Will Actually Get Even More Money As Krafton Drama Ends Aftermath"
-        }
-      ],
+      "article_title": "[\"ONTOS delayed to 2027 - Gematsu\"]",
+      "body_text": "ONTOS delayed to 2027 - Gematsu\n\nONTOS delayed to 2027 Gematsu Ontos, The Next Horror Game By The Developer Of Soma And Amnesia, Delayed To 2027 Game Informer ONTOS postponed: SOMA successor won't arrive until 2027 PlayFront 2026's most anticipated indie horror game just got delayed Polygon.com Soma dev's next game, Ontos, delayed to 2027 in order to deliver on studio's \"ambitious\" vision Eurogamer.net",
+      "canonical_uri": null,
+      "source_name": null,
+      "observed_at": "2026-07-02T15:21:17Z",
       "expected": {
         "answerable": true,
         "required_source_refs": [
-          "source:news_article:d8382178-edc6-4f01-a77f-02c08a76a194",
-          "source:news_article:87b00e14-7826-406c-8123-82cb78c14c33"
+          "news_article:fda7e4c6-068f-4751-8b2c-44a59330591b"
         ]
       }
     },
     {
-      "item_id": "T1501-CORPUS-d9b6eff8",
-      "story_id": "ccdcb2b4-84b3-4745-a3ec-2c0775b13e91",
-      "story_key": "mexican-batman-vigilante",
-      "story_title": "[\"Mexican Bike Thieves Should Fear This Vigilante - Newser\"]",
-      "version": 2,
+      "item_id": "T1501-009",
+      "external_id": "6c70b1ac-2b0b-42d0-9889-d5dd74f95ae1",
+      "source_ref": "news_article:6c70b1ac-2b0b-42d0-9889-d5dd74f95ae1",
+      "story_id": "90b149e1-375b-4170-ae17-25207f6760e1",
+      "story_key": "apple-to-release-16-new-products-later-this-year",
+      "story_title": "[\"Apple to Release These 16 New Products Later This Year - MacRumors\"]",
+      "card_id": "70f6e973-7b3c-4b19-b65d-1a6ace6696bd",
       "card_status": "refused",
-      "latest_card_at": "2026-07-02T02:02:51.437233Z",
+      "refresh_reason": "story_created",
+      "prompt_config_hash": "604280a382bdf669f61d2e8a350b162666b066fe47351f95195f6e4cce833be0",
+      "packet_hash": "abd17d19d9a2bb3447305d70be735d767454f0c11d981eb5bb444bb33e605a16",
+      "card_inserted_at": "2026-07-02T21:03:52.646156Z",
       "evidence_refs": [
-        "source:news_article:e9ec3f30-5a44-40f9-98f3-24fb58a1595d:body_text:0:445",
-        "source:news_article:164c1ae9-fe4f-4419-8f14-e444698fc869:body_text:0:410"
+        "evidence:news_article:6c70b1ac-2b0b-42d0-9889-d5dd74f95ae1:body_text:0:132"
       ],
-      "sources": [
-        {
-          "source_ref": "source:news_article:e9ec3f30-5a44-40f9-98f3-24fb58a1595d",
-          "article_ref": "e9ec3f30-5a44-40f9-98f3-24fb58a1595d",
-          "article_title": "[\"Mexican vigilante, the \u2018Batman,\u2019 wanted by police: Report - NewsNation\"]",
-          "canonical_uri": null,
-          "source_name": null,
-          "observed_at": "2026-07-01T19:02:56.477421Z",
-          "body_text": "Mexican vigilante, the \u2018Batman,\u2019 wanted by police: Report - NewsNation\n\nMexican vigilante, the \u2018Batman,\u2019 wanted by police: Report NewsNation \u2018Mexican Batman\u2019 Is Duct-Taping Motorcycle Thieves to Lampposts. Muy Bueno Yahoo \u2018Mexican Batman\u2019 tapes men to lamp posts The Telegraph Mexican Bike Thieves Should Fear This Vigilante Newser Mexican \u2018batman\u2019 vigilante wanted for chasing down suspected thieves and taping them to lampposts The Independent"
-        },
-        {
-          "source_ref": "source:news_article:164c1ae9-fe4f-4419-8f14-e444698fc869",
-          "article_ref": "164c1ae9-fe4f-4419-8f14-e444698fc869",
-          "article_title": "[\"Mexican Bike Thieves Should Fear This Vigilante - Newser\"]",
-          "canonical_uri": null,
-          "source_name": null,
-          "observed_at": "2026-07-02T02:02:09.537389Z",
-          "body_text": "Mexican Bike Thieves Should Fear This Vigilante - Newser\n\nMexican Bike Thieves Should Fear This Vigilante Newser Mexican Police Hunt Vigilante Accused Of Taping Motorcycle Thieves To Utility Poles Yahoo Mexican vigilante, the \u2018Batman,\u2019 wanted by police: Report NewsNation \u2018Mexican Batman\u2019 tapes men to lamp posts The Telegraph Mexico\u2019s \u2018Batman\u2019 Is Hunting Suspected Thieves and Taping Them to Streetlights VICE"
-        }
-      ],
+      "article_title": "[\"Apple to Release These 16 New Products Later This Year - MacRumors\"]",
+      "body_text": "Apple to Release These 16 New Products Later This Year - MacRumors\n\nApple to Release These 16 New Products Later This Year MacRumors",
+      "canonical_uri": null,
+      "source_name": null,
+      "observed_at": "2026-07-02T15:20:00Z",
       "expected": {
         "answerable": true,
         "required_source_refs": [
-          "source:news_article:e9ec3f30-5a44-40f9-98f3-24fb58a1595d",
-          "source:news_article:164c1ae9-fe4f-4419-8f14-e444698fc869"
+          "news_article:6c70b1ac-2b0b-42d0-9889-d5dd74f95ae1"
         ]
       }
     },
     {
-      "item_id": "T1501-CORPUS-a50bd7c3",
-      "story_id": "fc437c3b-9d4e-4768-a30e-6d62bc8383b0",
-      "story_key": "esa-minecraft-private-servers-piracy-clarification",
-      "story_title": "[\"'This Is Borderline Evil' - Minecraft Creator Speaks Out Against ESA Calling Private Servers 'Illegal' - IGN\"]",
-      "version": 2,
+      "item_id": "T1501-010",
+      "external_id": "f9a0e706-f888-4638-a068-efdac3a13527",
+      "source_ref": "news_article:f9a0e706-f888-4638-a068-efdac3a13527",
+      "story_id": "8f4e53f2-54cd-4ab7-93eb-fb2828ae22d9",
+      "story_key": "iran-war-strait-of-hormuz-tolls-negotiations",
+      "story_title": "[\"U.S. Dangles Rewards for Opening the Strait of Hormuz. Iran Isn’t Budging. - WSJ\"]",
+      "card_id": "973c2e9b-a667-486e-88ea-beb3a0c50b23",
       "card_status": "refused",
-      "latest_card_at": "2026-07-01T22:19:24.628673Z",
+      "refresh_reason": "source_linked",
+      "prompt_config_hash": "604280a382bdf669f61d2e8a350b162666b066fe47351f95195f6e4cce833be0",
+      "packet_hash": "c77788f09724d54b2f2fa35c1eda27b1f33540596ffa6275ca0c5a39b858eeb6",
+      "card_inserted_at": "2026-07-02T20:55:25.328698Z",
       "evidence_refs": [
-        "source:news_article:c405c73d-9747-4452-97cd-bf26d0ae9ddb:body_text:0:698",
-        "source:news_article:ff11a66d-c377-4e66-ad01-2fdc9c3c61c8:body_text:0:615"
+        "evidence:news_article:f9a0e706-f888-4638-a068-efdac3a13527:body_text:0:504"
       ],
-      "sources": [
-        {
-          "source_ref": "source:news_article:c405c73d-9747-4452-97cd-bf26d0ae9ddb",
-          "article_ref": "c405c73d-9747-4452-97cd-bf26d0ae9ddb",
-          "article_title": "[\"ESA clarifies views on private servers after saying Minecraft servers are \u2018illegal\u2019 and \u2018considered piracy\u2019 - Video Games Chronicle\"]",
-          "canonical_uri": null,
-          "source_name": null,
-          "observed_at": "2026-07-01T19:23:56.450167Z",
-          "body_text": "ESA clarifies views on private servers after saying Minecraft servers are \u2018illegal\u2019 and \u2018considered piracy\u2019 - Video Games Chronicle\n\nESA clarifies views on private servers after saying Minecraft servers are \u2018illegal\u2019 and \u2018considered piracy\u2019 Video Games Chronicle US bill requiring paid games to be playable after they shut down has failed to pass a Senate vote Video Games Chronicle \"Protect Our Games\" Act Fails in California\u2014Stop Killing Games Prepares Next Move TechPowerUp Caught Red-Handed: Why Game Lobbyists Tried to Trick the Government Into Banning Community Servers Yahoo The ESA is up to its tired old tricks in helping to block a California games preservation bill Massively Overpowered"
-        },
-        {
-          "source_ref": "source:news_article:ff11a66d-c377-4e66-ad01-2fdc9c3c61c8",
-          "article_ref": "ff11a66d-c377-4e66-ad01-2fdc9c3c61c8",
-          "article_title": "[\"'This Is Borderline Evil' - Minecraft Creator Speaks Out Against ESA Calling Private Servers 'Illegal' - IGN\"]",
-          "canonical_uri": null,
-          "source_name": null,
-          "observed_at": "2026-07-01T22:18:51.832838Z",
-          "body_text": "'This Is Borderline Evil' - Minecraft Creator Speaks Out Against ESA Calling Private Servers 'Illegal' - IGN\n\n'This Is Borderline Evil' - Minecraft Creator Speaks Out Against ESA Calling Private Servers 'Illegal' IGN US bill requiring paid games to be playable after they shut down has failed to pass a Senate vote Video Games Chronicle ESA Tries To Walk Back Calling Private and Community Servers Illegal TechRaptor \"Protect Our Games\" Act Fails in California\u2014Stop Killing Games Prepares Next Move TechPowerUp Caught Red-Handed: Why Game Lobbyists Tried to Trick the Government Into Banning Community Servers Yahoo"
-        }
-      ],
+      "article_title": "[\"U.S. Dangles Rewards for Opening the Strait of Hormuz. Iran Isn’t Budging. - WSJ\"]",
+      "body_text": "U.S. Dangles Rewards for Opening the Strait of Hormuz. Iran Isn’t Budging. - WSJ\n\nU.S. Dangles Rewards for Opening the Strait of Hormuz. Iran Isn’t Budging. WSJ Iran war live: ‘Decisive response’ to any US ‘miscalculation’, vows Tehran Al Jazeera Iran warns oil tankers to use approved routes in Strait of Hormuz or face a ‘forceful response’ AP News European Nations Now Believe Some Hormuz Fees Are Inevitable Bloomberg U.S. tries to talk Iran out of tolls as talks resume in Doha Axios",
+      "canonical_uri": null,
+      "source_name": null,
+      "observed_at": "2026-07-02T15:16:00Z",
       "expected": {
         "answerable": true,
         "required_source_refs": [
-          "source:news_article:c405c73d-9747-4452-97cd-bf26d0ae9ddb",
-          "source:news_article:ff11a66d-c377-4e66-ad01-2fdc9c3c61c8"
-        ]
-      }
-    },
-    {
-      "item_id": "T1501-CORPUS-9138c68c",
-      "story_id": "845962c0-809a-46f9-a310-2b48110041b6",
-      "story_key": "catholic-church-schism-sspox-bishops-ordination",
-      "story_title": "[\"Defying Pope Leo XIV, traditionalists go ahead with bishop consecrations in Switzerland - AP News\"]",
-      "version": 2,
-      "card_status": "refused",
-      "latest_card_at": "2026-07-01T21:38:56.064728Z",
-      "evidence_refs": [
-        "source:news_article:8555a22d-b898-4c8b-a58f-f42bf98a537f:body_text:0:492",
-        "source:news_article:2e49aa7f-cd5a-4036-9609-793e6e375da7:body_text:0:526"
-      ],
-      "sources": [
-        {
-          "source_ref": "source:news_article:8555a22d-b898-4c8b-a58f-f42bf98a537f",
-          "article_ref": "8555a22d-b898-4c8b-a58f-f42bf98a537f",
-          "article_title": "[\"Controversial bishops ordained as Pope warns of 'schism' in Catholic Church - BBC\"]",
-          "canonical_uri": null,
-          "source_name": null,
-          "observed_at": "2026-07-01T20:40:19.722710Z",
-          "body_text": "Controversial bishops ordained as Pope warns of 'schism' in Catholic Church - BBC\n\nControversial bishops ordained as Pope warns of 'schism' in Catholic Church BBC Parolin: \u2018Deep sorrow\u2019 over SSPX ordinations Crux | Taking the Catholic Pulse What to know about the breakaway traditionalist Catholics defying Pope Leo XIV Yahoo Rebel Catholic Group Consecrates 4 Bishops, Risking Break With Vatican The New York Times Lefebvrians consecrate four new bishops without a papal mandate Vatican News"
-        },
-        {
-          "source_ref": "source:news_article:2e49aa7f-cd5a-4036-9609-793e6e375da7",
-          "article_ref": "2e49aa7f-cd5a-4036-9609-793e6e375da7",
-          "article_title": "[\"Defying Pope Leo XIV, traditionalists go ahead with bishop consecrations in Switzerland - AP News\"]",
-          "canonical_uri": null,
-          "source_name": null,
-          "observed_at": "2026-07-01T21:38:27.745678Z",
-          "body_text": "Defying Pope Leo XIV, traditionalists go ahead with bishop consecrations in Switzerland - AP News\n\nDefying Pope Leo XIV, traditionalists go ahead with bishop consecrations in Switzerland AP News Rebel Catholic Group Consecrates 4 Bishops, Risking Break With Vatican The New York Times What to know about the breakaway traditionalist Catholics defying Pope Leo XIV Yahoo Controversial bishops ordained as Pope warns of 'schism' in Catholic Church BBC Lefebvrians consecrate four new bishops without a papal mandate Vatican News"
-        }
-      ],
-      "expected": {
-        "answerable": true,
-        "required_source_refs": [
-          "source:news_article:8555a22d-b898-4c8b-a58f-f42bf98a537f",
-          "source:news_article:2e49aa7f-cd5a-4036-9609-793e6e375da7"
-        ]
-      }
-    },
-    {
-      "item_id": "T1501-CORPUS-ea6f32f2",
-      "story_id": "d491bf9d-8a55-42ca-8ab9-f493993315d5",
-      "story_key": "oregon-yugioh-tournament-hygiene-complaints",
-      "story_title": "[\"Oregon store suspends Yu-Gi-Oh tournaments due to hygiene concerns - upi.com\"]",
-      "version": 2,
-      "card_status": "refused",
-      "latest_card_at": "2026-07-01T21:11:53.479193Z",
-      "evidence_refs": [
-        "source:news_article:fb00f342-9923-450f-ae02-378e96c34645:body_text:0:570",
-        "source:news_article:87baa119-0484-4cf7-9740-9d9286c52087:body_text:0:541"
-      ],
-      "sources": [
-        {
-          "source_ref": "source:news_article:fb00f342-9923-450f-ae02-378e96c34645",
-          "article_ref": "fb00f342-9923-450f-ae02-378e96c34645",
-          "article_title": "[\"No shower, no go: Oregon card shop halts Yu\u2011Gi\u2011Oh tournaments over player hygiene complaints - Malay Mail\"]",
-          "canonical_uri": null,
-          "source_name": null,
-          "observed_at": "2026-07-01T20:04:19.482697Z",
-          "body_text": "No shower, no go: Oregon card shop halts Yu\u2011Gi\u2011Oh tournaments over player hygiene complaints - Malay Mail\n\nNo shower, no go: Oregon card shop halts Yu\u2011Gi\u2011Oh tournaments over player hygiene complaints Malay Mail Oregon store suspends Yu-Gi-Oh tournaments due to hygiene concerns upi.com Oregon store pauses Yu-Gi-Oh! card game competitions after complaints about players\u2019 hygiene The Independent 'You are Expected to be Clean' \u2014 Oregon Card Shop Suspends Yu-Gi-Oh Tournaments Due to Smelly Players IGN Yui-Gi-Oh Tournament Postponed Because Players Were Too Smelly Kotaku"
-        },
-        {
-          "source_ref": "source:news_article:87baa119-0484-4cf7-9740-9d9286c52087",
-          "article_ref": "87baa119-0484-4cf7-9740-9d9286c52087",
-          "article_title": "[\"Oregon store suspends Yu-Gi-Oh tournaments due to hygiene concerns - upi.com\"]",
-          "canonical_uri": null,
-          "source_name": null,
-          "observed_at": "2026-07-01T21:11:27.677964Z",
-          "body_text": "Oregon store suspends Yu-Gi-Oh tournaments due to hygiene concerns - upi.com\n\nOregon store suspends Yu-Gi-Oh tournaments due to hygiene concerns upi.com Oregon store pauses Yu-Gi-Oh! card game competitions after complaints about players\u2019 hygiene The Independent 'You are Expected to be Clean' \u2014 Oregon Card Shop Suspends Yu-Gi-Oh Tournaments Due to Smelly Players IGN Yui-Gi-Oh Tournament Postponed Because Players Were Too Smelly Kotaku No shower, no go: Oregon card shop halts Yu\u2011Gi\u2011Oh tournaments over player hygiene complaints Malay Mail"
-        }
-      ],
-      "expected": {
-        "answerable": true,
-        "required_source_refs": [
-          "source:news_article:fb00f342-9923-450f-ae02-378e96c34645",
-          "source:news_article:87baa119-0484-4cf7-9740-9d9286c52087"
-        ]
-      }
-    },
-    {
-      "item_id": "T1501-CORPUS-f01c20f8",
-      "story_id": "a65f7c06-6375-4dc3-a67c-74b488ead1e4",
-      "story_key": "ukraine-talion-interceptor-drone-shahed",
-      "story_title": "[\"Video shows a Ukrainian unit running down a Russian Shahed \u2014the kind of kill the US is racing to reproduce - Defense News\"]",
-      "version": 2,
-      "card_status": "refused",
-      "latest_card_at": "2026-07-01T20:19:41.912719Z",
-      "evidence_refs": [
-        "source:news_article:f684a346-13e0-40af-9b58-2cb570bd982d:body_text:0:593",
-        "source:news_article:ac2e7353-6174-4e14-a3a7-d89e76385500:body_text:0:676"
-      ],
-      "sources": [
-        {
-          "source_ref": "source:news_article:f684a346-13e0-40af-9b58-2cb570bd982d",
-          "article_ref": "f684a346-13e0-40af-9b58-2cb570bd982d",
-          "article_title": "[\"Video purportedly shows Ukrainian unit running down Russian Shahed. The US is paying attention. - Military Times\"]",
-          "canonical_uri": null,
-          "source_name": null,
-          "observed_at": "2026-07-01T19:35:56.739277Z",
-          "body_text": "Video purportedly shows Ukrainian unit running down Russian Shahed. The US is paying attention. - Military Times\n\nVideo purportedly shows Ukrainian unit running down Russian Shahed. The US is paying attention. Military Times Interceptor and loitering munition: what makes Ukraine's new TALION unmanned aerial system unique \u041c\u0456\u043d\u0456\u0441\u0442\u0435\u0440\u0441\u0442\u0432\u043e \u043e\u0431\u043e\u0440\u043e\u043d\u0438 \u0423\u043a\u0440\u0430\u0457\u043d\u0438 Ukraine Unveils ZIRKA Interceptor Drone Built to Down Shaheds Kyiv Post Ukraine\u2019s Defense Ministry deploys Talion kamikaze drone to intercept enemy UAVs mezha.net Inside Ukraine\u2019s Interceptor Drone Race: A Pilot\u2019s View Ukraine's Arms Monitor"
-        },
-        {
-          "source_ref": "source:news_article:ac2e7353-6174-4e14-a3a7-d89e76385500",
-          "article_ref": "ac2e7353-6174-4e14-a3a7-d89e76385500",
-          "article_title": "[\"Video shows a Ukrainian unit running down a Russian Shahed \u2014the kind of kill the US is racing to reproduce - Defense News\"]",
-          "canonical_uri": null,
-          "source_name": null,
-          "observed_at": "2026-07-01T20:19:19.497917Z",
-          "body_text": "Video shows a Ukrainian unit running down a Russian Shahed \u2014the kind of kill the US is racing to reproduce - Defense News\n\nVideo shows a Ukrainian unit running down a Russian Shahed \u2014the kind of kill the US is racing to reproduce Defense News Video purportedly shows Ukrainian unit running down Russian Shahed. The US is paying attention. Military Times Interceptor and loitering munition: what makes Ukraine's new TALION unmanned aerial system unique \u041c\u0456\u043d\u0456\u0441\u0442\u0435\u0440\u0441\u0442\u0432\u043e \u043e\u0431\u043e\u0440\u043e\u043d\u0438 \u0423\u043a\u0440\u0430\u0457\u043d\u0438 Ukraine Introduces ZIRKA Interceptor Drone to Counter Shaheds UNITED24 Media Ukraine took Soviet Strela-10 and built its own air-defense system on it. RYF is already guarding sky Euromaidan Press"
-        }
-      ],
-      "expected": {
-        "answerable": true,
-        "required_source_refs": [
-          "source:news_article:f684a346-13e0-40af-9b58-2cb570bd982d",
-          "source:news_article:ac2e7353-6174-4e14-a3a7-d89e76385500"
+          "news_article:f9a0e706-f888-4638-a068-efdac3a13527"
         ]
       }
     }
