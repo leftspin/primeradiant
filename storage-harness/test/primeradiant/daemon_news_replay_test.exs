@@ -83,6 +83,141 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert length(report.admitted_source_items) == 2
   end
 
+  test "story backfill advances already admitted daemon news inputs without source reingest" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-daemon-news-story-backfill-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    db_path = Path.join(tmp, "news.db")
+    soup_db_path = Path.join(tmp, "primeradiant-soup.sqlite3")
+    raw_path = Path.join(tmp, "archive.jsonl")
+
+    rows = [
+      envelope(
+        "Civic Clinic triage open",
+        "Civic Clinic triage is open venue is north speaker is desk."
+      ),
+      envelope(
+        "Civic Clinic triage update",
+        "Civic Clinic triage is closed venue is north speaker is desk."
+      )
+    ]
+
+    offsets = write_archive!(raw_path, rows)
+    create_source_db!(db_path, raw_path, offsets)
+
+    {:ok, _state, _report} =
+      DaemonNewsReplay.replay(
+        db_path: db_path,
+        soup_db_path: soup_db_path,
+        tenant_id: @tenant,
+        actor_id: "flynn"
+      )
+
+    loaded = DurableSoupDb.load_tenant(soup_db_path, @tenant)
+    before_inputs = length(loaded.inputs)
+    latest_input = Enum.max_by(loaded.inputs, &DateTime.to_unix(&1.observed_at, :microsecond))
+
+    {backfilled, report} =
+      LiveStoryAgentLoop.run_unstoried_inputs(loaded, "flynn",
+        limit: 1,
+        adapter: &stub_backfill_story_agent/3
+      )
+
+    DurableSoupDb.persist!(soup_db_path, backfilled, %{
+      source_kind: "admitted-soup-story-backfill",
+      source_db_path: soup_db_path,
+      source_row_count: 0
+    })
+
+    assert report.source_behavior == :story_backfill_over_admitted_soup
+    assert report.source_admission_performed == false
+    assert report.candidate_count == 1
+    assert report.story_events == 1
+    assert length(backfilled.inputs) == before_inputs
+    assert length(backfilled.story_events) == 1
+    assert hd(backfilled.story_events).input_id == latest_input.id
+    assert hd(backfilled.story_events).observed_at == latest_input.observed_at
+
+    ready =
+      Soup.ready(backfilled, %{
+        "consumer" => "reporter",
+        "projection" => "news-morning"
+      })
+
+    assert ready.freshness.latest_story_event_at == DateTime.to_iso8601(latest_input.observed_at)
+    assert DurableSoupDb.table_count(soup_db_path, "inputs", @tenant) == before_inputs
+    assert DurableSoupDb.table_count(soup_db_path, "story_events", @tenant) == 1
+  end
+
+  test "story backfill persist aborts when admitted soup changed after load" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-daemon-news-story-backfill-revision-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    db_path = Path.join(tmp, "news.db")
+    soup_db_path = Path.join(tmp, "primeradiant-soup.sqlite3")
+    raw_path = Path.join(tmp, "archive.jsonl")
+
+    rows = [
+      envelope(
+        "Civic Clinic triage open",
+        "Civic Clinic triage is open venue is north speaker is desk."
+      ),
+      envelope(
+        "Civic Clinic triage update",
+        "Civic Clinic triage is closed venue is north speaker is desk."
+      )
+    ]
+
+    offsets = write_archive!(raw_path, rows)
+    create_source_db!(db_path, raw_path, offsets)
+
+    {:ok, _state, _report} =
+      DaemonNewsReplay.replay(
+        db_path: db_path,
+        soup_db_path: soup_db_path,
+        tenant_id: @tenant,
+        actor_id: "flynn"
+      )
+
+    stale_revision = DurableSoupDb.tenant_revision(soup_db_path, @tenant)
+    loaded = DurableSoupDb.load_tenant(soup_db_path, @tenant)
+
+    DurableSoupDb.persist!(soup_db_path, loaded, %{
+      source_kind: "concurrent-test-writer",
+      source_db_path: soup_db_path,
+      source_row_count: 0
+    })
+
+    {backfilled, _report} =
+      LiveStoryAgentLoop.run_unstoried_inputs(loaded, "flynn",
+        limit: 1,
+        adapter: &stub_backfill_story_agent/3
+      )
+
+    assert_raise RuntimeError, ~r/sqlite durable soup operation failed/, fn ->
+      DurableSoupDb.persist!(soup_db_path, backfilled, %{
+        source_kind: "admitted-soup-story-backfill",
+        source_db_path: soup_db_path,
+        source_row_count: 0,
+        expected_tenant_revision: stale_revision
+      })
+    end
+
+    assert DurableSoupDb.table_count(soup_db_path, "story_events", @tenant) == 0
+  end
+
   test "changed stories report is regenerated from persisted soup database" do
     tmp =
       Path.join(
@@ -489,6 +624,207 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert Enum.all?(chain.evidence_refs, &(&1 in evidence_labels))
   end
 
+  test "story agent event replay reports malformed durable soup precondition before persist" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-daemon-news-story-agent-preflight-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    soup_db_path = Path.join(tmp, "primeradiant-event-soup.sqlite3")
+    raw_path = Path.join(tmp, "archive.jsonl")
+
+    first_row =
+      envelope(
+        "Agent Civic Clinic triage open",
+        "Agent Civic Clinic triage is open venue is north speaker is desk."
+      )
+
+    [{first_offset, first_length}] = write_archive!(raw_path, [first_row])
+
+    first_event =
+      committed_source_item_event(
+        "event-agent-news-1",
+        raw_path,
+        first_offset,
+        first_length,
+        first_row
+      )
+
+    {:ok, _state, _report} =
+      DaemonNewsEvent.consume_event(first_event,
+        soup_db_path: soup_db_path,
+        tenant_id: @tenant,
+        actor_id: "flynn",
+        story_agent_loop?: true,
+        story_agent_opts: [adapter: &stub_story_agent/3]
+      )
+
+    [card] =
+      sqlite_json_rows!(
+        soup_db_path,
+        "SELECT producing_agent_run_id FROM story_card_versions LIMIT 1;"
+      )
+
+    {_, 0} =
+      System.cmd("sqlite3", [
+        soup_db_path,
+        "PRAGMA foreign_keys = OFF; DELETE FROM agent_runs WHERE id = '#{card["producing_agent_run_id"]}';"
+      ])
+
+    second_row =
+      envelope(
+        "Agent Civic Clinic triage update",
+        "Agent Civic Clinic triage added south desk overflow coverage."
+      )
+
+    [{second_offset, second_length}] = write_archive!(raw_path, [second_row])
+
+    second_event =
+      committed_source_item_event(
+        "event-agent-news-2",
+        raw_path,
+        second_offset,
+        second_length,
+        second_row
+      )
+
+    assert_raise RuntimeError,
+                 ~r/durable soup foreign-key precondition failed.*story_card_versions.*agent_runs/s,
+                 fn ->
+                   DaemonNewsEvent.consume_event(second_event,
+                     soup_db_path: soup_db_path,
+                     tenant_id: @tenant,
+                     actor_id: "flynn",
+                     story_agent_loop?: true,
+                     story_agent_opts: [adapter: &stub_story_agent/3]
+                   )
+                 end
+  end
+
+  test "Google News event source coverage uses original publisher identity when supplied" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-google-news-original-source-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    soup_db_path = Path.join(tmp, "primeradiant-event-soup.sqlite3")
+    raw_path = Path.join(tmp, "archive.jsonl")
+
+    row =
+      "Apple confirms pricing"
+      |> envelope("Apple pricing is changing after memory costs rose.")
+      |> update_in(["body"], fn body ->
+        Map.merge(body, %{
+          "url" => "https://news.google.com/rss/articles/CBMiapple?oc=5",
+          "source_name" => "Google News Apple",
+          "canonical_url" => "https://www.ign.com/articles/apple-confirms-price-increases",
+          "original_source_name" => "IGN"
+        })
+      end)
+
+    [{offset, length}] = write_archive!(raw_path, [row])
+    event = committed_source_item_event("google-news-original-1", raw_path, offset, length, row)
+
+    {:ok, state, _report} =
+      DaemonNewsEvent.consume_event(event,
+        soup_db_path: soup_db_path,
+        tenant_id: @tenant,
+        actor_id: "flynn",
+        story_agent_loop?: true,
+        story_agent_opts: [adapter: &stub_story_agent/3]
+      )
+
+    [input] = state.inputs
+
+    assert input.normalized["canonical_uri"] ==
+             "https://www.ign.com/articles/apple-confirms-price-increases"
+
+    assert input.normalized["source_name"] == "IGN"
+    assert get_in(input.normalized, ["metadata", "aggregator", "name"]) == "Google News Apple"
+
+    [item] = Soup.feed(state, %{"consumer" => "reporter", "projection" => "news-morning"}).items
+    [source] = item.source_coverage
+    [source_link] = item.source_links
+
+    assert source.canonical_public_url["value"] ==
+             "https://www.ign.com/articles/apple-confirms-price-increases"
+
+    assert source.source_domain["value"] == "www.ign.com"
+    assert source.source_label["value"] == "IGN"
+    assert source.publication["value"] == "IGN"
+    assert source_link.canonical_public_url["value"] == source.canonical_public_url["value"]
+    assert source_link.source_domain["value"] == source.source_domain["value"]
+    assert source_link.source_label["value"] == source.source_label["value"]
+    assert source_link.publication["value"] == source.publication["value"]
+  end
+
+  test "Google News RSS URL without original source is not exposed as publisher identity" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-google-news-aggregator-only-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    soup_db_path = Path.join(tmp, "primeradiant-event-soup.sqlite3")
+    raw_path = Path.join(tmp, "archive.jsonl")
+
+    row =
+      "Apple confirms pricing"
+      |> envelope("Apple pricing is changing after memory costs rose.")
+      |> update_in(["body"], fn body ->
+        Map.merge(body, %{
+          "url" => "https://news.google.com/rss/articles/CBMiapple?oc=5",
+          "source_name" => "Google News Apple"
+        })
+      end)
+
+    [{offset, length}] = write_archive!(raw_path, [row])
+    event = committed_source_item_event("google-news-aggregator-1", raw_path, offset, length, row)
+
+    {:ok, state, _report} =
+      DaemonNewsEvent.consume_event(event,
+        soup_db_path: soup_db_path,
+        tenant_id: @tenant,
+        actor_id: "flynn",
+        story_agent_loop?: true,
+        story_agent_opts: [adapter: &stub_story_agent/3]
+      )
+
+    [input] = state.inputs
+    assert input.normalized["canonical_uri"] == nil
+    assert input.normalized["source_name"] == nil
+
+    assert get_in(input.normalized, ["metadata", "aggregator", "url"]) ==
+             "https://news.google.com/rss/articles/CBMiapple?oc=5"
+
+    [item] = Soup.feed(state, %{"consumer" => "reporter", "projection" => "news-morning"}).items
+    [source] = item.source_coverage
+    [source_link] = item.source_links
+    assert source.canonical_public_url["state"] == "unavailable"
+    assert source.source_domain["state"] == "unavailable"
+    assert source.source_label["state"] == "unavailable"
+    assert source.publication["state"] == "unavailable"
+    assert source.canonical_public_url["value"] == nil
+    refute source.source_label["value"] == "Google News Apple"
+    assert source_link.canonical_public_url["state"] == "unavailable"
+    assert source_link.source_domain["state"] == "unavailable"
+    assert source_link.source_label["state"] == "unavailable"
+    assert source_link.publication["state"] == "unavailable"
+    assert source_link.canonical_public_url["value"] == nil
+    refute source_link.source_label["value"] == "Google News Apple"
+  end
+
   test "story-card synthesis writes contribution reasons for every linked story source" do
     tmp =
       Path.join(
@@ -792,7 +1128,7 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert source_link.source_ref == coverage.source_ref
   end
 
-  test "story-card synthesis accepts explicit non-sentinel unavailable source reasons" do
+  test "story-card synthesis rejects unavailable source reasons as incomplete under strict contract" do
     tmp =
       Path.join(
         System.tmp_dir!(),
@@ -833,20 +1169,513 @@ defmodule Primeradiant.DaemonNewsReplayTest do
       )
 
     [chain] = report.live_story_agent_loop.correlation_chains
-    assert chain.story_card_status == "complete"
+    assert chain.story_card_status == "incomplete"
 
     [card] = state.story_card_versions
-    assert card.status == "complete"
+    assert card.status == "incomplete"
 
-    [coverage] = state.story_source_coverage
-    assert coverage.contribution_reason["state"] == "unavailable"
-    assert coverage.contribution_reason["reason"] == "source_text_withheld"
+    assert state.story_source_coverage == []
 
     feed = Soup.feed(state, %{"consumer" => "reporter", "projection" => "news-morning"})
     [item] = feed.items
-    assert item.status == "complete"
-    [source_link] = item.source_links
-    assert source_link.contribution_reason["reason"] == "source_text_withheld"
+    assert item.status == "incomplete"
+    assert item.source_links == []
+  end
+
+  test "recurring cadence accepts live Gibson output that says refused but satisfies grounded synopsis contract" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-recurring-story-card-status-coercion-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    soup_db_path = Path.join(tmp, "primeradiant-event-soup.sqlite3")
+    raw_path = Path.join(tmp, "archive.jsonl")
+
+    [row] = [
+      envelope(
+        "Recurring Civic Clinic triage open",
+        "Recurring Civic Clinic triage is open venue is north speaker is desk."
+      )
+    ]
+
+    [{offset, length}] = write_archive!(raw_path, [row])
+
+    event =
+      committed_source_item_event(
+        "event-recurring-status-coercion-1",
+        raw_path,
+        offset,
+        length,
+        row
+      )
+
+    {:ok, _state, _report} =
+      DaemonNewsEvent.consume_event(event,
+        soup_db_path: soup_db_path,
+        tenant_id: @tenant,
+        actor_id: "flynn",
+        story_agent_loop?: true,
+        story_agent_opts: [adapter: &stub_story_agent/3]
+      )
+
+    loaded = DurableSoupDb.load_tenant(soup_db_path, @tenant)
+
+    {refreshed, cadence_report} =
+      LiveStoryAgentLoop.refresh_story_cards(loaded, "flynn",
+        cadence: :hourly_story_card_synthesis,
+        limit: 1,
+        adapter: &contradictory_refused_complete_story_synthesis_agent/3
+      )
+
+    DurableSoupDb.persist!(soup_db_path, refreshed, %{
+      source_kind: "recurring-soup-cadence",
+      source_db_path: soup_db_path,
+      source_row_count: 0
+    })
+
+    [refresh] = cadence_report.refreshes
+    assert refresh.story_card_status == "complete"
+    assert refresh.model_route == "test://story-synthesis-refused-complete"
+
+    [card] =
+      sqlite_json_rows!(
+        soup_db_path,
+        "SELECT status, field_completeness FROM story_card_versions ORDER BY card_version DESC LIMIT 1;"
+      )
+
+    assert card["status"] == "complete"
+    assert Jason.decode!(card["field_completeness"])["overall"] == "complete"
+    assert DurableSoupDb.table_count(soup_db_path, "story_source_coverage", @tenant) == 2
+    assert DurableSoupDb.table_count(soup_db_path, "story_key_claims", @tenant) == 2
+  end
+
+  test "recurring cadence repairs live refused synopsis that is grounded but missing claim schema" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-recurring-grounded-refused-repair-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    soup_db_path = Path.join(tmp, "primeradiant-event-soup.sqlite3")
+    raw_path = Path.join(tmp, "archive.jsonl")
+
+    [row] = [
+      envelope(
+        "Recurring Civic Clinic live refused shape",
+        "Recurring Civic Clinic remains open and has enough current source evidence for a story card."
+      )
+    ]
+
+    [{offset, length}] = write_archive!(raw_path, [row])
+
+    event =
+      committed_source_item_event(
+        "event-recurring-grounded-refused-repair",
+        raw_path,
+        offset,
+        length,
+        row
+      )
+
+    {:ok, state, _report} =
+      DaemonNewsEvent.consume_event(event,
+        soup_db_path: soup_db_path,
+        tenant_id: @tenant,
+        actor_id: "flynn",
+        story_agent_loop?: true,
+        story_agent_opts: [adapter: &stub_story_agent/3]
+      )
+
+    {refreshed, cadence_report} =
+      LiveStoryAgentLoop.refresh_story_cards(state, "flynn",
+        cadence: :hourly_story_card_synthesis,
+        limit: 1,
+        adapter: &grounded_refused_missing_claim_story_synthesis_agent/3
+      )
+
+    [refresh] = cadence_report.refreshes
+    assert refresh.story_card_status == "complete"
+    assert refresh.model_route == "test://grounded-refused-missing-claim"
+
+    latest_card = Enum.max_by(refreshed.story_card_versions, & &1.card_version)
+    assert latest_card.status == "complete"
+    assert latest_card.field_completeness["overall"] == "complete"
+    assert latest_card.deck["state"] == "complete"
+    assert latest_card.summary["state"] == "complete"
+
+    assert [_claim] =
+             Enum.filter(
+               refreshed.story_key_claims,
+               &(&1.story_card_version_id == latest_card.id)
+             )
+
+    [coverage] =
+      Enum.filter(
+        refreshed.story_source_coverage,
+        &(&1.story_card_version_id == latest_card.id)
+      )
+
+    assert coverage.contribution_reason["state"] == "complete"
+    assert coverage.contribution_reason["text"] != ""
+
+    latest_run =
+      refreshed.agent_runs
+      |> Enum.filter(&(&1.agent_type == "story_synthesis"))
+      |> List.last()
+
+    assert latest_run.scope["story_synthesis_completion_repair"] ==
+             "grounded_packet_completion_from_committed_story_state"
+
+    refute latest_run.scope["final_story_synthesis_source"] == "refused"
+  end
+
+  test "recurring cadence uses bounded grounded packet completion instead of live model when current source evidence is sufficient" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-recurring-grounded-default-cadence-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    soup_db_path = Path.join(tmp, "primeradiant-event-soup.sqlite3")
+    raw_path = Path.join(tmp, "archive.jsonl")
+
+    [row] = [
+      envelope(
+        "Recurring Civic Clinic default bounded cadence",
+        "Recurring Civic Clinic default bounded cadence has enough current source evidence for a complete grounded story artifact."
+      )
+    ]
+
+    [{offset, length}] = write_archive!(raw_path, [row])
+
+    event =
+      committed_source_item_event(
+        "event-recurring-grounded-default-cadence",
+        raw_path,
+        offset,
+        length,
+        row
+      )
+
+    {:ok, state, _report} =
+      DaemonNewsEvent.consume_event(event,
+        soup_db_path: soup_db_path,
+        tenant_id: @tenant,
+        actor_id: "flynn",
+        story_agent_loop?: true,
+        story_agent_opts: [adapter: &stub_story_agent/3]
+      )
+
+    {refreshed, cadence_report} =
+      LiveStoryAgentLoop.refresh_story_cards(state, "flynn",
+        cadence: :hourly_story_card_synthesis,
+        limit: 1
+      )
+
+    [refresh] = cadence_report.refreshes
+    assert refresh.story_card_status == "complete"
+    assert refresh.model_route == "internal://story-synthesis/grounded-cadence-packet"
+    assert refresh.producer_kind == "deterministic_product_logic"
+    assert refresh.decision_source == "grounded_cadence_packet_completion"
+
+    latest_card = Enum.max_by(refreshed.story_card_versions, & &1.card_version)
+    assert latest_card.status == "complete"
+    assert latest_card.field_completeness["overall"] == "complete"
+    assert latest_card.deck["state"] == "complete"
+    assert latest_card.summary["state"] == "complete"
+
+    assert [_claim] =
+             Enum.filter(
+               refreshed.story_key_claims,
+               &(&1.story_card_version_id == latest_card.id)
+             )
+
+    [coverage] =
+      Enum.filter(
+        refreshed.story_source_coverage,
+        &(&1.story_card_version_id == latest_card.id)
+      )
+
+    assert coverage.contribution_reason["state"] == "complete"
+    assert coverage.contribution_reason["text"] != ""
+
+    latest_run =
+      refreshed.agent_runs
+      |> Enum.filter(&(&1.agent_type == "story_synthesis"))
+      |> List.last()
+
+    assert latest_run.model == "primeradiant-grounded-story-synthesis"
+
+    assert latest_run.scope["model_route"] ==
+             "internal://story-synthesis/grounded-cadence-packet"
+
+    assert latest_run.scope["producer_kind"] == "deterministic_product_logic"
+  end
+
+  test "default recurring cadence fast-refuses title-only bounded evidence without live model" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-recurring-title-only-default-refusal-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    soup_db_path = Path.join(tmp, "primeradiant-event-soup.sqlite3")
+    raw_path = Path.join(tmp, "archive.jsonl")
+
+    [row] = [
+      envelope(
+        "Recurring Civic Clinic title-only default bounded cadence",
+        "Recurring Civic Clinic title-only default bounded cadence creates the story."
+      )
+    ]
+
+    [{offset, length}] = write_archive!(raw_path, [row])
+
+    event =
+      committed_source_item_event(
+        "event-recurring-title-only-default-cadence",
+        raw_path,
+        offset,
+        length,
+        row
+      )
+
+    {:ok, state, _report} =
+      DaemonNewsEvent.consume_event(event,
+        soup_db_path: soup_db_path,
+        tenant_id: @tenant,
+        actor_id: "flynn",
+        story_agent_loop?: true,
+        story_agent_opts: [adapter: &stub_story_agent/3]
+      )
+
+    title_only_state =
+      update_in(state.inputs, fn inputs ->
+        Enum.map(inputs, &%{&1 | body_text: nil})
+      end)
+
+    {refreshed, cadence_report} =
+      LiveStoryAgentLoop.refresh_story_cards(title_only_state, "flynn",
+        cadence: :hourly_story_card_synthesis,
+        limit: 1
+      )
+
+    [refresh] = cadence_report.refreshes
+    assert refresh.story_card_status == "refused"
+    assert refresh.model_route == "internal://story-synthesis/insufficient-bounded-evidence"
+    assert refresh.producer_kind == "deterministic_product_logic"
+    assert refresh.decision_source == "story_synthesis_insufficient_bounded_evidence"
+
+    latest_card = Enum.max_by(refreshed.story_card_versions, & &1.card_version)
+    assert latest_card.status == "refused"
+    assert latest_card.field_completeness["overall"] == "refused"
+    assert latest_card.deck["reason"] == "story_synthesis_insufficient_bounded_evidence"
+    assert latest_card.summary["reason"] == "story_synthesis_insufficient_bounded_evidence"
+
+    assert Enum.filter(refreshed.story_key_claims, &(&1.story_card_version_id == latest_card.id)) ==
+             []
+
+    latest_run =
+      refreshed.agent_runs
+      |> Enum.filter(&(&1.agent_type == "story_synthesis"))
+      |> List.last()
+
+    assert latest_run.model == "primeradiant-story-synthesis-boundary"
+
+    assert latest_run.scope["model_route"] ==
+             "internal://story-synthesis/insufficient-bounded-evidence"
+
+    assert latest_run.scope["producer_kind"] == "deterministic_product_logic"
+    assert latest_run.scope["decision_source"] == "story_synthesis_insufficient_bounded_evidence"
+  end
+
+  test "cadence projection avoids historical reader deltas and delta persist preserves them" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-cadence-delta-persist-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    soup_db_path = Path.join(tmp, "primeradiant-event-soup.sqlite3")
+    raw_path = Path.join(tmp, "archive.jsonl")
+
+    [row] = [
+      envelope(
+        "Recurring Civic Clinic delta persist cadence",
+        "Recurring Civic Clinic delta persist cadence has enough source evidence for a grounded story card."
+      )
+    ]
+
+    [{offset, length}] = write_archive!(raw_path, [row])
+
+    event =
+      committed_source_item_event(
+        "event-recurring-delta-persist-cadence",
+        raw_path,
+        offset,
+        length,
+        row
+      )
+
+    {:ok, state, _report} =
+      DaemonNewsEvent.consume_event(event,
+        soup_db_path: soup_db_path,
+        tenant_id: @tenant,
+        actor_id: "flynn",
+        story_agent_loop?: true,
+        story_agent_opts: [adapter: &stub_story_agent/3]
+      )
+
+    latest_card = Enum.max_by(state.story_card_versions, & &1.card_version)
+    latest_run = List.last(state.agent_runs)
+    story = List.first(state.stories)
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond) |> DateTime.to_iso8601()
+
+    large_delta =
+      %{
+        "items" =>
+          Enum.map(1..250, fn index ->
+            %{
+              "claim_ref" => "historical-reader-delta-#{index}",
+              "text" => String.duplicate("reader delta payload ", 20)
+            }
+          end)
+      }
+      |> Jason.encode!()
+      |> sql_string()
+
+    sql = """
+    INSERT INTO story_reader_deltas (
+      id, tenant_id, user_id, story_id, seen_state_id,
+      prior_seen_story_version, prior_seen_card_version_id,
+      current_story_version, current_card_version_id,
+      material_unseen_deltas, nonmaterial_exclusions,
+      producing_agent_run_id, evidence_refs, provenance_refs,
+      inserted_at, updated_at
+    ) VALUES (
+      'reader-delta-cadence-preserve',
+      '#{@tenant}',
+      'flynn',
+      '#{story.id}',
+      NULL,
+      0,
+      NULL,
+      #{story.version},
+      '#{latest_card.id}',
+      '#{large_delta}',
+      '[]',
+      '#{latest_run.id}',
+      '[]',
+      '["reader-delta-cadence-preserve"]',
+      '#{now}',
+      '#{now}'
+    );
+    """
+
+    {_out, 0} = System.cmd("sqlite3", [soup_db_path, sql])
+    reader_delta_count = DurableSoupDb.table_count(soup_db_path, "story_reader_deltas", @tenant)
+    assert reader_delta_count >= 1
+
+    loaded = DurableSoupDb.load_soup_ready_projection(soup_db_path, @tenant)
+    assert loaded.story_reader_deltas == []
+
+    {refreshed, report} =
+      LiveStoryAgentLoop.refresh_story_cards(loaded, "flynn",
+        cadence: :hourly_story_card_synthesis,
+        limit: 1
+      )
+
+    assert report.candidate_count == 1
+    assert report.refreshed_count == 1
+
+    DurableSoupDb.persist_delta!(soup_db_path, loaded, refreshed, %{
+      source_kind: "recurring-soup-cadence",
+      source_db_path: soup_db_path,
+      source_row_count: 0,
+      expected_tenant_revision: DurableSoupDb.tenant_revision(soup_db_path, @tenant)
+    })
+
+    assert DurableSoupDb.table_count(soup_db_path, "story_reader_deltas", @tenant) ==
+             reader_delta_count
+  end
+
+  test "recurring cadence keeps title-only live synthesis refused" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-recurring-title-only-stays-refused-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    soup_db_path = Path.join(tmp, "primeradiant-event-soup.sqlite3")
+    raw_path = Path.join(tmp, "archive.jsonl")
+
+    [row] = [
+      envelope(
+        "Recurring Civic Clinic title only remains invalid",
+        "Recurring Civic Clinic title-only output must not be trusted as a story card."
+      )
+    ]
+
+    [{offset, length}] = write_archive!(raw_path, [row])
+
+    event =
+      committed_source_item_event(
+        "event-recurring-title-only-stays-refused",
+        raw_path,
+        offset,
+        length,
+        row
+      )
+
+    {:ok, state, _report} =
+      DaemonNewsEvent.consume_event(event,
+        soup_db_path: soup_db_path,
+        tenant_id: @tenant,
+        actor_id: "flynn",
+        story_agent_loop?: true,
+        story_agent_opts: [adapter: &stub_story_agent/3]
+      )
+
+    {refreshed, cadence_report} =
+      LiveStoryAgentLoop.refresh_story_cards(state, "flynn",
+        cadence: :hourly_story_card_synthesis,
+        limit: 1,
+        adapter: &title_only_story_synthesis_agent/3
+      )
+
+    [refresh] = cadence_report.refreshes
+    assert refresh.story_card_status == "refused"
+
+    latest_card = Enum.max_by(refreshed.story_card_versions, & &1.card_version)
+    assert latest_card.status == "refused"
+    assert latest_card.field_completeness["overall"] == "refused"
+
+    latest_run =
+      refreshed.agent_runs
+      |> Enum.filter(&(&1.agent_type == "story_synthesis"))
+      |> List.last()
+
+    assert latest_run.scope["final_story_synthesis_source"] == "refused"
+    refute latest_run.scope["story_synthesis_completion_repair"]
   end
 
   test "recurring cadence refreshes Reporter story cards over admitted soup without source admission" do
@@ -938,8 +1767,9 @@ defmodule Primeradiant.DaemonNewsReplayTest do
       )
 
     assert agent_run["agent_run_key"] in [
-             "agent-run:story-synthesis.v2.t1311.article-link-salience:#{refresh.correlation_id}",
-             "agent-run:story-synthesis.v2.t1311.article-link-salience:#{refresh.correlation_id}:source-coverage-repair"
+             "agent-run:story-synthesis.v3.t1501.grounded-synopsis-evidence-contract:#{refresh.correlation_id}",
+             "agent-run:story-synthesis.v3.t1501.grounded-synopsis-evidence-contract:#{refresh.correlation_id}:schema-repair",
+             "agent-run:story-synthesis.v3.t1501.grounded-synopsis-evidence-contract:#{refresh.correlation_id}:source-coverage-repair"
            ]
   end
 
@@ -1267,6 +2097,161 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert latest_coverage == []
   end
 
+  test "recurring story-card synthesis keeps title-only live output refused after bounded repair fails" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-recurring-title-only-story-card-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    soup_db_path = Path.join(tmp, "primeradiant-event-soup.sqlite3")
+    raw_path = Path.join(tmp, "archive.jsonl")
+
+    [row] = [
+      envelope(
+        "Recurring Civic Clinic title-only Gibson packet",
+        "Recurring Civic Clinic title-only Gibson packet creates the story."
+      )
+    ]
+
+    [{offset, length}] = write_archive!(raw_path, [row])
+
+    event =
+      committed_source_item_event("event-title-only-gibson-news-1", raw_path, offset, length, row)
+
+    {:ok, state, _report} =
+      DaemonNewsEvent.consume_event(event,
+        soup_db_path: soup_db_path,
+        tenant_id: @tenant,
+        actor_id: "flynn",
+        story_agent_loop?: true,
+        story_agent_opts: [adapter: &stub_story_agent/3]
+      )
+
+    {refreshed, cadence_report} =
+      LiveStoryAgentLoop.refresh_story_cards(state, "flynn",
+        cadence: :hourly_story_card_synthesis,
+        limit: 1,
+        adapter: &title_only_story_synthesis_agent/3
+      )
+
+    [refresh] = cadence_report.refreshes
+    assert refresh.story_card_status == "refused"
+
+    assert refresh.model_route ==
+             "internal://story-synthesis/story_synthesis_invalid_model_output"
+
+    latest_card = Enum.max_by(refreshed.story_card_versions, & &1.card_version)
+    assert latest_card.status == "refused"
+    assert latest_card.title["state"] == "complete"
+    assert latest_card.deck["reason"] == "story_synthesis_invalid_model_output"
+    assert latest_card.summary["reason"] == "story_synthesis_invalid_model_output"
+
+    assert Enum.filter(refreshed.story_key_claims, &(&1.story_card_version_id == latest_card.id)) ==
+             []
+
+    assert latest_card.field_completeness["overall"] == "refused"
+
+    latest_run =
+      refreshed.agent_runs
+      |> Enum.filter(&(&1.agent_type == "story_synthesis"))
+      |> List.last()
+
+    assert latest_run.scope["repair_reason"] == "story_synthesis_invalid_model_output"
+    assert is_binary(latest_run.scope["repair_of_agent_run_id"])
+    assert latest_run.scope["final_story_synthesis_source"] == "refused"
+
+    assert Enum.any?(refreshed.audit_events, fn
+             %{
+               event: :story_synthesis_model_output_repair_attempted,
+               reason: "story_synthesis_invalid_model_output"
+             } ->
+               true
+
+             _ ->
+               false
+           end)
+  end
+
+  test "recurring story-card synthesis retries title-only live output and saves repaired complete artifact" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-recurring-title-only-repaired-story-card-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    soup_db_path = Path.join(tmp, "primeradiant-event-soup.sqlite3")
+    raw_path = Path.join(tmp, "archive.jsonl")
+
+    [row] = [
+      envelope(
+        "Recurring Civic Clinic repaired title-only Gibson packet",
+        "Recurring Civic Clinic repaired title-only Gibson packet creates the story."
+      )
+    ]
+
+    [{offset, length}] = write_archive!(raw_path, [row])
+
+    event =
+      committed_source_item_event(
+        "event-title-only-repaired-gibson-news-1",
+        raw_path,
+        offset,
+        length,
+        row
+      )
+
+    {:ok, state, _report} =
+      DaemonNewsEvent.consume_event(event,
+        soup_db_path: soup_db_path,
+        tenant_id: @tenant,
+        actor_id: "flynn",
+        story_agent_loop?: true,
+        story_agent_opts: [adapter: &stub_story_agent/3]
+      )
+
+    {refreshed, cadence_report} =
+      LiveStoryAgentLoop.refresh_story_cards(state, "flynn",
+        cadence: :hourly_story_card_synthesis,
+        limit: 1,
+        adapter: &repairing_title_only_story_synthesis_agent/3
+      )
+
+    assert_receive {:story_synthesis_repair_packet, repair_packet}, 1_000
+
+    assert repair_packet.story_synthesis_output_repair_request.validation_error ==
+             "story_synthesis_invalid_model_output"
+
+    [refresh] = cadence_report.refreshes
+    assert refresh.story_card_status == "complete"
+
+    latest_card = Enum.max_by(refreshed.story_card_versions, & &1.card_version)
+    assert latest_card.status == "complete"
+    assert latest_card.deck["state"] == "complete"
+    assert latest_card.summary["state"] == "complete"
+
+    assert [_claim] =
+             Enum.filter(
+               refreshed.story_key_claims,
+               &(&1.story_card_version_id == latest_card.id)
+             )
+
+    latest_run =
+      refreshed.agent_runs
+      |> Enum.filter(&(&1.agent_type == "story_synthesis"))
+      |> List.last()
+
+    assert latest_run.scope["repair_reason"] == "story_synthesis_invalid_model_output"
+    assert is_binary(latest_run.scope["repair_of_agent_run_id"])
+    refute latest_run.scope["final_story_synthesis_source"] == "refused"
+  end
+
   test "recurring story-card synthesis refuses malformed Gibson JSON without crashing" do
     tmp =
       Path.join(
@@ -1437,9 +2422,12 @@ defmodule Primeradiant.DaemonNewsReplayTest do
       |> List.last()
 
     assert reloaded_run.scope["attempted_model_route"] == "test://invalid-story-synthesis"
+
     assert reloaded_run.scope["model_route"] ==
              "internal://story-synthesis/story_synthesis_invalid_model_output"
+
     assert reloaded_run.scope["final_story_synthesis_source"] == "refused"
+
     assert reloaded_run.scope["fallback_gap"] ==
              "no_supported_codex_oauth_spark_story_synthesis_route"
 
@@ -2061,6 +3049,228 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     after_stat = File.stat!(source_db)
     assert before_stat.mtime == after_stat.mtime
     assert before_stat.size == after_stat.size
+  end
+
+  test "Subspace cursor reader records source DB read failure as red manifest" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-daemon-news-cursor-failure-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    source_db = Path.join(tmp, "not-a-daemon.sqlite3")
+    package_root = Path.join(tmp, "cursor-packages")
+    File.write!(source_db, "not sqlite")
+
+    cursor_script = Path.expand("scripts/r1/emit_subspace_daemon_cursor_event_packages.sh")
+
+    {output, status} =
+      System.cmd(
+        cursor_script,
+        [
+          "--source-db",
+          source_db,
+          "--tenant",
+          @tenant,
+          "--package-root",
+          package_root,
+          "--after-cursor",
+          "2026-06-18 18:23:59|7765",
+          "--limit",
+          "10",
+          "--run-id",
+          "cursor-failure-test"
+        ],
+        stderr_to_stdout: true
+      )
+
+    assert status != 0
+    assert output =~ "source DB cursor read failed"
+
+    manifest = Path.join(package_root, "manifest.json") |> File.read!() |> Jason.decode!()
+    assert manifest["status"] == "source_db_cursor_read_failed"
+    assert manifest["source_mode"] == "subspace_daemon_read_only_db_cursor"
+    assert manifest["after_cursor"] == "2026-06-18 18:23:59|7765"
+    assert manifest["next_cursor"] == "2026-06-18 18:23:59|7765"
+    assert manifest["emitted_count"] == 0
+    assert manifest["packages"] == []
+    assert get_in(manifest, ["error", "command"]) == "sqlite3 -readonly"
+    assert is_integer(get_in(manifest, ["error", "exit_status"]))
+    assert get_in(manifest, ["error", "message"]) =~ "file is not a database"
+  end
+
+  test "live watcher records failed report when catchup cursor read fails" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-live-watch-cursor-failure-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    source_db = Path.join(tmp, "not-a-daemon.sqlite3")
+    state_root = Path.join(tmp, "state")
+    File.write!(source_db, "not sqlite")
+    File.mkdir_p!(state_root)
+    File.write!(Path.join(state_root, "cursor.txt"), "2026-06-18 18:23:59|7765\n")
+
+    watcher_script = Path.expand("scripts/r1/live_subspace_daemon_watcher_once.sh")
+
+    {output, status} =
+      System.cmd(
+        watcher_script,
+        [
+          "--source-db",
+          source_db,
+          "--tenant",
+          @tenant,
+          "--state-root",
+          state_root,
+          "--eurisko-target",
+          "clu@eurisko",
+          "--eurisko-repo",
+          "/home/clu/src/primeradiant",
+          "--ssh-key",
+          source_db,
+          "--run-id",
+          "live-cursor-failure-test",
+          "--limit",
+          "10"
+        ],
+        stderr_to_stdout: true
+      )
+
+    assert status != 0
+    assert output =~ "live watcher cursor catchup failed"
+
+    failed_report =
+      Path.join(state_root, "live-cursor-failure-test-failed-report.json")
+      |> File.read!()
+      |> Jason.decode!()
+
+    assert failed_report["status"] == "source_db_cursor_read_failed"
+    assert failed_report["failed_stage"] == "cursor_catchup"
+    assert failed_report["after_cursor"] == "2026-06-18 18:23:59|7765"
+
+    assert get_in(failed_report, ["error", "command"]) ==
+             "emit_subspace_daemon_cursor_event_packages.sh"
+
+    assert get_in(failed_report, ["error", "message"]) =~ "file is not a database"
+
+    failure_manifest = failed_report["failure_manifest_path"] |> File.read!() |> Jason.decode!()
+    assert failure_manifest["status"] == "source_db_cursor_read_failed"
+    assert failure_manifest["next_cursor"] == "2026-06-18 18:23:59|7765"
+  end
+
+  test "SQLite file wakeup records failed report when cursor importer fails" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-daemon-news-watch-failure-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    source_db = Path.join(tmp, "source-news.db")
+    cursor_file = Path.join(tmp, "primeradiant/cursor.txt")
+    package_root = Path.join(tmp, "packages")
+    run_root = Path.join(tmp, "runs")
+    fake_emitter = Path.join(tmp, "fake-emitter.sh")
+
+    File.write!(source_db, "before")
+    File.mkdir_p!(Path.dirname(cursor_file))
+    File.write!(cursor_file, "2026-06-18 18:23:59|7765\n")
+
+    File.write!(fake_emitter, """
+    #!/usr/bin/env bash
+    set -euo pipefail
+    PACKAGE_ROOT=""
+    AFTER_CURSOR=""
+    RUN_ID=""
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --package-root) PACKAGE_ROOT="$2"; shift 2 ;;
+        --after-cursor) AFTER_CURSOR="$2"; shift 2 ;;
+        --run-id) RUN_ID="$2"; shift 2 ;;
+        *) shift 2 ;;
+      esac
+    done
+    mkdir -p "$PACKAGE_ROOT"
+    cat > "$PACKAGE_ROOT/manifest.json" <<JSON
+    {"run_id":"$RUN_ID","status":"source_db_cursor_read_failed","after_cursor":"$AFTER_CURSOR","next_cursor":"$AFTER_CURSOR","emitted_count":0,"packages":[],"error":{"command":"sqlite3 -readonly","exit_status":1,"message":"authorization denied"}}
+    JSON
+    echo "source DB cursor read failed; failure manifest: $PACKAGE_ROOT/manifest.json" >&2
+    echo "authorization denied" >&2
+    echo "$PACKAGE_ROOT/manifest.json" >&2
+    exit 11
+    """)
+
+    File.chmod!(fake_emitter, 0o755)
+
+    watcher_script = Path.expand("scripts/r1/watch_sqlite_wakeup.sh")
+
+    task =
+      Task.async(fn ->
+        System.cmd(
+          watcher_script,
+          [
+            "--source-db",
+            source_db,
+            "--tenant",
+            @tenant,
+            "--cursor-file",
+            cursor_file,
+            "--package-root",
+            package_root,
+            "--run-root",
+            run_root,
+            "--limit",
+            "10",
+            "--run-id",
+            "watch-failure-test",
+            "--timeout-seconds",
+            "8",
+            "--poll-interval-seconds",
+            "1",
+            "--emit-cursor-script",
+            fake_emitter
+          ],
+          stderr_to_stdout: true
+        )
+      end)
+
+    Process.sleep(1200)
+    File.write!(source_db, "after", [:append])
+
+    {output, status} = Task.await(task, 10_000)
+
+    assert status == 11
+    assert output =~ "SQLite wakeup cursor import failed"
+
+    failed_report =
+      Path.join(package_root, "wakeup-failed-report.json")
+      |> File.read!()
+      |> Jason.decode!()
+
+    assert failed_report["status"] == "source_db_cursor_read_failed"
+    assert failed_report["failed_stage"] == "sqlite_wakeup_cursor_import"
+    assert failed_report["after_cursor"] == "2026-06-18 18:23:59|7765"
+    assert failed_report["pass"] == 1
+
+    assert get_in(failed_report, ["error", "command"]) ==
+             "emit_subspace_daemon_cursor_event_packages.sh"
+
+    assert get_in(failed_report, ["error", "exit_status"]) == 11
+    assert get_in(failed_report, ["error", "message"]) =~ "authorization denied"
+
+    failure_manifest = failed_report["failure_manifest_path"] |> File.read!() |> Jason.decode!()
+    assert failure_manifest["status"] == "source_db_cursor_read_failed"
+    assert failure_manifest["next_cursor"] == "2026-06-18 18:23:59|7765"
   end
 
   test "SQLite file wakeup runs read-only cursor importer without trusting file event" do
@@ -2725,6 +3935,14 @@ defmodule Primeradiant.DaemonNewsReplayTest do
   defp stub_story_agent(%{role: :story_synthesis}, packet, _ctx),
     do: stub_story_synthesis(packet)
 
+  defp stub_backfill_story_agent(%{role: :story_synthesis}, packet, _ctx) do
+    packet
+    |> stub_story_synthesis()
+    |> put_in([:output, "title", "text"], "Civic Clinic triage")
+  end
+
+  defp stub_backfill_story_agent(config, packet, ctx), do: stub_story_agent(config, packet, ctx)
+
   defp capturing_bounded_packet_story_agent(%{role: :story_synthesis}, packet, _ctx) do
     send(self(), {:story_synthesis_packet, packet})
     stub_story_synthesis(packet)
@@ -2749,6 +3967,54 @@ defmodule Primeradiant.DaemonNewsReplayTest do
   end
 
   defp stub_story_agent_oversized_retry_previous_output(config, packet, ctx),
+    do: stub_story_agent(config, packet, ctx)
+
+  defp title_only_story_synthesis_agent(%{role: :story_synthesis}, packet, _ctx) do
+    synthesis = stub_story_synthesis(packet)
+
+    output = %{
+      "status" => "complete",
+      "title" => %{
+        "text" => story_synthesis_title(packet),
+        "state" => "complete",
+        "provenance_refs" => packet.evidence_refs
+      }
+    }
+
+    %{
+      synthesis
+      | output: output,
+        model: "stub-live-model",
+        model_route: "test://title-only-story-synthesis",
+        producer_kind: "live_model_inference",
+        decision_source: "live_gibson_qwen_inference"
+    }
+  end
+
+  defp title_only_story_synthesis_agent(config, packet, ctx),
+    do: stub_story_agent(config, packet, ctx)
+
+  defp repairing_title_only_story_synthesis_agent(
+         %{role: :story_synthesis} = _config,
+         %{story_synthesis_output_repair_request: _request} = packet,
+         _ctx
+       ) do
+    send(self(), {:story_synthesis_repair_packet, packet})
+
+    packet
+    |> stub_story_synthesis()
+    |> Map.merge(%{
+      model: "stub-live-model",
+      model_route: "test://repaired-title-only-story-synthesis",
+      producer_kind: "live_model_inference",
+      decision_source: "live_gibson_qwen_inference"
+    })
+  end
+
+  defp repairing_title_only_story_synthesis_agent(%{role: :story_synthesis}, packet, ctx),
+    do: title_only_story_synthesis_agent(%{role: :story_synthesis}, packet, ctx)
+
+  defp repairing_title_only_story_synthesis_agent(config, packet, ctx),
     do: stub_story_agent(config, packet, ctx)
 
   defp malformed_gibson_story_synthesis_agent(%{role: :story_synthesis}, _packet, _ctx) do
@@ -3026,6 +4292,58 @@ defmodule Primeradiant.DaemonNewsReplayTest do
   defp stub_story_agent_overstates_repeated_update(%{role: :story_synthesis}, packet, _ctx),
     do: stub_story_synthesis(packet)
 
+  defp contradictory_refused_complete_story_synthesis_agent(
+         %{role: :story_synthesis},
+         packet,
+         _ctx
+       ) do
+    synthesis = stub_story_synthesis(packet)
+
+    output =
+      synthesis.output
+      |> put_in(["status"], "refused")
+      |> put_in(["title", "text"], story_synthesis_title(packet))
+
+    %{
+      synthesis
+      | output: output,
+        model: "stub-live-model",
+        model_route: "test://story-synthesis-refused-complete",
+        producer_kind: "live_model_inference",
+        decision_source: "live_gibson_qwen_inference"
+    }
+  end
+
+  defp contradictory_refused_complete_story_synthesis_agent(config, packet, ctx),
+    do: stub_story_agent(config, packet, ctx)
+
+  defp grounded_refused_missing_claim_story_synthesis_agent(
+         %{role: :story_synthesis},
+         packet,
+         _ctx
+       ) do
+    synthesis = stub_story_synthesis(packet)
+
+    output =
+      synthesis.output
+      |> Map.put("status", "refused")
+      |> Map.put("key_claims", [])
+      |> put_in(["field_completeness", "key_claims"], false)
+      |> put_in(["field_completeness", "overall"], "refused")
+
+    %{
+      synthesis
+      | output: output,
+        model: "stub-live-model",
+        model_route: "test://grounded-refused-missing-claim",
+        producer_kind: "live_model_inference",
+        decision_source: "live_gibson_qwen_inference"
+    }
+  end
+
+  defp grounded_refused_missing_claim_story_synthesis_agent(config, packet, ctx),
+    do: stub_story_agent(config, packet, ctx)
+
   defp refusing_story_synthesis_agent(%{role: :story_synthesis}, packet, _ctx) do
     provenance_refs = ["fieldprov:refused-test"]
     reason = "insufficient_evidence_for_hourly_refresh"
@@ -3099,7 +4417,38 @@ defmodule Primeradiant.DaemonNewsReplayTest do
 
   defp refusing_story_synthesis_agent_with_config_assertion(config, packet, ctx) do
     assert config.role == :story_synthesis
-    assert config.max_tokens == 4096
+    assert config.max_tokens == 8192
+
+    assert get_in(config.output_schema, [:topic_salience, :salience_explanation, :state]) ==
+             "complete"
+
+    assert get_in(config.output_schema, [:topic_salience, :salience_explanation, :text]) ==
+             "story-to-topic salience explanation"
+
+    assert get_in(config.output_schema, [
+             :topic_salience,
+             :salience_explanation,
+             :provenance_refs
+           ]) == ["string"]
+
+    assert get_in(config.output_schema, [:source_coverage, Access.at(0), :materiality]) ==
+             "material | nonmaterial"
+
+    assert get_in(config.output_schema, [:source_coverage, Access.at(0), :source_posture, :state]) ==
+             "complete"
+
+    assert get_in(config.output_schema, [:source_coverage, Access.at(0), :source_posture, :value]) ==
+             "string"
+
+    assert get_in(config.output_schema, [:source_coverage, Access.at(0), :source_weight, :state]) ==
+             "complete"
+
+    assert get_in(config.output_schema, [:source_coverage, Access.at(0), :source_weight, :value]) ==
+             "number"
+
+    assert get_in(config.output_schema, [:refusal_provenance, :quarantine_recommendation]) ==
+             "string"
+
     refusing_story_synthesis_agent(config, packet, ctx)
   end
 
@@ -3132,6 +4481,11 @@ defmodule Primeradiant.DaemonNewsReplayTest do
           "state" => "complete",
           "provenance_refs" => ["fieldprov:test"]
         },
+        "exact_happening" => %{
+          "text" => "Civic Clinic triage remains active from linked source evidence.",
+          "state" => "complete",
+          "provenance_refs" => ["fieldprov:test"]
+        },
         "deck" => %{
           "text" => "Civic Clinic triage remains the active story card.",
           "state" => "complete",
@@ -3152,7 +4506,7 @@ defmodule Primeradiant.DaemonNewsReplayTest do
             "evidence_refs" => packet.evidence_refs,
             "conflict_refs" => [],
             "uncertainty" => %{"state" => "unavailable", "reason" => "not_supplied"},
-            "appears_in_current_card" => true
+            "appears_in_current_synopsis" => true
           }
         ],
         "source_coverage" =>
@@ -3167,6 +4521,13 @@ defmodule Primeradiant.DaemonNewsReplayTest do
               "materiality" => "material",
               "source_posture" => %{"state" => "complete", "value" => "reported"},
               "source_weight" => %{"state" => "complete", "value" => 1.0}
+            }
+          end),
+        "source_links" =>
+          Enum.map(source_refs, fn source_ref ->
+            %{
+              "source_ref" => source_ref,
+              "evidence_refs" => packet.evidence_refs
             }
           end),
         "topic_salience" => %{
@@ -3191,9 +4552,11 @@ defmodule Primeradiant.DaemonNewsReplayTest do
         },
         "field_completeness" => %{
           "title" => "complete",
+          "exact_happening" => "complete",
           "deck" => "complete",
           "summary" => "complete",
           "key_claims" => "complete",
+          "source_links" => "complete",
           "source_coverage" => "complete",
           "topic_salience" => "complete",
           "canonical_public_url" => "source_level",

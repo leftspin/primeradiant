@@ -29,6 +29,7 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
 
   def persist!(db_path, state, attrs \\ %{}) do
     db_path |> Path.dirname() |> File.mkdir_p!()
+    validate_existing_foreign_keys!(db_path)
 
     sql =
       [
@@ -37,6 +38,7 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
         "BEGIN IMMEDIATE;",
         "PRAGMA defer_foreign_keys = ON;",
         schema_sql(),
+        tenant_revision_guard_sql(state.tenant_id, Map.get(attrs, :expected_tenant_revision)),
         clear_tenant_sql(state.tenant_id),
         replay_run_sql(state, attrs),
         rows_sql(:agent_runs, state.agent_runs),
@@ -68,6 +70,47 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
 
     sqlite!(db_path, sql)
     :ok
+  end
+
+  def persist_delta!(db_path, previous_state, state, attrs \\ %{}) do
+    db_path |> Path.dirname() |> File.mkdir_p!()
+
+    rows =
+      [
+        :agent_runs,
+        :story_card_versions,
+        :story_source_coverage,
+        :story_key_claims,
+        :story_card_change_sets
+      ]
+      |> Enum.map(fn table -> rows_sql(table, new_rows(previous_state, state, table)) end)
+      |> Enum.reject(&(&1 == ""))
+
+    sql =
+      [
+        ".bail on",
+        "PRAGMA foreign_keys = ON;",
+        "BEGIN IMMEDIATE;",
+        "PRAGMA defer_foreign_keys = ON;",
+        schema_sql(),
+        tenant_revision_guard_sql(state.tenant_id, Map.get(attrs, :expected_tenant_revision)),
+        replay_run_sql(state, attrs)
+        | rows
+      ]
+      |> Kernel.++(["COMMIT;"])
+      |> Enum.join("\n")
+
+    sqlite!(db_path, sql)
+    :ok
+  end
+
+  defp new_rows(previous_state, state, table) do
+    previous_ids =
+      previous_state
+      |> Map.fetch!(table)
+      |> MapSet.new(& &1.id)
+
+    state |> Map.fetch!(table) |> Enum.reject(&MapSet.member?(previous_ids, &1.id))
   end
 
   def load_tenant(db_path, tenant_id) do
@@ -309,6 +352,219 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
       |> rebuild_source_ids()
     else
       Primeradiant.StorageHarness.State.new(tenant_id: tenant_id, user_id: "flynn")
+    end
+  end
+
+  def load_soup_feed_projection(db_path, tenant_id, params \\ %{}) do
+    if File.regular?(db_path) do
+      limit = parse_projection_limit(params["limit"] || params[:limit], 50)
+      state = Primeradiant.StorageHarness.State.new(tenant_id: tenant_id, user_id: "flynn")
+
+      stories =
+        load_feed_stories(db_path, tenant_id, limit)
+
+      story_ids = Enum.map(stories, & &1.id)
+      story_id_sql = sql_in(story_ids)
+
+      card_versions =
+        load_rows_where(
+          db_path,
+          "story_card_versions",
+          tenant_id,
+          "story_id IN #{story_id_sql}",
+          Primeradiant.StorageHarness.StoryCardVersion
+        )
+
+      story_events =
+        load_rows_where(
+          db_path,
+          "story_events",
+          tenant_id,
+          "story_id IN #{story_id_sql}",
+          Primeradiant.StorageHarness.StoryEvent
+        )
+
+      input_ids = story_events |> Enum.map(& &1.input_id) |> Enum.reject(&is_nil/1) |> Enum.uniq()
+      input_id_sql = sql_in(input_ids)
+
+      card_version_ids =
+        card_versions |> Enum.map(& &1.id) |> Enum.reject(&is_nil/1) |> Enum.uniq()
+
+      card_version_id_sql = sql_in(card_version_ids)
+
+      state
+      |> put_rows(
+        :inputs,
+        load_rows_where(
+          db_path,
+          "inputs",
+          tenant_id,
+          "id IN #{input_id_sql}",
+          Primeradiant.StorageHarness.Input
+        )
+      )
+      |> put_rows(:stories, stories)
+      |> put_rows(
+        :soup_nodes,
+        load_rows_where(
+          db_path,
+          "soup_nodes",
+          tenant_id,
+          "(story_id IN #{story_id_sql} OR input_id IN #{input_id_sql})",
+          Primeradiant.StorageHarness.SoupNode
+        )
+      )
+      |> put_rows(
+        :edges,
+        load_rows_where(
+          db_path,
+          "edges",
+          tenant_id,
+          """
+          (
+            from_node_id IN (
+              SELECT id FROM soup_nodes
+              WHERE tenant_id = #{sql_quote(tenant_id)}
+                AND input_id IN #{input_id_sql}
+            )
+            OR to_node_id IN (
+              SELECT id FROM soup_nodes
+              WHERE tenant_id = #{sql_quote(tenant_id)}
+                AND story_id IN #{story_id_sql}
+            )
+          )
+          """,
+          Primeradiant.StorageHarness.Edge
+        )
+      )
+      |> put_rows(
+        :story_fact_versions,
+        load_rows_where(
+          db_path,
+          "story_fact_versions",
+          tenant_id,
+          "story_id IN #{story_id_sql}",
+          Primeradiant.StorageHarness.StoryFactVersion
+        )
+      )
+      |> put_rows(:story_events, story_events)
+      |> put_rows(:story_card_versions, card_versions)
+      |> put_rows(
+        :story_source_coverage,
+        load_rows_where(
+          db_path,
+          "story_source_coverage",
+          tenant_id,
+          "story_card_version_id IN #{card_version_id_sql}",
+          Primeradiant.StorageHarness.StorySourceCoverage
+        )
+      )
+      |> put_rows(
+        :story_key_claims,
+        load_rows_where(
+          db_path,
+          "story_key_claims",
+          tenant_id,
+          "story_card_version_id IN #{card_version_id_sql}",
+          Primeradiant.StorageHarness.StoryKeyClaim
+        )
+      )
+      |> put_rows(
+        :story_card_change_sets,
+        load_rows_where(
+          db_path,
+          "story_card_change_sets",
+          tenant_id,
+          "story_id IN #{story_id_sql}",
+          Primeradiant.StorageHarness.StoryCardChangeSet
+        )
+      )
+      |> put_rows(
+        :evidence_refs,
+        load_rows_where(
+          db_path,
+          "evidence_refs",
+          tenant_id,
+          """
+          (
+            input_id IN #{input_id_sql}
+            OR subject_id IN (
+              SELECT id FROM story_events
+              WHERE tenant_id = #{sql_quote(tenant_id)}
+                AND story_id IN #{story_id_sql}
+            )
+            OR subject_id IN (
+              SELECT id FROM story_fact_versions
+              WHERE tenant_id = #{sql_quote(tenant_id)}
+                AND story_id IN #{story_id_sql}
+            )
+          )
+          """,
+          Primeradiant.StorageHarness.EvidenceRef
+        )
+      )
+      |> rebuild_source_ids()
+    else
+      Primeradiant.StorageHarness.State.new(tenant_id: tenant_id, user_id: "flynn")
+    end
+  end
+
+  def load_soup_ready_projection(db_path, tenant_id) do
+    if File.regular?(db_path) do
+      state = Primeradiant.StorageHarness.State.new(tenant_id: tenant_id, user_id: "flynn")
+
+      state
+      |> put_rows(
+        :inputs,
+        load_rows(db_path, "inputs", tenant_id, Primeradiant.StorageHarness.Input)
+      )
+      |> put_rows(
+        :stories,
+        load_rows(db_path, "stories", tenant_id, Primeradiant.StorageHarness.Story)
+      )
+      |> put_rows(
+        :story_events,
+        load_rows(db_path, "story_events", tenant_id, Primeradiant.StorageHarness.StoryEvent)
+      )
+      |> put_rows(
+        :agent_runs,
+        load_rows(db_path, "agent_runs", tenant_id, Primeradiant.StorageHarness.AgentRun)
+      )
+      |> put_rows(
+        :story_card_versions,
+        load_rows(
+          db_path,
+          "story_card_versions",
+          tenant_id,
+          Primeradiant.StorageHarness.StoryCardVersion
+        )
+      )
+      |> put_rows(
+        :story_card_change_sets,
+        load_rows(
+          db_path,
+          "story_card_change_sets",
+          tenant_id,
+          Primeradiant.StorageHarness.StoryCardChangeSet
+        )
+      )
+      |> rebuild_source_ids()
+    else
+      Primeradiant.StorageHarness.State.new(tenant_id: tenant_id, user_id: "flynn")
+    end
+  end
+
+  def tenant_revision(db_path, tenant_id) do
+    if File.regular?(db_path) do
+      db_path
+      |> sqlite!("""
+      SELECT COUNT(*) || ':' || COALESCE(MAX(inserted_at || ':' || id), '')
+      FROM replay_runs
+      WHERE tenant_id = #{sql_quote(tenant_id)};
+      """)
+      |> String.trim()
+    else
+      ""
     end
   end
 
@@ -556,10 +812,51 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
     |> Enum.map(&Jason.decode!/1)
   end
 
+  defp validate_existing_foreign_keys!(db_path) do
+    if File.regular?(db_path) do
+      violations =
+        db_path
+        |> sqlite!("""
+        PRAGMA foreign_keys = ON;
+        PRAGMA foreign_key_check;
+        """)
+        |> String.split("\n", trim: true)
+
+      if violations != [] do
+        raise """
+        durable soup foreign-key precondition failed for #{db_path}; repair the snapshot before replaying story agents:
+        #{Enum.join(violations, "\n")}
+        """
+      end
+    end
+  end
+
   defp clear_tenant_sql(tenant_id) do
     @tables
     |> Enum.map(fn table -> "DELETE FROM #{table} WHERE tenant_id = #{sql_quote(tenant_id)};" end)
     |> Enum.join("\n")
+  end
+
+  defp tenant_revision_guard_sql(_tenant_id, nil), do: ""
+
+  defp tenant_revision_guard_sql(tenant_id, expected_revision) do
+    """
+    CREATE TEMP TABLE IF NOT EXISTS primeradiant_revision_guard (
+      ok INTEGER NOT NULL CHECK (ok = 1)
+    );
+    DELETE FROM primeradiant_revision_guard;
+    INSERT INTO primeradiant_revision_guard(ok)
+    SELECT CASE
+      WHEN (
+        SELECT COUNT(*) || ':' || COALESCE(MAX(inserted_at || ':' || id), '')
+        FROM replay_runs
+        WHERE tenant_id = #{sql_quote(tenant_id)}
+      ) = #{sql_quote(expected_revision)}
+      THEN 1
+      ELSE 0
+    END;
+    DROP TABLE primeradiant_revision_guard;
+    """
   end
 
   defp replay_run_sql(state, attrs) do
@@ -833,6 +1130,72 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
     |> Enum.map(&row_struct(module, &1))
   rescue
     _ -> []
+  end
+
+  defp load_rows_where(db_path, table, tenant_id, where_sql, module) do
+    query_table_json(
+      db_path,
+      "SELECT * FROM #{table} WHERE tenant_id = #{sql_quote(tenant_id)} AND #{where_sql};"
+    )
+    |> Enum.map(&row_struct(module, &1))
+  rescue
+    _ -> []
+  end
+
+  defp load_feed_stories(db_path, tenant_id, limit) do
+    query_table_json(
+      db_path,
+      """
+      WITH latest_story_cards AS (
+        SELECT story_id, status
+        FROM (
+          SELECT
+            story_id,
+            status,
+            row_number() OVER (
+              PARTITION BY story_id
+              ORDER BY card_version DESC, id DESC
+            ) AS row_number
+          FROM story_card_versions
+          WHERE tenant_id = #{sql_quote(tenant_id)}
+        )
+        WHERE row_number = 1
+      )
+      SELECT stories.*
+      FROM stories
+      LEFT JOIN latest_story_cards ON latest_story_cards.story_id = stories.id
+      WHERE stories.tenant_id = #{sql_quote(tenant_id)}
+      ORDER BY
+        CASE WHEN latest_story_cards.status = 'complete' THEN 0 ELSE 1 END ASC,
+        stories.updated_at_story DESC
+      LIMIT #{limit};
+      """
+    )
+    |> Enum.map(&row_struct(Primeradiant.StorageHarness.Story, &1))
+  rescue
+    _ -> []
+  end
+
+  defp parse_projection_limit(nil, default), do: default
+  defp parse_projection_limit(limit, _default) when is_integer(limit), do: max(limit, 0)
+
+  defp parse_projection_limit(limit, default) do
+    limit
+    |> to_string()
+    |> Integer.parse()
+    |> case do
+      {value, ""} -> max(value, 0)
+      _ -> default
+    end
+  end
+
+  defp sql_in([]), do: "(NULL)"
+
+  defp sql_in(values) do
+    values
+    |> Enum.map(&sql_quote/1)
+    |> Enum.join(", ")
+    |> then(&"(#{&1})")
   end
 
   defp query_table_json(db_path, sql) do

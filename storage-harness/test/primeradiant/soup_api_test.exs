@@ -22,7 +22,12 @@ defmodule Primeradiant.SoupApiTest do
     {:ok, state: state}
   end
 
-  test "ready returns ready soup metadata for Reporter story cards", %{state: state} do
+  test "ready returns ready soup metadata for Reporter story cards", %{state: _state} do
+    state =
+      source_ready_state([
+        source_item("ready-complete-card", title: "Ready complete card")
+      ])
+
     body =
       :get
       |> conn("/api/v1/soup/ready?consumer=reporter&projection=story_cards")
@@ -35,10 +40,17 @@ defmodule Primeradiant.SoupApiTest do
     assert is_binary(body["substrate_cursor"])
     assert is_binary(body["substrate_epoch"])
     assert body["freshness"]["latest_source_at"]
+    assert body["synthesis_health"]["status"] == "healthy"
+    assert body["synthesis_health"]["complete_current_synopsis_count"] > 0
     assert body["blockers"] == []
   end
 
-  test "ready accepts Reporter news-morning as the story-card projection", %{state: state} do
+  test "ready accepts Reporter news-morning as the story-card projection", %{state: _state} do
+    state =
+      source_ready_state([
+        source_item("ready-news-morning-complete-card", title: "Ready news morning complete card")
+      ])
+
     body =
       :get
       |> conn("/api/v1/soup/ready?consumer=reporter&projection=news-morning")
@@ -48,7 +60,181 @@ defmodule Primeradiant.SoupApiTest do
 
     assert body["contract_version"] == "soup.v1"
     assert body["status"] in ["ready", "degraded"]
+    assert body["synthesis_health"]["status"] == "healthy"
     assert body["blockers"] == []
+  end
+
+  test "ready blocks fresh news-morning ecology when current story cards are zero-complete" do
+    state =
+      source_ready_state([
+        source_item("zero-complete-card-health", title: "Zero complete card health")
+      ])
+      |> force_story_synthesis_failure!("story_synthesis_invalid_model_output")
+
+    body =
+      :get
+      |> conn("/api/v1/soup/ready?consumer=reporter&projection=news-morning")
+      |> put_req_header("authorization", "Bearer internal-token")
+      |> Router.call(Keyword.put(@opts, :state, state))
+      |> json()
+
+    assert body["status"] == "blocked"
+    assert body["freshness"]["latest_source_at"]
+    assert body["freshness"]["latest_story_event_at"]
+
+    assert [
+             %{
+               "code" => "no_complete_current_story_cards",
+               "message" => message,
+               "ecology_steps" => steps,
+               "causes" => [cause]
+             }
+           ] = body["blockers"]
+
+    assert message =~ "no complete story_card_versions"
+    assert steps["input_admission"] > 0
+    assert steps["story_identity"] > 0
+    assert steps["meaning_update"] > 0
+    assert steps["story_synthesis"] > 0
+    assert steps["complete_story_cards"] == 0
+    assert steps["projection_visible_stories"] > 0
+    assert steps["magazine_visible_complete_items"] == 0
+
+    assert cause["status"] == "refused"
+    assert cause["validation_error"] == "story_synthesis_invalid_model_output"
+    assert cause["fallback_gap"] == "no_supported_codex_oauth_spark_story_synthesis_route"
+    assert cause["count"] == 1
+  end
+
+  test "ready blocks news-morning ecology when current cards are overwhelmingly non-complete" do
+    state =
+      source_ready_state([
+        source_item("overwhelming-card-health", title: "Overwhelming card health")
+      ])
+      |> add_current_story_card_copies!(4, status: "refused")
+
+    body =
+      :get
+      |> conn("/api/v1/soup/ready?consumer=reporter&projection=news-morning")
+      |> put_req_header("authorization", "Bearer internal-token")
+      |> Router.call(Keyword.put(@opts, :state, state))
+      |> json()
+
+    assert body["status"] == "blocked"
+
+    assert [%{"code" => "overwhelming_non_complete_story_cards", "ecology_steps" => steps}] =
+             body["blockers"]
+
+    assert steps["story_synthesis"] == 5
+    assert steps["complete_story_cards"] == 1
+    assert steps["magazine_visible_complete_items"] == 1
+  end
+
+  test "ready blocks news-morning ecology when visible stories are missing current cards" do
+    state =
+      source_ready_state([
+        source_item("missing-card-health", title: "Missing card health")
+      ])
+      |> add_visible_stories_without_current_cards!(20)
+
+    body =
+      :get
+      |> conn("/api/v1/soup/ready?consumer=reporter&projection=news-morning")
+      |> put_req_header("authorization", "Bearer internal-token")
+      |> Router.call(Keyword.put(@opts, :state, state))
+      |> json()
+
+    assert body["status"] == "blocked"
+
+    assert [
+             %{
+               "code" => "overwhelming_non_complete_story_cards",
+               "ecology_steps" => steps,
+               "causes" => causes
+             }
+           ] = body["blockers"]
+
+    assert steps["story_synthesis"] == 1
+    assert steps["complete_story_cards"] == 1
+    assert steps["missing_current_story_cards"] == 20
+    assert steps["non_complete_story_cards"] == 20
+    assert steps["projection_visible_stories"] == 21
+    assert steps["magazine_visible_complete_items"] == 1
+
+    assert %{
+             "status" => "missing_current_story_card",
+             "missing_current_story_cards" => 20,
+             "count" => 20
+           } in causes
+  end
+
+  test "ready fails when admitted current stories have no complete grounded synopsis artifacts",
+       %{
+         state: state
+       } do
+    body =
+      :get
+      |> conn("/api/v1/soup/ready?consumer=reporter&projection=story_cards")
+      |> put_req_header("authorization", "Bearer internal-token")
+      |> Router.call(Keyword.put(@opts, :state, state))
+      |> json()
+
+    assert body["status"] == "blocked"
+    assert body["synthesis_health"]["status"] == "failed"
+    assert body["synthesis_health"]["complete_current_synopsis_count"] == 0
+
+    assert Enum.any?(
+             body["blockers"],
+             &(&1["code"] == "zero_complete_current_synopsis_artifacts")
+           )
+  end
+
+  test "ready fails when current synthesis repeatedly refuses or quarantines invalid output", %{
+    state: _state
+  } do
+    state =
+      source_ready_state([
+        source_item("refused-streak-card", title: "Refused streak card")
+      ])
+
+    [card] = state.story_card_versions
+
+    refused_cards =
+      Enum.map(1..3, fn index ->
+        at = DateTime.add(card.inserted_at || DateTime.utc_now(), index, :second)
+
+        %{
+          card
+          | id: "00000000-0000-4000-8000-00000000050#{index}",
+            card_version: card.card_version + index,
+            status: "refused",
+            refresh_reason: "story_card_hourly_synthesis",
+            inserted_at: at,
+            updated_at: at,
+            deck: %{"state" => "refused", "reason" => "story_synthesis_invalid_model_output"},
+            summary: %{"state" => "refused", "reason" => "story_synthesis_invalid_model_output"},
+            field_completeness: %{"overall" => "refused"},
+            provenance: %{"reason" => "story_synthesis_invalid_model_output"}
+        }
+      end)
+
+    state = %{state | story_card_versions: state.story_card_versions ++ refused_cards}
+
+    body =
+      :get
+      |> conn("/api/v1/soup/ready?consumer=reporter&projection=story_cards")
+      |> put_req_header("authorization", "Bearer internal-token")
+      |> Router.call(Keyword.put(@opts, :state, state))
+      |> json()
+
+    assert body["status"] == "blocked"
+    assert body["synthesis_health"]["status"] == "failed"
+    assert body["synthesis_health"]["refused_or_invalid_streak_count"] >= 3
+
+    assert Enum.any?(
+             body["blockers"],
+             &(&1["code"] == "story_synthesis_refused_or_invalid_streak")
+           )
   end
 
   test "ready blocks unsupported projection instead of allowing render", %{state: state} do
@@ -657,6 +843,101 @@ defmodule Primeradiant.SoupApiTest do
     assert [_item] = body["items"]
   end
 
+  test "durable ready API avoids reader delta hydration", %{state: _state} do
+    state =
+      source_ready_state([
+        source_item("ready-reader-delta-1", title: "Ready should not load reader deltas")
+      ])
+
+    db_path =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-soup-ready-lightweight-#{System.system_time(:nanosecond)}-#{System.unique_integer([:positive])}.sqlite3"
+      )
+
+    DurableSoupDb.persist!(db_path, state, %{
+      source_kind: "soup_api_test",
+      source_db_path: "real_ingestion",
+      source_row_count: length(state.inputs)
+    })
+
+    projection_state = DurableSoupDb.load_soup_ready_projection(db_path, state.tenant_id)
+    full_state = DurableSoupDb.load_soup_projection(db_path, state.tenant_id)
+
+    assert projection_state.story_reader_deltas == []
+    assert length(full_state.story_reader_deltas) == length(state.story_reader_deltas)
+    assert projection_state.inputs != []
+    assert projection_state.stories != []
+    assert projection_state.story_events != []
+    assert projection_state.story_card_change_sets != []
+
+    body =
+      :get
+      |> conn("/api/v1/soup/ready?consumer=reporter&projection=news-morning")
+      |> put_req_header("authorization", "Bearer internal-token")
+      |> Router.call(Keyword.put(@opts, :state, {:durable_soup_db, db_path, state.tenant_id}))
+      |> json()
+
+    assert body["contract_version"] == "soup.v1"
+    assert body["blockers"] == []
+    assert body["freshness"]["latest_source_at"]
+    assert body["freshness"]["latest_story_event_at"]
+    assert is_binary(body["substrate_cursor"])
+  end
+
+  test "durable feed API bounds source hydration for limited Reporter feed", %{state: _state} do
+    state =
+      source_ready_state([
+        source_item("feed-bounded-1", title: "Bounded feed source one"),
+        source_item("feed-bounded-2", title: "Bounded feed source two")
+      ])
+
+    db_path =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-soup-feed-bounded-#{System.system_time(:nanosecond)}-#{System.unique_integer([:positive])}.sqlite3"
+      )
+
+    DurableSoupDb.persist!(db_path, state, %{
+      source_kind: "soup_api_test",
+      source_db_path: "real_ingestion",
+      source_row_count: length(state.inputs)
+    })
+
+    inflate_unrelated_feed_rows!(db_path, state.tenant_id, 200)
+
+    projection_state =
+      DurableSoupDb.load_soup_feed_projection(db_path, state.tenant_id, %{
+        "consumer" => "reporter",
+        "projection" => "news-morning",
+        "limit" => "1"
+      })
+
+    assert length(projection_state.stories) == 1
+    assert projection_state.story_reader_deltas == []
+
+    assert length(projection_state.inputs) <
+             DurableSoupDb.table_count(db_path, "inputs", state.tenant_id)
+
+    assert length(projection_state.stories) <
+             DurableSoupDb.table_count(db_path, "stories", state.tenant_id)
+
+    assert length(projection_state.story_card_versions) <
+             DurableSoupDb.table_count(db_path, "story_card_versions", state.tenant_id)
+
+    body =
+      :get
+      |> conn("/api/v1/soup/feed?consumer=reporter&projection=news-morning&limit=1")
+      |> put_req_header("authorization", "Bearer internal-token")
+      |> Router.call(Keyword.put(@opts, :state, {:durable_soup_db, db_path, state.tenant_id}))
+      |> json()
+
+    assert [item] = body["items"]
+    assert item["story_card_version_id"]
+    assert [_source | _] = item["magazine_contract"]["sources"]
+    assert item["changed_since_seen"]["state"] == "unavailable"
+  end
+
   test "durable soup API projection loader preserves story-card feed shape", %{state: _state} do
     state =
       source_ready_state([
@@ -842,12 +1123,59 @@ defmodule Primeradiant.SoupApiTest do
     })
 
     loaded = DurableSoupDb.load_tenant(tmp, state.tenant_id)
-    [loaded_item] = Soup.feed(loaded, %{"consumer" => "reporter", "projection" => "news-morning"}).items
+
+    [loaded_item] =
+      Soup.feed(loaded, %{"consumer" => "reporter", "projection" => "news-morning"}).items
 
     assert loaded_item.status == "incomplete"
     assert loaded_item.key_claims == []
     assert loaded_item.source_coverage == []
     assert loaded_item.source_links == []
+  end
+
+  test "feed ranks usable complete story cards above newer refused story-card product truth" do
+    state =
+      source_ready_state([
+        source_item("complete-card-product-truth", title: "Complete card product truth")
+      ])
+
+    [complete_story] = state.stories
+    [complete_card] = state.story_card_versions
+    newer_at = DateTime.add(complete_story.updated_at_story, 7 * 86_400, :second)
+
+    refused_story = %{
+      complete_story
+      | id: "00000000-0000-4000-8000-000000000421",
+        story_key: "refused-card-product-truth",
+        title: "Refused card product truth",
+        version: complete_story.version + 1_000,
+        updated_at_story: newer_at,
+        last_material_at: newer_at
+    }
+
+    refused_card = %{
+      complete_card
+      | id: "00000000-0000-4000-8000-000000000422",
+        story_id: refused_story.id,
+        story_version: refused_story.version,
+        card_version: 1,
+        status: "refused",
+        inserted_at: newer_at,
+        updated_at: newer_at
+    }
+
+    state = %{
+      state
+      | stories: [refused_story | state.stories],
+        story_card_versions: [refused_card | state.story_card_versions]
+    }
+
+    [top_item | _] =
+      Soup.feed(state, %{"consumer" => "reporter", "projection" => "news-morning"}).items
+
+    assert top_item.story_id == complete_story.id
+    assert top_item.status == "complete"
+    assert top_item.ranking.score < refused_story.version
   end
 
   defp source_ready_state(items) do
@@ -857,6 +1185,99 @@ defmodule Primeradiant.SoupApiTest do
       LiveStoryAgentLoop.run(state, report.admissions, "flynn", adapter: &stub_story_agent/3)
 
     state
+  end
+
+  defp force_story_synthesis_failure!(state, reason) do
+    [card] = state.story_card_versions
+
+    state
+    |> update_in([Access.key!(:story_card_versions)], fn cards ->
+      Enum.map(cards, fn card ->
+        %{
+          card
+          | status: "refused",
+            deck: %{"state" => "refused", "reason" => reason, "text" => nil},
+            summary: %{"state" => "refused", "reason" => reason, "text" => nil},
+            field_completeness: %{"overall" => "refused"}
+        }
+      end)
+    end)
+    |> update_in([Access.key!(:agent_runs)], fn runs ->
+      Enum.map(runs, fn run ->
+        if run.id == card.producing_agent_run_id do
+          %{
+            run
+            | scope:
+                Map.merge(run.scope, %{
+                  "final_story_synthesis_source" => "refused",
+                  "validation_error" => reason,
+                  "fallback_gap" => "no_supported_codex_oauth_spark_story_synthesis_route"
+                })
+          }
+        else
+          run
+        end
+      end)
+    end)
+  end
+
+  defp add_current_story_card_copies!(state, count, status: status) do
+    [story] = state.stories
+    [card] = state.story_card_versions
+    at = DateTime.add(story.updated_at_story, 60, :second)
+
+    copies =
+      for index <- 1..count do
+        story_id = "00000000-0000-4000-8000-000000001#{String.pad_leading("#{index}", 3, "0")}"
+
+        {
+          %{
+            story
+            | id: story_id,
+              story_key: "overwhelming-non-complete-#{index}",
+              title: "Overwhelming non-complete #{index}",
+              version: story.version + index,
+              updated_at_story: DateTime.add(at, index, :second),
+              last_material_at: DateTime.add(at, index, :second)
+          },
+          %{
+            card
+            | id: "00000000-0000-4000-8000-000000002#{String.pad_leading("#{index}", 3, "0")}",
+              story_id: story_id,
+              story_version: story.version + index,
+              card_version: 1,
+              status: status,
+              inserted_at: DateTime.add(at, index, :second),
+              updated_at: DateTime.add(at, index, :second)
+          }
+        }
+      end
+
+    %{
+      state
+      | stories: state.stories ++ Enum.map(copies, &elem(&1, 0)),
+        story_card_versions: state.story_card_versions ++ Enum.map(copies, &elem(&1, 1))
+    }
+  end
+
+  defp add_visible_stories_without_current_cards!(state, count) do
+    [story] = state.stories
+    at = DateTime.add(story.updated_at_story, 60, :second)
+
+    stories =
+      for index <- 1..count do
+        %{
+          story
+          | id: "00000000-0000-4000-8000-000000003#{String.pad_leading("#{index}", 3, "0")}",
+            story_key: "missing-current-card-#{index}",
+            title: "Missing current card #{index}",
+            version: story.version + index,
+            updated_at_story: DateTime.add(at, index, :second),
+            last_material_at: DateTime.add(at, index, :second)
+        }
+      end
+
+    %{state | stories: state.stories ++ stories}
   end
 
   defp source_item(external_id, overrides) do
@@ -932,6 +1353,11 @@ defmodule Primeradiant.SoupApiTest do
           "state" => "complete",
           "provenance_refs" => packet.evidence_refs
         },
+        "exact_happening" => %{
+          "text" => "Reporter-ready exact happening for #{packet.external_id}",
+          "state" => "complete",
+          "provenance_refs" => packet.evidence_refs
+        },
         "deck" => %{
           "text" => "Reporter-ready deck for #{packet.external_id}",
           "state" => "complete",
@@ -967,11 +1393,19 @@ defmodule Primeradiant.SoupApiTest do
             "source_weight" => %{"state" => "complete", "value" => 1.0}
           }
         ],
+        "source_links" => [
+          %{
+            "source_ref" => packet.source_ref,
+            "evidence_refs" => packet.evidence_refs
+          }
+        ],
         "field_completeness" => %{
           "title" => "complete",
+          "exact_happening" => "complete",
           "deck" => "complete",
           "summary" => "complete",
           "key_claims" => "complete",
+          "source_links" => "complete",
           "source_coverage" => "complete",
           "topic_salience" => "complete",
           "overall" => "complete"
@@ -990,7 +1424,14 @@ defmodule Primeradiant.SoupApiTest do
           "global_salience" => "test",
           "flynn_priority" => "test"
         },
-        "changed_field_keys" => ["deck", "summary", "source_coverage", "key_claims"],
+        "changed_field_keys" => [
+          "exact_happening",
+          "deck",
+          "summary",
+          "source_links",
+          "source_coverage",
+          "key_claims"
+        ],
         "change_summary" => %{
           "text" => "Story card synthesized by test stub.",
           "state" => "complete",
@@ -1005,6 +1446,142 @@ defmodule Primeradiant.SoupApiTest do
       duration_ms: 1
     }
   end
+
+  defp inflate_unrelated_feed_rows!(db_path, tenant_id, count) do
+    sql = """
+    WITH RECURSIVE n(x) AS (
+      VALUES(1)
+      UNION ALL
+      SELECT x + 1 FROM n WHERE x < #{count}
+    )
+    INSERT INTO inputs (
+      id, tenant_id, fixture_id, source_type, external_id, observed_at, title, body_text,
+      object_uri, content_sha256, acl, normalized, facts, background, questions, colors,
+      topic_tokens, inserted_at, updated_at
+    )
+    SELECT
+      'unrelated-feed-input-' || x,
+      tenant_id,
+      fixture_id,
+      source_type,
+      'unrelated-feed-external-' || x,
+      observed_at,
+      title,
+      body_text,
+      object_uri,
+      'unrelated-feed-sha-' || x,
+      acl,
+      normalized,
+      facts,
+      background,
+      questions,
+      colors,
+      topic_tokens,
+      inserted_at,
+      updated_at
+    FROM (SELECT * FROM inputs WHERE tenant_id = #{sql_quote(tenant_id)} LIMIT 1), n;
+
+    WITH RECURSIVE n(x) AS (
+      VALUES(1)
+      UNION ALL
+      SELECT x + 1 FROM n WHERE x < #{count}
+    )
+    INSERT OR IGNORE INTO stories (
+      id, tenant_id, story_key, title, state, version, first_observed_at,
+      updated_at_story, last_material_at, structural_facts, background_facts,
+      colors, questions, topic_tokens, attrs, inserted_at, updated_at
+    )
+    SELECT
+      'unrelated-feed-story-' || x,
+      tenant_id,
+      'unrelated-feed-story-key-' || x,
+      'Unrelated feed story ' || x,
+      state,
+      version,
+      '2020-01-01T00:00:00Z',
+      '2020-01-01T00:00:00Z',
+      '2020-01-01T00:00:00Z',
+      structural_facts,
+      background_facts,
+      colors,
+      questions,
+      topic_tokens,
+      attrs,
+      inserted_at,
+      updated_at
+    FROM (SELECT * FROM stories WHERE tenant_id = #{sql_quote(tenant_id)} LIMIT 1), n;
+
+    WITH RECURSIVE n(x) AS (
+      VALUES(1)
+      UNION ALL
+      SELECT x + 1 FROM n WHERE x < #{count}
+    )
+    INSERT OR IGNORE INTO story_card_versions (
+      id, tenant_id, story_id, story_version, card_version, status, supersedes_id,
+      refresh_reason, producing_agent_run_id, packet_hash, prompt_config_hash,
+      output_hash, field_provenance_manifest_id, title, deck, summary, freshness,
+      field_completeness, topic_salience, provenance, inserted_at, updated_at
+    )
+    SELECT
+      'unrelated-feed-card-version-' || x,
+      tenant_id,
+      'unrelated-feed-story-' || x,
+      story_version,
+      1,
+      'refused',
+      NULL,
+      refresh_reason,
+      producing_agent_run_id,
+      'unrelated-feed-packet-hash-' || x,
+      prompt_config_hash,
+      'unrelated-feed-output-hash-' || x,
+      field_provenance_manifest_id,
+      title,
+      deck,
+      summary,
+      freshness,
+      field_completeness,
+      topic_salience,
+      provenance,
+      inserted_at,
+      updated_at
+    FROM (SELECT * FROM story_card_versions WHERE tenant_id = #{sql_quote(tenant_id)} LIMIT 1), n;
+
+    WITH RECURSIVE n(x) AS (
+      VALUES(1)
+      UNION ALL
+      SELECT x + 1 FROM n WHERE x < #{count}
+    )
+    INSERT OR IGNORE INTO story_reader_deltas (
+      id, tenant_id, user_id, story_id, seen_state_id, prior_seen_story_version,
+      prior_seen_card_version_id, current_story_version, current_card_version_id,
+      material_unseen_deltas, nonmaterial_exclusions, producing_agent_run_id,
+      evidence_refs, provenance_refs, inserted_at, updated_at
+    )
+    SELECT
+      'unrelated-feed-delta-' || x,
+      tenant_id,
+      user_id,
+      story_id,
+      seen_state_id,
+      prior_seen_story_version,
+      prior_seen_card_version_id,
+      current_story_version,
+      current_card_version_id,
+      material_unseen_deltas,
+      nonmaterial_exclusions,
+      producing_agent_run_id,
+      evidence_refs,
+      provenance_refs,
+      inserted_at,
+      updated_at
+    FROM (SELECT * FROM story_reader_deltas WHERE tenant_id = #{sql_quote(tenant_id)} LIMIT 1), n;
+    """
+
+    {_, 0} = System.cmd("sqlite3", [db_path, sql], stderr_to_stdout: true)
+  end
+
+  defp sql_quote(value), do: "'#{String.replace(to_string(value), "'", "''")}'"
 
   defp json(conn), do: Jason.decode!(conn.resp_body)
 end

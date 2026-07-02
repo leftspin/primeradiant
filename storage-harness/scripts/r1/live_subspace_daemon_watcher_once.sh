@@ -113,8 +113,40 @@ while :; do
     EMIT_ARGS+=(--after-cursor "$CURRENT_CURSOR")
   fi
 
-  CATCHUP_MANIFEST="$("$EMITTER" "${EMIT_ARGS[@]}")"
-  CATCHUP_MANIFEST="$(printf "%s" "$CATCHUP_MANIFEST" | tail -n 1)"
+  set +e
+  CATCHUP_OUTPUT="$("$EMITTER" "${EMIT_ARGS[@]}" 2>&1)"
+  CATCHUP_STATUS=$?
+  set -e
+  CATCHUP_MANIFEST="$(printf "%s" "$CATCHUP_OUTPUT" | tail -n 1)"
+  if [[ "$CATCHUP_STATUS" -ne 0 ]]; then
+    CATCHUP_FAILURE_MANIFEST="$CATCHUP_ROOT/manifest.json"
+    FAILED_REPORT="$STATE_ROOT/$RUN_ID-failed-report.json"
+    jq -n \
+      --arg run_id "$RUN_ID" \
+      --arg source_db "$SOURCE_DB" \
+      --arg after_cursor "$CURRENT_CURSOR" \
+      --arg failure_manifest "$CATCHUP_FAILURE_MANIFEST" \
+      --arg emitter_output "$CATCHUP_OUTPUT" \
+      --argjson exit_status "$CATCHUP_STATUS" \
+      '{
+        run_id: $run_id,
+        source_db_path: $source_db,
+        source_host: "tars",
+        consume_host: "eurisko",
+        source_mode: "live_subspace_daemon_watcher_once",
+        status: "source_db_cursor_read_failed",
+        after_cursor: $after_cursor,
+        failed_stage: "cursor_catchup",
+        failure_manifest_path: $failure_manifest,
+        error: {
+          command: "emit_subspace_daemon_cursor_event_packages.sh",
+          exit_status: $exit_status,
+          message: $emitter_output
+        }
+      }' > "$FAILED_REPORT"
+    printf "live watcher cursor catchup failed; report: %s\n" "$FAILED_REPORT" >&2
+    exit "$CATCHUP_STATUS"
+  fi
   jq -n --arg kind "cursor_catchup" --arg manifest_path "$CATCHUP_MANIFEST" \
     '{kind: $kind, manifest_path: $manifest_path}' >> "$MANIFESTS_JSONL"
 
@@ -132,7 +164,8 @@ done
 
 WATCH_REPORT=""
 if [[ "$CATCHUP_COUNT" -eq 0 ]]; then
-  WATCH_REPORT="$(
+  set +e
+  WATCH_OUTPUT="$(
     "$WATCHER" \
       --source-db "$SOURCE_DB" \
       --tenant "$TENANT" \
@@ -146,9 +179,40 @@ if [[ "$CATCHUP_COUNT" -eq 0 ]]; then
       --poll-interval-seconds "$POLL_INTERVAL_SECONDS" \
       --debounce-seconds "$DEBOUNCE_SECONDS" \
       --emit-cursor-script "$EMITTER" \
-      --consume-packages false
+      --consume-packages false 2>&1
   )"
-  WATCH_REPORT="$(printf "%s" "$WATCH_REPORT" | tail -n 1)"
+  WATCH_STATUS=$?
+  set -e
+  WATCH_REPORT="$(printf "%s" "$WATCH_OUTPUT" | tail -n 1)"
+  if [[ "$WATCH_STATUS" -ne 0 ]]; then
+    WATCH_FAILURE_REPORT="$PACKAGE_ROOT/watch/wakeup-failed-report.json"
+    FAILED_REPORT="$STATE_ROOT/$RUN_ID-failed-report.json"
+    jq -n \
+      --arg run_id "$RUN_ID" \
+      --arg source_db "$SOURCE_DB" \
+      --arg after_cursor "$CURRENT_CURSOR" \
+      --arg watch_failure_report "$WATCH_FAILURE_REPORT" \
+      --arg watcher_output "$WATCH_OUTPUT" \
+      --argjson exit_status "$WATCH_STATUS" \
+      '{
+        run_id: $run_id,
+        source_db_path: $source_db,
+        source_host: "tars",
+        consume_host: "eurisko",
+        source_mode: "live_subspace_daemon_watcher_once",
+        status: "source_db_cursor_read_failed",
+        after_cursor: $after_cursor,
+        failed_stage: "cursor_wakeup",
+        watch_failure_report_path: $watch_failure_report,
+        error: {
+          command: "watch_sqlite_wakeup.sh",
+          exit_status: $exit_status,
+          message: $watcher_output
+        }
+      }' > "$FAILED_REPORT"
+    printf "live watcher cursor wakeup failed; report: %s\n" "$FAILED_REPORT" >&2
+    exit "$WATCH_STATUS"
+  fi
   jq -r '.passes[].manifest_path' "$WATCH_REPORT" |
     while IFS= read -r manifest_path; do
       [[ -z "$manifest_path" || "$manifest_path" == "null" ]] && continue
