@@ -5,7 +5,7 @@
     "soup_db": "/home/clu/.local/state/primeradiant/soup-api/soup.sqlite3",
     "query_mode": "sqlite3 -readonly",
     "captured_at": "2026-07-02T04:34:43Z",
-    "selection": "8 stable real refused story-card records with retained linked source text"
+    "selection": "8 stable real refused grounded story synthesis records with retained linked source text"
   },
   "items": [
     {

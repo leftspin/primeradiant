@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import json
 import re
+import subprocess
 import sys
 import time
 import urllib.request
@@ -12,26 +13,25 @@ SYSTEM_PROMPT = """You are a Prime Radiant story agent. Use only the bounded pac
 Source admission is evidence only; you own story/meaning output only when it is packet-grounded.
 Return exactly one JSON object matching the requested schema."""
 
-BASELINE_PROMPT = """Maintain the current living story card from committed story state and linked source evidence.
+BASELINE_PROMPT = """Maintain the current living Prime Radiant story synopsis artifact from committed story state and linked source evidence.
 Return deck, summary, key_claims, source_coverage, contribution explanations, salience hints, and changed fields.
 For every article in committed_story_state.linked_sources, return exactly one matching source_coverage row keyed by source_ref.
-Do not cover only the newest source_ref. The story card source list is incomplete unless every linked source_ref has source_coverage.
+Do not cover only the newest source_ref. The synopsis source coverage list is incomplete unless every linked source_ref has source_coverage.
 Each source_coverage row must include contribution_reason.text: a concise plain-language explanation of why that article matters to this story, suitable for a reader-facing News source popup.
 Use contribution_reason unavailable/refused with a specific non-sentinel reason only when the linked article text truly cannot support a reader-facing salience explanation.
 Examples: "Adds the funding amount and names the investor" or "Provides the primary quote from the company."
-If any required source display or story-card field is unavailable, return explicit unavailable/refused/incomplete field state with reason and provenance.
+If any required source display or synopsis/evidence artifact field is unavailable, return explicit unavailable/refused/incomplete field state with reason and provenance.
 If the packet includes source_coverage_repair_request, repair the prior omission by returning source_coverage for every missing source_ref."""
 
-VARIANT_PROMPT = """Maintain the current living Magazine story card from committed story state and linked source evidence.
-Return status "complete" when the packet contains enough headline/body evidence to write reader-facing fields. Do not refuse merely because publisher metadata, canonical URL, or full article text is missing; those are source-level display fields handled outside this output.
+def production_story_synthesis_contract():
+    raw = subprocess.check_output([
+        "mix",
+        "run",
+        "-e",
+        "IO.puts(Jason.encode!(Primeradiant.StorageHarness.LiveStoryAgentLoop.story_synthesis_eval_contract()))"
+    ], cwd=".", text=True)
+    return json.loads(raw)
 
-Output exactly one JSON object and no markdown. Every text field must be an object with state "complete", non-empty text, and provenance_refs copied from bounded_soup_packet.evidence_refs.
-
-For each linked source in committed_story_state.linked_sources, emit exactly one source_coverage row whose source_ref exactly equals that linked source_ref. Each row must include contribution_reason.state "complete", non-empty contribution_reason.text explaining what the article contributes, materiality "material" or "nonmaterial", source_posture.state "complete" with a short value, and source_weight.state "complete" with a numeric value.
-
-For answerable current-news packets, include at least one key_claim with claim_ref, text, status "current", materiality "material", evidence_refs, conflict_refs, uncertainty, and appears_in_current_card true.
-
-Use status "refused" only for honest evidence-limited refusal. A valid refusal must include refusal_provenance with reason, evidence_refs, and quarantine_recommendation. Schema uncertainty is not an honest refusal."""
 
 BASELINE_SCHEMA = {
     "status": "complete | incomplete | refused | unavailable",
@@ -46,7 +46,7 @@ BASELINE_SCHEMA = {
         "evidence_refs": ["evidence ref"],
         "conflict_refs": ["conflict ref"],
         "uncertainty": {"state": "known | unavailable", "reason": "string or null"},
-        "appears_in_current_card": True
+        "appears_in_current_synopsis": True
     }],
     "source_coverage": [{
         "source_ref": "must exactly match one committed_story_state.linked_sources[].source_ref; include one row for every linked source_ref",
@@ -79,7 +79,7 @@ VARIANT_SCHEMA = {
         "evidence_refs": ["string"],
         "conflict_refs": ["string"],
         "uncertainty": {"state": "known | unavailable", "reason": "string or null"},
-        "appears_in_current_card": True
+        "appears_in_current_synopsis": True
     }],
     "source_links": [{"source_ref": "string", "evidence_refs": ["string"]}],
     "source_coverage": [{
@@ -145,7 +145,7 @@ def packet(item):
         "prior_story_card_version": None
     }
 
-def invoke(prompt, schema, item):
+def invoke(prompt, schema, item, max_tokens):
     user = json.dumps({
         "instruction": prompt,
         "output_schema": schema,
@@ -155,7 +155,7 @@ def invoke(prompt, schema, item):
         "model": MODEL,
         "messages": [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": user}],
         "temperature": 0.1,
-        "max_tokens": 8192
+        "max_tokens": max_tokens
     }).encode()
     req = urllib.request.Request(ENDPOINT, data=payload, headers={"Content-Type": "application/json"})
     started = time.time()
@@ -214,19 +214,20 @@ def score_output(output, item, parse_error):
 def main():
     corpus_path = sys.argv[1] if len(sys.argv) > 1 else "priv/evals/t1501_story_card_prompt_corpus.json"
     corpus = json.load(open(corpus_path))
+    production_contract = production_story_synthesis_contract()
     variants = [
-        ("baseline_current_contract", BASELINE_PROMPT, BASELINE_SCHEMA),
-        ("variant_magazine_strict_v1", VARIANT_PROMPT, VARIANT_SCHEMA)
+        ("baseline_current_contract", BASELINE_PROMPT, BASELINE_SCHEMA, 4096, "hardcoded_pre_t1501_baseline"),
+        ("production_story_synthesis_contract", production_contract["task_prompt"], production_contract["output_schema"], production_contract["max_tokens"], production_contract["config_version"])
     ]
     report = {"corpus_id": corpus["corpus_id"], "item_ids": [i["item_id"] for i in corpus["items"]], "runs": []}
-    for name, prompt, schema in variants:
+    for name, prompt, schema, max_tokens, contract_version in variants:
         rows = []
         for item in corpus["items"]:
-            output, raw, parse_error = invoke(prompt, schema, item)
+            output, raw, parse_error = invoke(prompt, schema, item, max_tokens)
             matrix, reason = score_output(output, item, parse_error)
             rows.append({"item_id": item["item_id"], "failure_reason": reason, "matrix": matrix, "raw_excerpt": raw[:500]})
         passed = sum(1 for row in rows if row["failure_reason"] == "pass")
-        report["runs"].append({"variant": name, "score": f"{passed}/{len(rows)}", "items": rows})
+        report["runs"].append({"variant": name, "contract_version": contract_version, "max_tokens": max_tokens, "score": f"{passed}/{len(rows)}", "items": rows})
     print(json.dumps(report, indent=2))
 
 if __name__ == "__main__":
