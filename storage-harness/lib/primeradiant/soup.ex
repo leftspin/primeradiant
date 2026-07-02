@@ -151,13 +151,14 @@ defmodule Primeradiant.Soup do
     current_cards = Enum.map(visible_stories, &current_story_card_version(state, &1.id))
     card_count = Enum.count(current_cards, & &1)
     complete_count = Enum.count(current_cards, &match?(%{status: "complete"}, &1))
+    missing_current_card_count = length(visible_stories) - card_count
 
     non_complete_cards =
       current_cards
       |> Enum.reject(&is_nil/1)
       |> Enum.reject(&match?(%{status: "complete"}, &1))
 
-    non_complete_count = length(non_complete_cards)
+    non_complete_count = length(non_complete_cards) + missing_current_card_count
 
     ecology_steps = %{
       input_admission: length(state.inputs),
@@ -165,9 +166,13 @@ defmodule Primeradiant.Soup do
       meaning_update: length(state.story_events),
       story_synthesis: card_count,
       complete_story_cards: complete_count,
+      missing_current_story_cards: missing_current_card_count,
+      non_complete_story_cards: non_complete_count,
       projection_visible_stories: length(visible_stories),
       magazine_visible_complete_items: complete_count
     }
+
+    causes = story_synthesis_failure_causes(state, non_complete_cards, missing_current_card_count)
 
     cond do
       visible_stories == [] ->
@@ -179,17 +184,17 @@ defmodule Primeradiant.Soup do
             "no_complete_current_story_cards",
             "current reporter/news-morning stories have no complete story_card_versions",
             ecology_steps,
-            story_synthesis_failure_causes(state, non_complete_cards)
+            causes
           )
         ]
 
-      non_complete_count / max(card_count, 1) >= 0.8 ->
+      non_complete_count / max(length(visible_stories), 1) >= 0.8 ->
         [
           story_ecology_blocker(
             "overwhelming_non_complete_story_cards",
-            "current reporter/news-morning story_card_versions are overwhelmingly refused or incomplete",
+            "current reporter/news-morning stories are overwhelmingly missing, refused, or incomplete",
             ecology_steps,
-            story_synthesis_failure_causes(state, non_complete_cards)
+            causes
           )
         ]
 
@@ -207,12 +212,33 @@ defmodule Primeradiant.Soup do
     }
   end
 
-  defp story_synthesis_failure_causes(state, cards) do
-    cards
-    |> Enum.map(&story_synthesis_failure_cause(state, &1))
-    |> Enum.reject(&is_nil/1)
+  defp story_synthesis_failure_causes(state, cards, missing_current_card_count) do
+    card_causes =
+      cards
+      |> Enum.map(&story_synthesis_failure_cause(state, &1))
+      |> Enum.reject(&is_nil/1)
+
+    missing_causes =
+      if missing_current_card_count > 0 do
+        [
+          %{
+            status: "missing_current_story_card",
+            missing_current_story_cards: missing_current_card_count
+          }
+        ]
+      else
+        []
+      end
+
+    (card_causes ++ missing_causes)
     |> Enum.frequencies()
-    |> Enum.map(fn {cause, count} -> Map.put(cause, :count, count) end)
+    |> Enum.map(fn
+      {%{status: "missing_current_story_card"} = cause, _count} ->
+        Map.put(cause, :count, cause.missing_current_story_cards)
+
+      {cause, count} ->
+        Map.put(cause, :count, count)
+    end)
     |> Enum.sort_by(&{-&1.count, Map.get(&1, :status, ""), Map.get(&1, :validation_error, "")})
   end
 
