@@ -63,7 +63,7 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
   For each linked source in committed_story_state.linked_sources, emit exactly one source_links row and exactly one source_coverage row whose source_ref exactly equals that linked source_ref.
   Each source_coverage row must include contribution_reason.state "complete", non-empty contribution_reason.text explaining what the article contributes, materiality "material" or "nonmaterial", source_posture.state "complete" with a short value, and source_weight.state "complete" with a numeric value.
   For answerable current-news packets, include at least one key_claim with claim_ref, text, status "current", materiality "material", evidence_refs, conflict_refs, uncertainty, and appears_in_current_synopsis true.
-  Use status "refused" only for honest evidence-limited refusal. A valid refusal must include refusal_provenance with reason, evidence_refs, and quarantine_recommendation. Schema uncertainty is not an honest refusal.
+  Use status "refused" only for honest evidence-limited refusal. A valid refusal must include refusal_provenance with reason, evidence_refs, and quarantine_recommendation. Refusal output must not include synopsis/card artifact fields such as exact_happening, deck, summary, key_claims, source_links, source_coverage, topic_salience, changed_field_keys, change_summary, or field_completeness. Schema uncertainty is not an honest refusal.
   If the packet includes source_coverage_repair_request, repair the prior omission by returning source_coverage and source_links for every required_source_ref. Do not omit missing_source_refs.
   """
 
@@ -784,10 +784,26 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
       Enum.any?(proof["evidence_refs"], &(&1 not in packet.evidence_refs)) ->
         {:error, "story_synthesis_invalid_model_output"}
 
+      mixed_story_synthesis_refusal?(output) ->
+        {:error, "story_synthesis_invalid_model_output"}
+
       true ->
         :ok
     end
   end
+
+  defp mixed_story_synthesis_refusal?(output) do
+    output
+    |> Map.take(
+      ~w(exact_happening deck summary key_claims source_links source_coverage topic_salience changed_field_keys change_summary field_completeness)
+    )
+    |> Enum.any?(fn {_key, value} -> not empty_story_synthesis_refusal_value?(value) end)
+  end
+
+  defp empty_story_synthesis_refusal_value?(nil), do: true
+  defp empty_story_synthesis_refusal_value?(value) when value == %{}, do: true
+  defp empty_story_synthesis_refusal_value?(value) when value == [], do: true
+  defp empty_story_synthesis_refusal_value?(_value), do: false
 
   defp story_synthesis_field?(%{"state" => "complete", "text" => text, "provenance_refs" => refs})
        when is_binary(text) and text != "",
