@@ -4035,8 +4035,16 @@ defmodule Primeradiant.DaemonNewsReplayTest do
         "evidence_refs" => packet.evidence_refs,
         "quarantine_recommendation" => "quarantine mixed refusal/card-like output"
       })
-      |> put_in(["deck", "text"], "POISON DURABLE DECK")
-      |> put_in(["summary", "text"], "POISON DURABLE SUMMARY")
+      |> Map.drop([
+        "exact_happening",
+        "deck",
+        "summary",
+        "source_links",
+        "source_coverage",
+        "topic_salience",
+        "change_summary",
+        "field_completeness"
+      ])
       |> Map.put("key_claims", [
         %{
           "claim_ref" => "claim:poison",
@@ -4046,17 +4054,6 @@ defmodule Primeradiant.DaemonNewsReplayTest do
           "evidence_refs" => []
         }
       ])
-      |> update_in(["source_coverage"], fn rows ->
-        Enum.map(rows, fn row ->
-          row
-          |> put_in(["contribution_reason", "text"], "POISON SOURCE CONTRIBUTION")
-          |> Map.put("materiality", "poison_materiality")
-          |> Map.put("source_posture", %{"state" => "complete", "value" => "POISON POSTURE"})
-          |> Map.put("source_weight", %{"state" => "complete", "value" => "POISON WEIGHT"})
-        end)
-      end)
-      |> put_in(["topic_salience", "global_salience"], "POISON_GLOBAL")
-      |> put_in(["field_completeness", "deck"], "poison")
       |> Map.put("changed_field_keys", ["deck", "poison_field"])
 
     %{
