@@ -4029,6 +4029,12 @@ defmodule Primeradiant.DaemonNewsReplayTest do
 
     output =
       synthesis.output
+      |> Map.put("status", "refused")
+      |> Map.put("refusal_provenance", %{
+        "reason" => "insufficient evidence for a grounded synopsis",
+        "evidence_refs" => packet.evidence_refs,
+        "quarantine_recommendation" => "quarantine mixed refusal/card-like output"
+      })
       |> put_in(["deck", "text"], "POISON DURABLE DECK")
       |> put_in(["summary", "text"], "POISON DURABLE SUMMARY")
       |> Map.put("key_claims", [

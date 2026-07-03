@@ -191,6 +191,21 @@ def invoke(prompt, schema, item, max_tokens):
 def field_complete(value):
     return isinstance(value, dict) and value.get("state") == "complete" and isinstance(value.get("text"), str) and bool(value["text"].strip()) and bool(value.get("provenance_refs"))
 
+def mixed_refusal(output):
+    card_fields = [
+        "exact_happening",
+        "deck",
+        "summary",
+        "key_claims",
+        "source_links",
+        "source_coverage",
+        "topic_salience",
+        "changed_field_keys",
+        "change_summary",
+        "field_completeness",
+    ]
+    return any(output.get(key) not in (None, {}, []) for key in card_fields)
+
 def score_output(output, item, parse_error):
     required_refs = item["expected"]["required_source_refs"]
     matrix = {
@@ -210,7 +225,7 @@ def score_output(output, item, parse_error):
         return matrix, "invalid_model_schema"
     if output.get("status") == "refused":
         proof = output.get("refusal_provenance")
-        matrix["valid_refusal_quarantine_provenance"] = isinstance(proof, dict) and bool(proof.get("reason")) and bool(proof.get("evidence_refs"))
+        matrix["valid_refusal_quarantine_provenance"] = isinstance(proof, dict) and bool(proof.get("reason")) and bool(proof.get("evidence_refs")) and not mixed_refusal(output)
         return matrix, "honest_evidence_limited_refusal" if matrix["valid_refusal_quarantine_provenance"] else "invalid_model_schema"
     if output.get("status") != "complete":
         return matrix, "invalid_model_schema"
