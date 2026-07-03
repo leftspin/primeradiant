@@ -28,6 +28,7 @@ defmodule Mix.Tasks.Primeradiant.SoupCadenceOnce do
     cadence = opts |> Keyword.get(:cadence, "hourly_story_card_synthesis") |> parse_cadence!()
     limit = Keyword.get(opts, :limit, 8)
 
+    expected_tenant_revision = DurableSoupDb.tenant_revision(soup_db, tenant)
     state = DurableSoupDb.load_tenant(soup_db, tenant)
 
     {state, report} =
@@ -36,7 +37,8 @@ defmodule Mix.Tasks.Primeradiant.SoupCadenceOnce do
     DurableSoupDb.persist!(soup_db, state, %{
       source_kind: "recurring-soup-cadence",
       source_db_path: soup_db,
-      source_row_count: 0
+      source_row_count: 0,
+      expected_tenant_revision: expected_tenant_revision
     })
 
     Mix.shell().info(Jason.encode!(report))

@@ -1083,8 +1083,6 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
   defp load_rows(db_path, table, tenant_id, module) do
     query_table_json(db_path, "SELECT * FROM #{table} WHERE tenant_id = #{sql_quote(tenant_id)};")
     |> Enum.map(&row_struct(module, &1))
-  rescue
-    _ -> []
   end
 
   defp load_rows_where(db_path, table, tenant_id, where_sql, module) do
@@ -1093,8 +1091,6 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
       "SELECT * FROM #{table} WHERE tenant_id = #{sql_quote(tenant_id)} AND #{where_sql};"
     )
     |> Enum.map(&row_struct(module, &1))
-  rescue
-    _ -> []
   end
 
   defp load_feed_stories(db_path, tenant_id, limit) do
@@ -1127,8 +1123,6 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
       """
     )
     |> Enum.map(&row_struct(Primeradiant.StorageHarness.Story, &1))
-  rescue
-    _ -> []
   end
 
   defp parse_projection_limit(nil, default), do: default
@@ -1154,9 +1148,19 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
   end
 
   defp query_table_json(db_path, sql) do
-    case System.cmd("sqlite3", ["-cmd", ".mode json", db_path, sql], stderr_to_stdout: true) do
+    case System.cmd("sqlite3", ["-cmd", ".timeout 60000", "-cmd", ".mode json", db_path, sql],
+           stderr_to_stdout: true
+         ) do
       {output, 0} -> Jason.decode!(blank_json_array(output))
-      {_output, _status} -> []
+      {output, _status} -> handle_query_table_error!(output)
+    end
+  end
+
+  defp handle_query_table_error!(output) do
+    if String.contains?(output, "no such table:") do
+      []
+    else
+      raise "sqlite durable soup query failed: #{String.trim(output)}"
     end
   end
 
@@ -1202,7 +1206,9 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
     File.write!(sql_path, sql)
 
     try do
-      case System.cmd("sqlite3", [db_path, ".read #{sql_path}"], stderr_to_stdout: true) do
+      case System.cmd("sqlite3", ["-cmd", ".timeout 60000", db_path, ".read #{sql_path}"],
+             stderr_to_stdout: true
+           ) do
         {output, 0} -> output
         {output, status} -> raise "sqlite durable soup operation failed #{status}: #{output}"
       end
