@@ -938,6 +938,50 @@ defmodule Primeradiant.SoupApiTest do
     assert item["changed_since_seen"]["state"] == "unavailable"
   end
 
+  test "durable delta API uses bounded feed projection for current feed cursor", %{state: _state} do
+    state =
+      source_ready_state([
+        source_item("delta-bounded-1", title: "Bounded delta source one"),
+        source_item("delta-bounded-2", title: "Bounded delta source two")
+      ])
+
+    db_path =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-soup-delta-bounded-#{System.system_time(:nanosecond)}-#{System.unique_integer([:positive])}.sqlite3"
+      )
+
+    DurableSoupDb.persist!(db_path, state, %{
+      source_kind: "soup_api_test",
+      source_db_path: "real_ingestion",
+      source_row_count: length(state.inputs)
+    })
+
+    inflate_unrelated_feed_rows!(db_path, state.tenant_id, 200)
+
+    feed_body =
+      :get
+      |> conn("/api/v1/soup/feed?consumer=reporter&projection=news-morning&limit=1")
+      |> put_req_header("authorization", "Bearer internal-token")
+      |> Router.call(Keyword.put(@opts, :state, {:durable_soup_db, db_path, state.tenant_id}))
+      |> json()
+
+    assert [_item] = feed_body["items"]
+
+    delta_body =
+      :get
+      |> conn(
+        "/api/v1/soup/delta?consumer=reporter&projection=news-morning&limit=1&after=#{feed_body["substrate_cursor"]}"
+      )
+      |> put_req_header("authorization", "Bearer internal-token")
+      |> Router.call(Keyword.put(@opts, :state, {:durable_soup_db, db_path, state.tenant_id}))
+      |> json()
+
+    assert delta_body["items"] == []
+    assert delta_body["gap"] == nil
+    assert is_binary(delta_body["next_cursor"])
+  end
+
   test "durable soup API projection loader preserves story-card feed shape", %{state: _state} do
     state =
       source_ready_state([
