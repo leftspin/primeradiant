@@ -59,11 +59,8 @@ defmodule Primeradiant.Soup.Router do
     |> authorize()
     |> respond(fn state, assigns ->
       Soup.ack(state, conn.body_params, ack_log_path: assigns.soup_ack_log_path)
-    end)
+    end, :ack)
   end
-
-  defp respond(%Plug.Conn{halted: true} = conn, _fun), do: conn
-  defp respond(conn, fun), do: respond(conn, fun, :full)
 
   defp respond(%Plug.Conn{halted: true} = conn, _fun, _projection), do: conn
 
@@ -86,6 +83,10 @@ defmodule Primeradiant.Soup.Router do
 
   defp load_state({:durable_soup_db, soup_db, tenant}, {:delta, params}) do
     DurableSoupDb.load_soup_feed_projection(soup_db, tenant, params)
+  end
+
+  defp load_state({:durable_soup_db, _soup_db, tenant}, :ack) do
+    State.new(tenant_id: tenant, user_id: "flynn")
   end
 
   defp load_state({:durable_soup_db, soup_db, tenant}, :full) do

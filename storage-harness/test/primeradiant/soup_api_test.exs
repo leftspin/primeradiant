@@ -789,6 +789,62 @@ defmodule Primeradiant.SoupApiTest do
     assert Jason.decode!(ack_record)["projection_id"] == "story_cards-2026-06-14"
   end
 
+  test "durable ack records without hydrating reader deltas", %{state: _state} do
+    state =
+      source_ready_state([
+        source_item("ack-bounded-1", title: "Ack bounded source one")
+      ])
+
+    db_path =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-soup-ack-bounded-#{System.system_time(:nanosecond)}-#{System.unique_integer([:positive])}.sqlite3"
+      )
+
+    ack_log_path =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-soup-ack-bounded-#{System.system_time(:nanosecond)}-#{System.unique_integer([:positive])}.jsonl"
+      )
+
+    DurableSoupDb.persist!(db_path, state, %{
+      source_kind: "soup_api_test",
+      source_db_path: "real_ingestion",
+      source_row_count: length(state.inputs)
+    })
+
+    inflate_unrelated_feed_rows!(db_path, state.tenant_id, 200)
+
+    body =
+      :post
+      |> conn(
+        "/api/v1/soup/ack",
+        Jason.encode!(%{
+          consumer: "reporter",
+          projection: "news-morning",
+          substrate_cursor: Soup.cursor_for(state),
+          substrate_epoch: Soup.epoch(state),
+          rendered_at: "2026-07-04T23:30:00Z",
+          projection_id: "news-morning-ack-bounded",
+          status: "rendered"
+        })
+      )
+      |> put_req_header("authorization", "Bearer internal-token")
+      |> put_req_header("content-type", "application/json")
+      |> Router.call(
+        @opts
+        |> Keyword.put(:state, {:durable_soup_db, db_path, state.tenant_id})
+        |> Keyword.put(:ack_log_path, ack_log_path)
+      )
+      |> json()
+
+    assert body["ack"]["projection"] == "news-morning"
+    assert body["ack"]["projection_id"] == "news-morning-ack-bounded"
+
+    [ack_record] = ack_log_path |> File.read!() |> String.split("\n", trim: true)
+    assert Jason.decode!(ack_record)["projection_id"] == "news-morning-ack-bounded"
+  end
+
   test "feed can read from durable soup DB runtime source", %{state: state} do
     db_path =
       Path.join(
