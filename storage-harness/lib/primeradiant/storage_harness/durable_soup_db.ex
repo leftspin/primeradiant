@@ -72,6 +72,45 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
     :ok
   end
 
+  def persist_delta!(db_path, previous_state, state, attrs \\ %{}) do
+    db_path |> Path.dirname() |> File.mkdir_p!()
+    validate_existing_foreign_keys!(db_path)
+
+    rows =
+      @tables
+      |> Enum.reverse()
+      |> Enum.map(fn table -> rows_sql(table, changed_rows(previous_state, state, table)) end)
+      |> Enum.reject(&(&1 == ""))
+
+    sql =
+      [
+        ".bail on",
+        "PRAGMA foreign_keys = ON;",
+        "BEGIN IMMEDIATE;",
+        "PRAGMA defer_foreign_keys = ON;",
+        schema_sql(),
+        tenant_revision_guard_sql(state.tenant_id, Map.get(attrs, :expected_tenant_revision)),
+        replay_run_sql(state, attrs)
+        | rows
+      ]
+      |> Kernel.++(["COMMIT;"])
+      |> Enum.join("\n")
+
+    sqlite!(db_path, sql)
+    :ok
+  end
+
+  defp changed_rows(previous_state, state, table) do
+    previous_by_id =
+      previous_state
+      |> Map.fetch!(table)
+      |> Map.new(fn row -> {row.id, row} end)
+
+    state
+    |> Map.fetch!(table)
+    |> Enum.reject(fn row -> Map.get(previous_by_id, row.id) == row end)
+  end
+
   def load_tenant(db_path, tenant_id) do
     if File.regular?(db_path) do
       state = Primeradiant.StorageHarness.State.new(tenant_id: tenant_id, user_id: "flynn")

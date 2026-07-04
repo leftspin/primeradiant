@@ -26,6 +26,9 @@ defmodule Primeradiant.StorageHarness.DaemonNewsEvent do
     story_agent_loop? = Keyword.get(opts, :story_agent_loop?, false)
     story_agent_opts = Keyword.get(opts, :story_agent_opts, [])
 
+    expected_tenant_revision =
+      if File.regular?(soup_db_path), do: DurableSoupDb.tenant_revision(soup_db_path, tenant_id)
+
     prior_state = DurableSoupDb.load_tenant(soup_db_path, tenant_id)
 
     with {:ok, item, summary} <- event_to_item(event, tenant_id, raw_root),
@@ -64,10 +67,11 @@ defmodule Primeradiant.StorageHarness.DaemonNewsEvent do
           {state, source_admission_report(state, summary, ingestion_report)}
         end
 
-      DurableSoupDb.persist!(soup_db_path, state, %{
+      DurableSoupDb.persist_delta!(soup_db_path, prior_state, state, %{
         source_kind: DaemonNewsAdapter.source_adapter(),
         source_db_path: "event:#{summary.event_id}",
-        source_row_count: 1
+        source_row_count: 1,
+        expected_tenant_revision: expected_tenant_revision
       })
 
       report =

@@ -218,6 +218,65 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert DurableSoupDb.table_count(soup_db_path, "story_events", @tenant) == 0
   end
 
+  test "delta persist preserves existing tenant rows omitted from the new state" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-delta-preserve-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    soup_db_path = Path.join(tmp, "primeradiant-delta-soup.sqlite3")
+    observed_at = DateTime.from_naive!(~N[2026-05-17 10:00:00.000000], "Etc/UTC")
+
+    input = %Primeradiant.StorageHarness.Input{
+      id: "delta-sentinel-input",
+      tenant_id: @tenant,
+      source_type: "news_article",
+      external_id: "delta-sentinel",
+      observed_at: observed_at,
+      title: "Delta sentinel",
+      body_text: "Delta sentinel body",
+      content_sha256: "delta-sentinel-sha",
+      acl: %{},
+      normalized: %{},
+      facts: %{},
+      background: %{},
+      questions: %{},
+      colors: [],
+      topic_tokens: []
+    }
+
+    initial = %{State.new(tenant_id: @tenant) | inputs: [input]}
+
+    DurableSoupDb.persist!(soup_db_path, initial, %{
+      source_kind: "delta-preserve-seed",
+      source_db_path: soup_db_path,
+      source_row_count: 1
+    })
+
+    loaded = DurableSoupDb.load_tenant(soup_db_path, @tenant)
+    expected_revision = DurableSoupDb.tenant_revision(soup_db_path, @tenant)
+    next_state = State.new(tenant_id: @tenant)
+
+    DurableSoupDb.persist_delta!(soup_db_path, loaded, next_state, %{
+      source_kind: "delta-preserve-omitted",
+      source_db_path: soup_db_path,
+      source_row_count: 0,
+      expected_tenant_revision: expected_revision
+    })
+
+    assert DurableSoupDb.table_count(soup_db_path, "inputs", @tenant) == 1
+
+    assert [%{"external_id" => "delta-sentinel"}] =
+             sqlite_json_rows!(
+               soup_db_path,
+               "SELECT external_id FROM inputs WHERE id = 'delta-sentinel-input';"
+             )
+  end
+
   test "changed stories report is regenerated from persisted soup database" do
     tmp =
       Path.join(
@@ -622,6 +681,88 @@ defmodule Primeradiant.DaemonNewsReplayTest do
       |> Enum.uniq()
 
     assert Enum.all?(chain.evidence_refs, &(&1 in evidence_labels))
+  end
+
+  test "story agent event persistence appends delta without clearing existing tenant rows" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-daemon-news-story-agent-delta-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    soup_db_path = Path.join(tmp, "primeradiant-event-soup.sqlite3")
+    raw_path = Path.join(tmp, "archive.jsonl")
+
+    first_row =
+      envelope(
+        "Agent Civic Clinic triage first",
+        "Agent Civic Clinic triage first venue is north speaker is desk."
+      )
+
+    second_row =
+      envelope(
+        "Agent Civic Clinic triage second",
+        "Agent Civic Clinic triage second venue is south speaker is desk."
+      )
+
+    [{first_offset, first_length}, {second_offset, second_length}] =
+      write_archive!(raw_path, [first_row, second_row])
+
+    first_event =
+      committed_source_item_event(
+        "event-agent-delta-1",
+        raw_path,
+        first_offset,
+        first_length,
+        first_row
+      )
+
+    {:ok, _first_state, _first_report} =
+      DaemonNewsEvent.consume_event(first_event,
+        soup_db_path: soup_db_path,
+        tenant_id: @tenant,
+        actor_id: "flynn",
+        story_agent_loop?: true,
+        story_agent_opts: [adapter: &stub_story_agent/3]
+      )
+
+    first_revision = DurableSoupDb.tenant_revision(soup_db_path, @tenant)
+
+    second_event =
+      committed_source_item_event(
+        "event-agent-delta-2",
+        raw_path,
+        second_offset,
+        second_length,
+        second_row
+      )
+
+    {:ok, _second_state, _second_report} =
+      DaemonNewsEvent.consume_event(second_event,
+        soup_db_path: soup_db_path,
+        tenant_id: @tenant,
+        actor_id: "flynn",
+        story_agent_loop?: true,
+        story_agent_opts: [adapter: &stub_story_agent/3]
+      )
+
+    assert DurableSoupDb.tenant_revision(soup_db_path, @tenant) != first_revision
+
+    assert [
+             %{"external_id" => "event-agent-delta-1"},
+             %{"external_id" => "event-agent-delta-2"}
+           ] =
+             sqlite_json_rows!(
+               soup_db_path,
+               "SELECT external_id FROM inputs ORDER BY external_id;"
+             )
+
+    assert DurableSoupDb.table_count(soup_db_path, "story_events", @tenant) == 2
+    assert DurableSoupDb.table_count(soup_db_path, "story_card_versions", @tenant) == 2
+    assert DurableSoupDb.table_count(soup_db_path, "story_reader_deltas", @tenant) == 2
   end
 
   test "story agent event replay reports malformed durable soup precondition before persist" do
@@ -3335,8 +3476,16 @@ defmodule Primeradiant.DaemonNewsReplayTest do
         "evidence_refs" => packet.evidence_refs,
         "quarantine_recommendation" => "quarantine mixed refusal/card-like output"
       })
-      |> put_in(["deck", "text"], "POISON DURABLE DECK")
-      |> put_in(["summary", "text"], "POISON DURABLE SUMMARY")
+      |> Map.drop([
+        "exact_happening",
+        "deck",
+        "summary",
+        "source_links",
+        "source_coverage",
+        "topic_salience",
+        "change_summary",
+        "field_completeness"
+      ])
       |> Map.put("key_claims", [
         %{
           "claim_ref" => "claim:poison",
@@ -3346,17 +3495,6 @@ defmodule Primeradiant.DaemonNewsReplayTest do
           "evidence_refs" => []
         }
       ])
-      |> update_in(["source_coverage"], fn rows ->
-        Enum.map(rows, fn row ->
-          row
-          |> put_in(["contribution_reason", "text"], "POISON SOURCE CONTRIBUTION")
-          |> Map.put("materiality", "poison_materiality")
-          |> Map.put("source_posture", %{"state" => "complete", "value" => "POISON POSTURE"})
-          |> Map.put("source_weight", %{"state" => "complete", "value" => "POISON WEIGHT"})
-        end)
-      end)
-      |> put_in(["topic_salience", "global_salience"], "POISON_GLOBAL")
-      |> put_in(["field_completeness", "deck"], "poison")
       |> Map.put("changed_field_keys", ["deck", "poison_field"])
 
     %{
