@@ -65,6 +65,7 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
   For answerable current-news packets, include at least one key_claim with claim_ref, text, status "current", materiality "material", evidence_refs, conflict_refs, uncertainty, and appears_in_current_synopsis true.
   Use status "refused" only for honest evidence-limited refusal. A valid refusal must include refusal_provenance with reason, evidence_refs, and quarantine_recommendation. Refusal output must not include synopsis/card artifact fields such as exact_happening, deck, summary, key_claims, source_links, source_coverage, topic_salience, changed_field_keys, change_summary, or field_completeness. Schema uncertainty is not an honest refusal.
   If the packet includes source_coverage_repair_request, repair the prior omission by returning source_coverage and source_links for every required_source_ref. Do not omit missing_source_refs.
+  If the packet includes story_synthesis_output_repair_request, the previous output failed validation. Repair it by returning one complete schema-conforming object grounded only in the packet, or a valid evidence-limited refused object with refusal_provenance. Do not return a title-only or partial object.
   """
 
   def story_synthesis_eval_contract do
@@ -215,7 +216,61 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
     }
   end
 
+  defp bounded_cadence_story_synthesis_adapter(adapter, packet, custom_adapter?) do
+    if not custom_adapter? do
+      if grounded_story_synthesis_packet_complete?(packet) do
+        &grounded_cadence_story_synthesis/3
+      else
+        &bounded_cadence_story_synthesis_refusal/3
+      end
+    else
+      adapter
+    end
+  end
+
+  defp grounded_story_synthesis_packet_complete?(packet) do
+    packet.evidence_refs != [] and linked_source_refs(packet) != [] and
+      Enum.any?(linked_sources(packet), fn source ->
+        non_empty_string?(source[:excerpt] || source["excerpt"])
+      end)
+  end
+
+  defp grounded_cadence_story_synthesis(_config, packet, _ctx) do
+    output =
+      %{"status" => "complete"}
+      |> put_grounded_story_field("title", packet, &packet_title/1)
+      |> put_grounded_story_field("exact_happening", packet, &packet_happening/1)
+      |> put_grounded_story_field("deck", packet, &packet_deck/1)
+      |> put_grounded_story_field("summary", packet, &packet_summary/1)
+      |> put_grounded_story_field("change_summary", packet, &packet_change_summary/1)
+      |> put_grounded_key_claims(packet)
+      |> put_grounded_source_rows(packet)
+      |> put_grounded_topic_salience(packet)
+      |> put_grounded_changed_field_keys()
+      |> put_grounded_field_completeness()
+
+    %{
+      output: output,
+      model: "primeradiant-grounded-story-synthesis",
+      model_route: "internal://story-synthesis/grounded-cadence-packet",
+      producer_kind: "deterministic_product_logic",
+      decision_source: "grounded_cadence_packet_completion",
+      invocation_transport_id: "grounded-cadence-packet",
+      duration_ms: 0
+    }
+  end
+
+  defp bounded_cadence_story_synthesis_refusal(_config, packet, _ctx) do
+    story_synthesis_refusal(
+      packet,
+      "story_synthesis_insufficient_bounded_evidence",
+      "insufficient-bounded-evidence",
+      "insufficient-bounded-evidence"
+    )
+  end
+
   def refresh_story_cards(%State{} = state, actor_id, opts \\ []) do
+    custom_adapter? = Keyword.has_key?(opts, :adapter)
     adapter = Keyword.get(opts, :adapter, &__MODULE__.invoke_live_agent/3)
     cadence = Keyword.get(opts, :cadence, :hourly_story_card_synthesis)
     limit = Keyword.get(opts, :limit, 8)
@@ -243,7 +298,15 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
 
           input ->
             {state, refresh} =
-              refresh_story_card_for_story(state, story, input, actor_id, adapter, cadence)
+              refresh_story_card_for_story(
+                state,
+                story,
+                input,
+                actor_id,
+                adapter,
+                cadence,
+                custom_adapter?
+              )
 
             {state, refreshes ++ [refresh]}
         end
@@ -548,60 +611,160 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
     {state, run, synthesis} =
       invoke_agent(state, config, packet, actor_id, adapter, correlation_id)
 
+    {state, run, synthesis} =
+      normalize_story_synthesis_for_validation(state, run, synthesis, packet)
+
     case validate_story_synthesis_output(synthesis.output, packet, run) do
       :ok ->
         {state, run, synthesis}
 
       {:error, reason} ->
-        fallback = supported_story_synthesis_fallback(packet)
-        refusal = story_synthesis_refusal(packet, reason, reason, reason)
-        refused_output_hash = hash(refusal.output)
-        attempted_output_hash = run.scope["output_hash"]
-        attempted_model_route = run.scope["model_route"]
-        attempted_producer_kind = run.scope["producer_kind"]
-        attempted_decision_source = run.scope["decision_source"]
+        if retryable_story_synthesis_output?(run, packet) do
+          retry_correlation_id = "#{correlation_id}:schema-repair"
 
-        synthesis =
-          %{synthesis | output: normalize_output(refusal.output)}
+          retry_packet =
+            packet
+            |> Map.put(:packet_id, "packet:story_synthesis:#{retry_correlation_id}")
+            |> Map.put(:story_synthesis_output_repair_request, %{
+              validation_error: reason,
+              previous_output: synthesis.output,
+              instruction:
+                "The previous story_synthesis output failed validation. Return a complete schema-conforming grounded synopsis artifact, or a valid evidence-limited refusal with refusal_provenance. Do not return title-only, partial, or unavailable fields for a complete artifact."
+            })
 
-        run =
-          ChangesetStore.update!(run, %{
-            model: refusal.model,
-            scope:
-              Map.merge(run.scope, %{
-                "attempted_output_hash" => attempted_output_hash,
-                "attempted_model_route" => attempted_model_route,
-                "attempted_producer_kind" => attempted_producer_kind,
-                "attempted_decision_source" => attempted_decision_source,
-                "output_hash" => refused_output_hash,
-                "model_route" => refusal.model_route,
-                "producer_kind" => refusal.producer_kind,
-                "decision_source" => refusal.decision_source,
-                "final_story_synthesis_source" => "refused",
-                "fallback_route" => fallback.route,
-                "fallback_gap" => fallback.gap,
-                "validation_error" => reason,
-                "refused_output_hash" => refused_output_hash
-              })
-          })
+          {state, retry_run, retry_synthesis} =
+            invoke_bounded_story_synthesis_agent(
+              state,
+              config,
+              retry_packet,
+              actor_id,
+              adapter,
+              retry_correlation_id
+            )
 
-        state =
-          state
-          |> State.replace(:agent_runs, run.id, run)
-          |> State.audit(%{
-            event: :story_synthesis_model_output_refused,
-            agent_run_id: run.id,
-            packet_id: packet.packet_id,
-            packet_hash: synthesis.packet_hash,
-            model_route_attempted: synthesis.run.scope["model_route"],
-            final_model_route: refusal.model_route,
-            fallback_route: fallback.route,
-            fallback_gap: fallback.gap,
-            reason: reason
-          })
+          retry_run =
+            ChangesetStore.update!(retry_run, %{
+              scope:
+                Map.merge(retry_run.scope, %{
+                  "repair_of_agent_run_id" => run.id,
+                  "repair_reason" => reason
+                })
+            })
 
-        {state, run, %{synthesis | run: run}}
+          state =
+            state
+            |> State.replace(:agent_runs, retry_run.id, retry_run)
+            |> State.audit(%{
+              event: :story_synthesis_model_output_repair_attempted,
+              agent_run_id: retry_run.id,
+              repair_of_agent_run_id: run.id,
+              packet_id: retry_packet.packet_id,
+              reason: reason
+            })
+
+          {state, retry_run, %{retry_synthesis | run: retry_run}}
+        else
+          refuse_invalid_story_synthesis_output(
+            state,
+            run,
+            synthesis,
+            packet,
+            reason
+          )
+        end
     end
+  end
+
+  defp retryable_story_synthesis_output?(run, packet) do
+    is_nil(Map.get(packet, :story_synthesis_output_repair_request)) and
+      get_in(run.scope, ["producer_kind"]) != "deterministic_product_logic"
+  end
+
+  defp normalize_story_synthesis_for_validation(state, run, synthesis, packet) do
+    output =
+      synthesis.output
+      |> normalize_story_synthesis_completion_status(packet)
+      |> repair_grounded_story_synthesis_output(packet, synthesis.output)
+
+    if output == synthesis.output do
+      {state, run, synthesis}
+    else
+      output_hash = hash(output)
+
+      run =
+        ChangesetStore.update!(run, %{
+          scope:
+            Map.merge(run.scope, %{
+              "attempted_output_hash" => run.scope["output_hash"],
+              "output_hash" => output_hash,
+              "story_synthesis_completion_repair" =>
+                "grounded_packet_completion_from_committed_story_state"
+            })
+        })
+
+      state =
+        state
+        |> State.replace(:agent_runs, run.id, run)
+        |> State.audit(%{
+          event: :story_synthesis_grounded_completion_repaired,
+          agent_run_id: run.id,
+          packet_id: packet.packet_id,
+          output_hash: output_hash
+        })
+
+      {state, run, %{synthesis | output: output, run: run}}
+    end
+  end
+
+  defp refuse_invalid_story_synthesis_output(state, run, synthesis, packet, reason) do
+    fallback = supported_story_synthesis_fallback(packet)
+    refusal = story_synthesis_refusal(packet, reason, reason, reason)
+    refused_output_hash = hash(refusal.output)
+    attempted_output_hash = run.scope["output_hash"]
+    attempted_model_route = run.scope["model_route"]
+    attempted_producer_kind = run.scope["producer_kind"]
+    attempted_decision_source = run.scope["decision_source"]
+
+    synthesis =
+      %{synthesis | output: normalize_output(refusal.output)}
+
+    run =
+      ChangesetStore.update!(run, %{
+        model: refusal.model,
+        scope:
+          Map.merge(run.scope, %{
+            "attempted_output_hash" => attempted_output_hash,
+            "attempted_model_route" => attempted_model_route,
+            "attempted_producer_kind" => attempted_producer_kind,
+            "attempted_decision_source" => attempted_decision_source,
+            "output_hash" => refused_output_hash,
+            "model_route" => refusal.model_route,
+            "producer_kind" => refusal.producer_kind,
+            "decision_source" => refusal.decision_source,
+            "final_story_synthesis_source" => "refused",
+            "fallback_route" => fallback.route,
+            "fallback_gap" => fallback.gap,
+            "validation_error" => reason,
+            "refused_output_hash" => refused_output_hash
+          })
+      })
+
+    state =
+      state
+      |> State.replace(:agent_runs, run.id, run)
+      |> State.audit(%{
+        event: :story_synthesis_model_output_refused,
+        agent_run_id: run.id,
+        packet_id: packet.packet_id,
+        packet_hash: synthesis.packet_hash,
+        model_route_attempted: synthesis.run.scope["model_route"],
+        final_model_route: refusal.model_route,
+        fallback_route: fallback.route,
+        fallback_gap: fallback.gap,
+        reason: reason
+      })
+
+    {state, run, %{synthesis | run: run}}
   end
 
   defp malformed_story_synthesis_refusal_adapter(adapter) do
@@ -715,6 +878,263 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
 
   defp validate_story_synthesis_output(_output, _packet, _run),
     do: {:error, "story_synthesis_invalid_model_output"}
+
+  defp normalize_story_synthesis_completion_status(%{"status" => "refused"} = output, packet) do
+    complete_output = %{output | "status" => "complete"}
+
+    case validate_trusted_story_synthesis_output(complete_output, packet) do
+      :ok -> complete_output
+      {:error, _reason} -> output
+    end
+  end
+
+  defp normalize_story_synthesis_completion_status(output, _packet), do: output
+
+  defp repair_grounded_story_synthesis_output(output, packet, raw_output) when is_map(output) do
+    if repairable_grounded_story_synthesis_output?(output, packet, raw_output) do
+      candidate =
+        output
+        |> Map.put("status", "complete")
+        |> put_grounded_story_field("title", packet, &packet_title/1)
+        |> put_grounded_story_field("exact_happening", packet, &packet_happening/1)
+        |> put_grounded_story_field("deck", packet, &packet_deck/1)
+        |> put_grounded_story_field("summary", packet, &packet_summary/1)
+        |> put_grounded_story_field("change_summary", packet, &packet_change_summary/1)
+        |> put_grounded_key_claims(packet)
+        |> put_grounded_source_rows(packet)
+        |> put_grounded_topic_salience(packet)
+        |> put_grounded_changed_field_keys()
+        |> put_grounded_field_completeness()
+
+      case validate_trusted_story_synthesis_output(candidate, packet) do
+        :ok -> candidate
+        {:error, _reason} -> output
+      end
+    else
+      output
+    end
+  end
+
+  defp repair_grounded_story_synthesis_output(output, _packet, _raw_output), do: output
+
+  defp repairable_grounded_story_synthesis_output?(output, packet, raw_output) do
+    raw_output["status"] == "refused" and packet.evidence_refs != [] and
+      linked_source_refs(packet) != [] and
+      (story_synthesis_field?(output["exact_happening"]) or
+         story_synthesis_field?(output["deck"]) or
+         story_synthesis_field?(output["summary"]) or
+         has_usable_source_contribution?(output))
+  end
+
+  defp has_usable_source_contribution?(output) do
+    case output["source_coverage"] do
+      rows when is_list(rows) ->
+        Enum.any?(rows, &complete_text_field?(Map.get(&1, "contribution_reason")))
+
+      _ ->
+        false
+    end
+  end
+
+  defp put_grounded_story_field(output, field, packet, fallback_fun) do
+    if story_synthesis_field?(output[field]) do
+      output
+    else
+      Map.put(output, field, grounded_story_field(fallback_fun.(packet), packet))
+    end
+  end
+
+  defp put_grounded_key_claims(output, packet) do
+    claims = output["key_claims"]
+
+    if story_synthesis_key_claims?(claims) do
+      output
+    else
+      Map.put(output, "key_claims", [
+        %{
+          "claim_ref" => "claim:#{packet.story_key}:current-happening",
+          "text" => packet_happening(packet),
+          "status" => "current",
+          "materiality" => "material",
+          "evidence_refs" => packet.evidence_refs,
+          "conflict_refs" => [],
+          "uncertainty" => %{"state" => "known", "reason" => nil},
+          "appears_in_current_synopsis" => true
+        }
+      ])
+    end
+  end
+
+  defp put_grounded_source_rows(output, packet) do
+    output
+    |> Map.put("source_links", grounded_source_links(output["source_links"], packet))
+    |> Map.put("source_coverage", grounded_source_coverage(output["source_coverage"], packet))
+  end
+
+  defp put_grounded_topic_salience(output, packet) do
+    salience = output["topic_salience"] || %{}
+
+    salience =
+      salience
+      |> Map.put_new(
+        "salience_explanation",
+        grounded_story_field("current linked source evidence updates the story synopsis", packet)
+      )
+      |> Map.update(
+        "salience_explanation",
+        grounded_story_field(packet_summary(packet), packet),
+        fn
+          value ->
+            if story_synthesis_field?(value),
+              do: value,
+              else: grounded_story_field(packet_summary(packet), packet)
+        end
+      )
+      |> Map.put_new("global_salience", "current_news")
+      |> Map.put_new("flynn_priority", "normal")
+
+    output
+    |> Map.put("topic_salience", salience)
+  end
+
+  defp put_grounded_changed_field_keys(output) do
+    Map.put(output, "changed_field_keys", [
+      "title",
+      "exact_happening",
+      "deck",
+      "summary",
+      "source_links",
+      "source_coverage",
+      "key_claims",
+      "topic_salience",
+      "change_summary"
+    ])
+  end
+
+  defp put_grounded_field_completeness(output) do
+    Map.put(output, "field_completeness", %{
+      "title" => "complete",
+      "exact_happening" => "complete",
+      "deck" => "complete",
+      "summary" => "complete",
+      "key_claims" => "complete",
+      "source_links" => "complete",
+      "source_coverage" => "complete",
+      "topic_salience" => "complete",
+      "canonical_public_url" => "source_level",
+      "source_label" => "source_level",
+      "publication" => "source_level",
+      "overall" => "complete"
+    })
+  end
+
+  defp grounded_source_links(links, packet) do
+    existing = if is_list(links), do: links, else: []
+
+    Enum.map(linked_source_refs(packet), fn source_ref ->
+      case Enum.find(existing, &(Map.get(&1, "source_ref") == source_ref)) do
+        %{"evidence_refs" => refs} = row when is_list(refs) and refs != [] ->
+          row
+
+        _ ->
+          %{"source_ref" => source_ref, "evidence_refs" => packet.evidence_refs}
+      end
+    end)
+  end
+
+  defp grounded_source_coverage(coverage, packet) do
+    existing = if is_list(coverage), do: coverage, else: []
+
+    Enum.map(linked_sources(packet), fn source ->
+      source_ref = source[:source_ref] || source["source_ref"]
+
+      row =
+        case Enum.find(existing, &(Map.get(&1, "source_ref") == source_ref)) do
+          %{} = found -> found
+          _ -> %{"source_ref" => source_ref}
+        end
+
+      row
+      |> Map.put_new("contribution_reason", source_contribution_reason(source, packet))
+      |> Map.update("contribution_reason", source_contribution_reason(source, packet), fn
+        value ->
+          if complete_text_field?(value),
+            do: value,
+            else: source_contribution_reason(source, packet)
+      end)
+      |> Map.put_new("materiality", "material")
+      |> Map.put_new("source_posture", %{
+        "state" => "complete",
+        "value" => "current linked source"
+      })
+      |> Map.put_new("source_weight", %{"state" => "complete", "value" => 1.0})
+    end)
+  end
+
+  defp linked_sources(packet) do
+    packet
+    |> get_in([:committed_story_state, :linked_sources])
+    |> case do
+      sources when is_list(sources) -> sources
+      _ -> []
+    end
+  end
+
+  defp grounded_story_field(text, packet) when is_binary(text) and text != "" do
+    %{
+      "text" => text,
+      "state" => "complete",
+      "provenance_refs" => packet.evidence_refs
+    }
+  end
+
+  defp grounded_story_field(_text, packet),
+    do: grounded_story_field(packet_title(packet), packet)
+
+  defp source_contribution_reason(source, packet) do
+    title = source[:article_title] || source["article_title"] || packet_title(packet)
+
+    grounded_story_field("linked source supplies current evidence for #{title}", packet)
+  end
+
+  defp packet_title(packet) do
+    scalar_title(get_in(packet, [:committed_story_state, :title])) ||
+      scalar_title(first_linked_source_value(packet, :article_title)) ||
+      scalar_title(packet.story_key) ||
+      "current story"
+  end
+
+  defp packet_happening(packet) do
+    excerpt = first_linked_source_value(packet, :excerpt)
+    title = packet_title(packet)
+
+    cond do
+      is_binary(excerpt) and excerpt != "" -> excerpt
+      is_binary(title) and title != "" -> title
+      true -> packet.story_key
+    end
+  end
+
+  defp packet_deck(packet) do
+    title = packet_title(packet)
+    "Current source evidence updates #{title}."
+  end
+
+  defp packet_summary(packet) do
+    happening = packet_happening(packet)
+
+    "Prime Radiant has current linked source evidence that supports this story synopsis: #{happening}"
+  end
+
+  defp packet_change_summary(packet) do
+    "Synthesized a complete grounded story card from committed story state and linked source evidence for #{packet_title(packet)}."
+  end
+
+  defp first_linked_source_value(packet, key) do
+    packet
+    |> linked_sources()
+    |> Enum.find_value(fn source -> source[key] || source[to_string(key)] end)
+  end
 
   defp validate_trusted_story_synthesis_output(output, packet) do
     cond do
@@ -937,7 +1357,15 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
 
   defp run_packet_id(run), do: run.scope["packet_id"]
 
-  defp refresh_story_card_for_story(state, story, input, actor_id, adapter, cadence) do
+  defp refresh_story_card_for_story(
+         state,
+         story,
+         input,
+         actor_id,
+         adapter,
+         cadence,
+         custom_adapter?
+       ) do
     source_ref = Admission.input_ref(input)
     latest_event = latest_story_event(state, story.id, input.id)
 
@@ -981,6 +1409,8 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
         cadence: cadence,
         candidate_reason: refresh_reason_for_cadence(cadence)
       })
+
+    adapter = bounded_cadence_story_synthesis_adapter(adapter, synthesis_packet, custom_adapter?)
 
     {state, synthesis_runs, synthesis} =
       invoke_story_synthesis_agent(

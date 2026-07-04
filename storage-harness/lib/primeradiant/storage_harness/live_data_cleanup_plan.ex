@@ -9,8 +9,11 @@ defmodule Primeradiant.StorageHarness.LiveDataCleanupPlan do
     limit = Keyword.get(opts, :limit, 80)
     statuses = Keyword.get(opts, :statuses, @default_statuses)
     inserted_before = Keyword.get(opts, :inserted_before)
+    selected_story_ids = opts |> Keyword.get(:story_ids, []) |> normalize_ids()
 
-    cards = candidate_cards(db_path, tenant_id, limit, statuses, inserted_before)
+    cards =
+      candidate_cards(db_path, tenant_id, limit, statuses, inserted_before, selected_story_ids)
+
     card_ids = Enum.map(cards, & &1["id"])
     story_ids = cards |> Enum.map(& &1["story_id"]) |> Enum.uniq() |> Enum.sort()
 
@@ -73,6 +76,7 @@ defmodule Primeradiant.StorageHarness.LiveDataCleanupPlan do
         "limit" => limit,
         "statuses" => statuses,
         "inserted_before" => inserted_before,
+        "story_ids" => selected_story_ids,
         "order" => "story updated_at_story desc, story id asc, current card_version desc"
       },
       "counts" => count_map(affected),
@@ -108,13 +112,35 @@ defmodule Primeradiant.StorageHarness.LiveDataCleanupPlan do
     end
   end
 
-  defp candidate_cards(db_path, tenant_id, limit, statuses, inserted_before) do
+  defp candidate_cards(db_path, tenant_id, limit, statuses, inserted_before, selected_story_ids) do
     status_sql = statuses |> Enum.map(&quote_sql/1) |> Enum.join(",")
 
     inserted_filter =
       case inserted_before do
         nil -> ""
         value -> "AND c.inserted_at < #{quote_sql(value)}"
+      end
+
+    top_stories_sql =
+      case selected_story_ids do
+        [] ->
+          """
+          SELECT s.id AS story_id
+          FROM stories s
+          JOIN current_cards c ON c.story_id = s.id
+          WHERE s.tenant_id = #{quote_sql(tenant_id)}
+          ORDER BY s.updated_at_story DESC, s.id ASC
+          LIMIT #{limit}
+          """
+
+        story_ids ->
+          """
+          SELECT s.id AS story_id
+          FROM stories s
+          WHERE s.tenant_id = #{quote_sql(tenant_id)}
+            AND s.id IN (#{quoted_csv(story_ids)})
+          ORDER BY s.id ASC
+          """
       end
 
     sql = """
@@ -132,12 +158,7 @@ defmodule Primeradiant.StorageHarness.LiveDataCleanupPlan do
       WHERE c.tenant_id = #{quote_sql(tenant_id)}
     ),
     top_stories AS (
-      SELECT s.id AS story_id
-      FROM stories s
-      JOIN current_cards c ON c.story_id = s.id
-      WHERE s.tenant_id = #{quote_sql(tenant_id)}
-      ORDER BY s.updated_at_story DESC, s.id ASC
-      LIMIT #{limit}
+      #{top_stories_sql}
     )
     SELECT c.id, c.story_id, c.card_version, c.status, c.refresh_reason,
            c.producing_agent_run_id, c.packet_hash, c.prompt_config_hash,
@@ -295,6 +316,17 @@ defmodule Primeradiant.StorageHarness.LiveDataCleanupPlan do
 
   defp canonicalize(value) when is_list(value), do: Enum.map(value, &canonicalize/1)
   defp canonicalize(value), do: value
+
+  defp normalize_ids(nil), do: []
+
+  defp normalize_ids(ids) when is_list(ids) do
+    ids
+    |> Enum.map(&to_string/1)
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.uniq()
+    |> Enum.sort()
+  end
 
   defp quoted_csv(values), do: values |> Enum.map(&quote_sql/1) |> Enum.join(",")
   defp quote_sql(value), do: "'#{value |> to_string() |> String.replace("'", "''")}'"

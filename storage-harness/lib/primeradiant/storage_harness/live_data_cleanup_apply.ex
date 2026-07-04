@@ -24,7 +24,8 @@ defmodule Primeradiant.StorageHarness.LiveDataCleanupApply do
         tenant: tenant_id,
         limit: plan["selection"]["limit"],
         statuses: plan["selection"]["statuses"],
-        inserted_before: plan["selection"]["inserted_before"]
+        inserted_before: plan["selection"]["inserted_before"],
+        story_ids: plan["selection"]["story_ids"]
       )
       |> put_in(["source_boundary", "soup_db"], plan["source_boundary"]["soup_db"])
       |> Map.put("plan_hash", expected_hash)
@@ -230,9 +231,21 @@ defmodule Primeradiant.StorageHarness.LiveDataCleanupApply do
   end
 
   defp sqlite!(db_path, sql) do
-    case System.cmd("sqlite3", [db_path, sql], stderr_to_stdout: true) do
-      {_output, 0} -> :ok
-      {output, status} -> raise "sqlite T1421 cleanup apply failed #{status}: #{output}"
+    sql_path =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-t1421-cleanup-#{System.system_time(:nanosecond)}-#{System.unique_integer([:positive])}.sql"
+      )
+
+    File.write!(sql_path, sql)
+
+    try do
+      case System.cmd("sqlite3", [db_path, ".read #{sql_path}"], stderr_to_stdout: true) do
+        {_output, 0} -> :ok
+        {output, status} -> raise "sqlite T1421 cleanup apply failed #{status}: #{output}"
+      end
+    after
+      File.rm(sql_path)
     end
   end
 

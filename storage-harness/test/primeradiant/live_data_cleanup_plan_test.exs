@@ -43,6 +43,24 @@ defmodule Primeradiant.LiveDataCleanupPlanTest do
     assert first["plan_hash"] == second["plan_hash"]
   end
 
+  test "story-id selection narrows refused cleanup without broad top-story capture" do
+    db_path = tmp_db_path()
+    create_minimal_soup!(db_path)
+
+    plan =
+      LiveDataCleanupPlan.build(
+        soup_db: db_path,
+        tenant: @tenant,
+        limit: 80,
+        story_ids: ["story-refused"]
+      )
+
+    assert plan["selection"]["story_ids"] == ["story-refused"]
+    assert plan["affected"]["story_ids"] == ["story-refused"]
+    assert plan["affected"]["story_card_version_ids"] == ["card-refused"]
+    assert plan["counts"]["story_card_version_count"] == 1
+  end
+
   test "apply refuses a plan hash mismatch before mutation" do
     db_path = tmp_db_path()
     create_minimal_soup!(db_path)
@@ -130,6 +148,34 @@ defmodule Primeradiant.LiveDataCleanupPlanTest do
     assert hd(feed.items).status == "complete"
   end
 
+  test "apply re-verifies narrowed story plan without quarantining unrelated refused rows" do
+    db_path = tmp_db_path()
+    create_minimal_soup!(db_path)
+    plan_path = write_plan!(db_path, story_ids: ["story-refused"])
+    plan = plan_path |> File.read!() |> Jason.decode!()
+
+    report =
+      LiveDataCleanupApply.apply!(
+        soup_db: db_path,
+        tenant: @tenant,
+        plan: plan_path,
+        plan_hash: plan["plan_hash"],
+        approved_by: "operator",
+        approval_ref: "approval-1"
+      )
+
+    assert report["quarantined_story_card_version_count"] == 1
+    assert sqlite_count(db_path, "t1421_story_card_quarantines", "tenant_id = '#{@tenant}'") == 1
+
+    state = DurableSoupDb.load_soup_projection(db_path, @tenant)
+
+    feed =
+      Soup.feed(state, %{"consumer" => "reporter", "projection" => "news-morning", "limit" => 10})
+
+    assert "story-refused" not in Enum.map(feed.items, & &1.story_id)
+    assert "story-incomplete" in Enum.map(feed.items, & &1.story_id)
+  end
+
   defp tmp_db_path do
     Path.join(
       System.tmp_dir!(),
@@ -172,8 +218,10 @@ defmodule Primeradiant.LiveDataCleanupPlanTest do
     {_, 0} = System.cmd("sqlite3", [db_path, sql], stderr_to_stdout: true)
   end
 
-  defp write_plan!(db_path) do
-    plan = LiveDataCleanupPlan.build(soup_db: db_path, tenant: @tenant, limit: 80)
+  defp write_plan!(db_path, opts \\ []) do
+    plan =
+      Keyword.merge([soup_db: db_path, tenant: @tenant, limit: 80], opts)
+      |> LiveDataCleanupPlan.build()
 
     path =
       Path.join(

@@ -16,7 +16,9 @@ defmodule Mix.Tasks.Primeradiant.T1421CleanupPlan do
           tenant: :string,
           limit: :integer,
           statuses: :string,
-          inserted_before: :string
+          inserted_before: :string,
+          story_ids: :string,
+          story_ids_file: :string
         ]
       )
 
@@ -28,7 +30,8 @@ defmodule Mix.Tasks.Primeradiant.T1421CleanupPlan do
         tenant: Keyword.fetch!(opts, :tenant),
         limit: Keyword.get(opts, :limit, 80),
         statuses: parse_statuses(Keyword.get(opts, :statuses, "incomplete,refused")),
-        inserted_before: Keyword.get(opts, :inserted_before)
+        inserted_before: Keyword.get(opts, :inserted_before),
+        story_ids: parse_story_ids(opts)
       )
 
     Mix.shell().info(Jason.encode!(plan))
@@ -38,5 +41,26 @@ defmodule Mix.Tasks.Primeradiant.T1421CleanupPlan do
     value
     |> String.split(",", trim: true)
     |> Enum.map(&String.trim/1)
+  end
+
+  defp parse_story_ids(opts) do
+    inline = opts |> Keyword.get(:story_ids, "") |> split_ids()
+
+    file_ids =
+      case Keyword.get(opts, :story_ids_file) do
+        nil -> []
+        path -> path |> File.read!() |> split_ids()
+      end
+
+    (inline ++ file_ids)
+    |> Enum.uniq()
+    |> Enum.sort()
+  end
+
+  defp split_ids(value) do
+    value
+    |> String.split([",", "\n"], trim: true)
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
   end
 end

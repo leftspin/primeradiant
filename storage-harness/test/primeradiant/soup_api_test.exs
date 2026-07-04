@@ -64,6 +64,110 @@ defmodule Primeradiant.SoupApiTest do
     assert body["blockers"] == []
   end
 
+  test "ready blocks fresh news-morning ecology when current story cards are zero-complete" do
+    state =
+      source_ready_state([
+        source_item("zero-complete-card-health", title: "Zero complete card health")
+      ])
+      |> force_story_synthesis_failure!("story_synthesis_invalid_model_output")
+
+    body =
+      :get
+      |> conn("/api/v1/soup/ready?consumer=reporter&projection=news-morning")
+      |> put_req_header("authorization", "Bearer internal-token")
+      |> Router.call(Keyword.put(@opts, :state, state))
+      |> json()
+
+    assert body["status"] == "blocked"
+    assert body["freshness"]["latest_source_at"]
+    assert body["freshness"]["latest_story_event_at"]
+
+    assert [
+             %{
+               "code" => "no_complete_current_story_cards",
+               "message" => message,
+               "ecology_steps" => steps,
+               "causes" => [cause]
+             }
+           ] = body["blockers"]
+
+    assert message =~ "no complete story_card_versions"
+    assert steps["input_admission"] > 0
+    assert steps["story_identity"] > 0
+    assert steps["meaning_update"] > 0
+    assert steps["story_synthesis"] > 0
+    assert steps["complete_story_cards"] == 0
+    assert steps["projection_visible_stories"] > 0
+    assert steps["magazine_visible_complete_items"] == 0
+
+    assert cause["status"] == "refused"
+    assert cause["validation_error"] == "story_synthesis_invalid_model_output"
+    assert cause["fallback_gap"] == "no_supported_codex_oauth_spark_story_synthesis_route"
+    assert cause["count"] == 1
+  end
+
+  test "ready blocks news-morning ecology when current cards are overwhelmingly non-complete" do
+    state =
+      source_ready_state([
+        source_item("overwhelming-card-health", title: "Overwhelming card health")
+      ])
+      |> add_current_story_card_copies!(4, status: "refused")
+
+    body =
+      :get
+      |> conn("/api/v1/soup/ready?consumer=reporter&projection=news-morning")
+      |> put_req_header("authorization", "Bearer internal-token")
+      |> Router.call(Keyword.put(@opts, :state, state))
+      |> json()
+
+    assert body["status"] == "blocked"
+
+    assert [%{"code" => "overwhelming_non_complete_story_cards", "ecology_steps" => steps}] =
+             body["blockers"]
+
+    assert steps["story_synthesis"] == 5
+    assert steps["complete_story_cards"] == 1
+    assert steps["magazine_visible_complete_items"] == 1
+  end
+
+  test "ready blocks news-morning ecology when visible stories are missing current cards" do
+    state =
+      source_ready_state([
+        source_item("missing-card-health", title: "Missing card health")
+      ])
+      |> add_visible_stories_without_current_cards!(20)
+
+    body =
+      :get
+      |> conn("/api/v1/soup/ready?consumer=reporter&projection=news-morning")
+      |> put_req_header("authorization", "Bearer internal-token")
+      |> Router.call(Keyword.put(@opts, :state, state))
+      |> json()
+
+    assert body["status"] == "blocked"
+
+    assert [
+             %{
+               "code" => "overwhelming_non_complete_story_cards",
+               "ecology_steps" => steps,
+               "causes" => causes
+             }
+           ] = body["blockers"]
+
+    assert steps["story_synthesis"] == 1
+    assert steps["complete_story_cards"] == 1
+    assert steps["missing_current_story_cards"] == 20
+    assert steps["non_complete_story_cards"] == 20
+    assert steps["projection_visible_stories"] == 21
+    assert steps["magazine_visible_complete_items"] == 1
+
+    assert %{
+             "status" => "missing_current_story_card",
+             "missing_current_story_cards" => 20,
+             "count" => 20
+           } in causes
+  end
+
   test "ready fails when admitted current stories have no complete grounded synopsis artifacts",
        %{
          state: state
@@ -1081,6 +1185,99 @@ defmodule Primeradiant.SoupApiTest do
       LiveStoryAgentLoop.run(state, report.admissions, "flynn", adapter: &stub_story_agent/3)
 
     state
+  end
+
+  defp force_story_synthesis_failure!(state, reason) do
+    [card] = state.story_card_versions
+
+    state
+    |> update_in([Access.key!(:story_card_versions)], fn cards ->
+      Enum.map(cards, fn card ->
+        %{
+          card
+          | status: "refused",
+            deck: %{"state" => "refused", "reason" => reason, "text" => nil},
+            summary: %{"state" => "refused", "reason" => reason, "text" => nil},
+            field_completeness: %{"overall" => "refused"}
+        }
+      end)
+    end)
+    |> update_in([Access.key!(:agent_runs)], fn runs ->
+      Enum.map(runs, fn run ->
+        if run.id == card.producing_agent_run_id do
+          %{
+            run
+            | scope:
+                Map.merge(run.scope, %{
+                  "final_story_synthesis_source" => "refused",
+                  "validation_error" => reason,
+                  "fallback_gap" => "no_supported_codex_oauth_spark_story_synthesis_route"
+                })
+          }
+        else
+          run
+        end
+      end)
+    end)
+  end
+
+  defp add_current_story_card_copies!(state, count, status: status) do
+    [story] = state.stories
+    [card] = state.story_card_versions
+    at = DateTime.add(story.updated_at_story, 60, :second)
+
+    copies =
+      for index <- 1..count do
+        story_id = "00000000-0000-4000-8000-000000001#{String.pad_leading("#{index}", 3, "0")}"
+
+        {
+          %{
+            story
+            | id: story_id,
+              story_key: "overwhelming-non-complete-#{index}",
+              title: "Overwhelming non-complete #{index}",
+              version: story.version + index,
+              updated_at_story: DateTime.add(at, index, :second),
+              last_material_at: DateTime.add(at, index, :second)
+          },
+          %{
+            card
+            | id: "00000000-0000-4000-8000-000000002#{String.pad_leading("#{index}", 3, "0")}",
+              story_id: story_id,
+              story_version: story.version + index,
+              card_version: 1,
+              status: status,
+              inserted_at: DateTime.add(at, index, :second),
+              updated_at: DateTime.add(at, index, :second)
+          }
+        }
+      end
+
+    %{
+      state
+      | stories: state.stories ++ Enum.map(copies, &elem(&1, 0)),
+        story_card_versions: state.story_card_versions ++ Enum.map(copies, &elem(&1, 1))
+    }
+  end
+
+  defp add_visible_stories_without_current_cards!(state, count) do
+    [story] = state.stories
+    at = DateTime.add(story.updated_at_story, 60, :second)
+
+    stories =
+      for index <- 1..count do
+        %{
+          story
+          | id: "00000000-0000-4000-8000-000000003#{String.pad_leading("#{index}", 3, "0")}",
+            story_key: "missing-current-card-#{index}",
+            title: "Missing current card #{index}",
+            version: story.version + index,
+            updated_at_story: DateTime.add(at, index, :second),
+            last_material_at: DateTime.add(at, index, :second)
+        }
+      end
+
+    %{state | stories: state.stories ++ stories}
   end
 
   defp source_item(external_id, overrides) do
