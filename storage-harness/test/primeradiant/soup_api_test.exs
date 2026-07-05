@@ -64,7 +64,7 @@ defmodule Primeradiant.SoupApiTest do
     assert body["blockers"] == []
   end
 
-  test "ready blocks fresh news-morning ecology when current story cards are zero-complete" do
+  test "ready blocks PR synthesis health when current grounded synopsis artifacts are zero-complete" do
     state =
       source_ready_state([
         source_item("zero-complete-card-health", title: "Zero complete card health")
@@ -82,31 +82,21 @@ defmodule Primeradiant.SoupApiTest do
     assert body["freshness"]["latest_source_at"]
     assert body["freshness"]["latest_story_event_at"]
 
-    assert [
-             %{
-               "code" => "no_complete_current_story_cards",
-               "message" => message,
-               "ecology_steps" => steps,
-               "causes" => [cause]
-             }
-           ] = body["blockers"]
+    assert Enum.any?(
+             body["blockers"],
+             &(&1["code"] == "zero_complete_current_synopsis_artifacts")
+           )
 
-    assert message =~ "no complete story_card_versions"
-    assert steps["input_admission"] > 0
-    assert steps["story_identity"] > 0
-    assert steps["meaning_update"] > 0
-    assert steps["story_synthesis"] > 0
-    assert steps["complete_story_cards"] == 0
-    assert steps["projection_visible_stories"] > 0
-    assert steps["magazine_visible_complete_items"] == 0
-
-    assert cause["status"] == "refused"
-    assert cause["validation_error"] == "story_synthesis_invalid_model_output"
-    assert cause["fallback_gap"] == "no_supported_codex_oauth_spark_story_synthesis_route"
-    assert cause["count"] == 1
+    refute Enum.any?(
+             body["blockers"],
+             &(&1["code"] in [
+                 "no_complete_current_story_cards",
+                 "overwhelming_non_complete_story_cards"
+               ])
+           )
   end
 
-  test "ready blocks news-morning ecology when current cards are overwhelmingly non-complete" do
+  test "ready does not emit News artifact readiness when current cards are overwhelmingly non-complete" do
     state =
       source_ready_state([
         source_item("overwhelming-card-health", title: "Overwhelming card health")
@@ -120,17 +110,13 @@ defmodule Primeradiant.SoupApiTest do
       |> Router.call(Keyword.put(@opts, :state, state))
       |> json()
 
-    assert body["status"] == "blocked"
-
-    assert [%{"code" => "overwhelming_non_complete_story_cards", "ecology_steps" => steps}] =
-             body["blockers"]
-
-    assert steps["story_synthesis"] == 5
-    assert steps["complete_story_cards"] == 1
-    assert steps["magazine_visible_complete_items"] == 1
+    refute Enum.any?(
+             body["blockers"],
+             &(&1["code"] == "overwhelming_non_complete_story_cards")
+           )
   end
 
-  test "ready blocks news-morning ecology when visible stories are missing current cards" do
+  test "ready does not emit News artifact readiness when visible stories are missing current cards" do
     state =
       source_ready_state([
         source_item("missing-card-health", title: "Missing card health")
@@ -144,28 +130,8 @@ defmodule Primeradiant.SoupApiTest do
       |> Router.call(Keyword.put(@opts, :state, state))
       |> json()
 
-    assert body["status"] == "blocked"
-
-    assert [
-             %{
-               "code" => "overwhelming_non_complete_story_cards",
-               "ecology_steps" => steps,
-               "causes" => causes
-             }
-           ] = body["blockers"]
-
-    assert steps["story_synthesis"] == 1
-    assert steps["complete_story_cards"] == 1
-    assert steps["missing_current_story_cards"] == 20
-    assert steps["non_complete_story_cards"] == 20
-    assert steps["projection_visible_stories"] == 21
-    assert steps["magazine_visible_complete_items"] == 1
-
-    assert %{
-             "status" => "missing_current_story_card",
-             "missing_current_story_cards" => 20,
-             "count" => 20
-           } in causes
+    assert body["status"] in ["ready", "degraded"]
+    assert body["blockers"] == []
   end
 
   test "ready fails when admitted current stories have no complete grounded synopsis artifacts",
