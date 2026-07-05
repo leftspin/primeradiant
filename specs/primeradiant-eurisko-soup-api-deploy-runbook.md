@@ -57,6 +57,20 @@ This RB1 inventory is part of the T1275 artifact parity boundary: product proof
 must name the active runner, invoked source tree, marker SHA, service identity,
 and runtime DB/API target. A source checkout SHA alone is not deploy proof.
 
+For the TARS-side R1 runner proof boundary, deploy/run evidence must also name:
+
+- active stable runner root:
+  `/Users/mike/.local/libexec/primeradiant/r1`
+- reviewed repo helper root:
+  `/Users/mike/src/primeradiant/storage-harness/scripts/r1`
+- active ordinary runner entrypoint:
+  `/Users/mike/.local/libexec/primeradiant/r1/live_subspace_daemon_watcher_once.sh`
+- installed manifest path:
+  `/Users/mike/.local/libexec/primeradiant/r1/install-manifest.json`
+
+If the ordinary runner uses another active root, record that exact path instead
+and treat it as the parity target.
+
 ## RB1A Recurring Soup Cadence One-Shot
 
 The recurring soup cadence runner is a one-shot command over the already-admitted
@@ -93,6 +107,54 @@ Expected proof from a conforming pass:
   decision source.
 - Runtime model route remains Gibson/Qwen unless a source-of-truth spec
   explicitly authorizes another product soup-agent route.
+
+For T1275/T1269/T1274 parity-sensitive deploy verification, the run evidence
+must also include:
+
+- `ordinary_runner_command`
+- `active_runner_parity_report_path`
+- `active_runner_parity.parity_status == "pass"`
+- `active_runner_parity.source_commit`
+- `active_runner_parity.active_runner_manifest_path`
+- `active_runner_parity.runtime_entrypoint_inventory`
+- `active_runner_parity.helper_artifact_parity`
+
+If the active runner parity report is missing, unreadable, or non-pass, do not
+count the run as deploy proof even when the repo SHA and service health checks
+look correct.
+
+## RB1B Installed R1 Manifest Shape
+
+When TARS keeps a stable installed runner under
+`/Users/mike/.local/libexec/primeradiant/r1`, the installed copy must carry
+`install-manifest.json` with auditable provenance:
+
+```json
+{
+  "manifest_version": "primeradiant_r1_install_v1",
+  "source_repo": "/Users/mike/src/primeradiant",
+  "source_commit": "<reviewed commit sha>",
+  "installed_root": "/Users/mike/.local/libexec/primeradiant/r1",
+  "installed_at": "2026-07-05T00:00:00Z",
+  "installed_by": "<actor>",
+  "install_session": "<session or deploy id>",
+  "previous_backup_root": "/Users/mike/.local/libexec/primeradiant/r1.backup-<ts>",
+  "helpers": [
+    {
+      "name": "live_subspace_daemon_watcher_once.sh",
+      "source_path": "/Users/mike/src/primeradiant/storage-harness/scripts/r1/live_subspace_daemon_watcher_once.sh",
+      "installed_path": "/Users/mike/.local/libexec/primeradiant/r1/live_subspace_daemon_watcher_once.sh",
+      "source_sha256": "<repo helper sha256>",
+      "installed_sha256": "<installed helper sha256>"
+    }
+  ]
+}
+```
+
+Deploy proof must fail when any required field is missing, when `source_commit`
+does not match the reviewed repo commit, when `installed_root` does not match
+the active runner root, or when any helper entry path/checksum disagrees with
+the reviewed repo artifact or the active installed copy.
 
 ## RB2 Copy, Build, And Release Steps
 

@@ -3750,6 +3750,124 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert emitter_source =~ ~s(sqlite3 -readonly -cmd ".timeout 10000" -json "$SOURCE_DB")
   end
 
+  test "live watcher fails before ssh when installed runner manifest provenance drifts from repo" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-live-watch-runner-parity-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    source_db = Path.join(tmp, "daemon.sqlite3")
+    state_root = Path.join(tmp, "state")
+    install_root = Path.join(tmp, "installed-r1")
+    manifest_path = Path.join(install_root, "install-manifest.json")
+    repo_root = Path.expand("../../..", __DIR__)
+    repo_script_root = Path.join(repo_root, "storage-harness/scripts/r1")
+
+    create_subspace_daemon_db!(
+      source_db,
+      [
+        {"subspace-parity-1", "2026-06-03 05:00:00",
+         envelope(
+           "Parity Harbor",
+           "Parity Harbor source rows ensure catchup emits before ssh."
+         )}
+      ]
+    )
+    File.mkdir_p!(state_root)
+    File.mkdir_p!(install_root)
+
+    helper_entries =
+      for source_path <- Path.wildcard(Path.join(repo_script_root, "*.sh")) |> Enum.sort() do
+        installed_path = Path.join(install_root, Path.basename(source_path))
+        File.cp!(source_path, installed_path)
+
+        %{
+          "name" => Path.basename(source_path),
+          "source_path" => source_path,
+          "installed_path" => installed_path,
+          "source_sha256" => sha256_file!(source_path),
+          "installed_sha256" => sha256_file!(installed_path)
+        }
+      end
+
+    manifest =
+      %{
+        "manifest_version" => "primeradiant_r1_install_v1",
+        "source_repo" => repo_root,
+        "source_commit" => "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+        "installed_root" => install_root,
+        "installed_at" => "2026-07-05T00:00:00Z",
+        "installed_by" => "test",
+        "install_session" => "test-session",
+        "previous_backup_root" => Path.join(tmp, "backup"),
+        "helpers" => helper_entries
+      }
+
+    File.write!(manifest_path, Jason.encode!(manifest))
+
+    watcher_script = Path.expand("scripts/r1/live_subspace_daemon_watcher_once.sh")
+
+    {output, status} =
+      System.cmd(
+        watcher_script,
+        [
+          "--source-db",
+          source_db,
+          "--tenant",
+          @tenant,
+          "--state-root",
+          state_root,
+          "--eurisko-target",
+          "clu@eurisko",
+          "--eurisko-repo",
+          "/home/clu/src/primeradiant",
+          "--ssh-key",
+          source_db,
+          "--run-id",
+          "live-runner-parity-failure-test",
+          "--limit",
+          "10",
+          "--active-runner-root",
+          install_root,
+          "--active-runner-manifest",
+          manifest_path
+        ],
+        stderr_to_stdout: true
+      )
+
+    assert status != 0
+    assert output =~ "active runner artifact parity failed"
+
+    failed_report =
+      Path.join(state_root, "live-runner-parity-failure-test-failed-report.json")
+      |> File.read!()
+      |> Jason.decode!()
+
+    assert failed_report["status"] == "active_runner_artifact_parity_failed"
+    assert failed_report["failed_stage"] == "active_runner_artifact_parity"
+    assert get_in(failed_report, ["active_runner_parity", "parity_status"]) == "fail"
+    assert get_in(failed_report, ["active_runner_parity", "active_runner_manifest_path"]) == manifest_path
+    assert get_in(failed_report, ["active_runner_parity", "active_runner_root"]) == install_root
+
+    failure_codes =
+      get_in(failed_report, ["active_runner_parity", "failures"])
+      |> Enum.map(& &1["code"])
+
+    assert "installed_runner_manifest_commit_mismatch" in failure_codes
+    assert length(get_in(failed_report, ["active_runner_parity", "helper_artifact_parity"])) > 0
+
+    inventory_kinds =
+      get_in(failed_report, ["active_runner_parity", "runtime_entrypoint_inventory"])
+      |> Enum.map(& &1["kind"])
+
+    assert "active_installed_runner" in inventory_kinds
+    assert "script_directory" in inventory_kinds
+  end
+
   test "R1 push and consume handoff keeps source read-only and writes primeradiant output" do
     tmp =
       Path.join(
@@ -3837,6 +3955,13 @@ defmodule Primeradiant.DaemonNewsReplayTest do
       "provenance" => %{"source_name" => "Example News"},
       "dedupe" => %{"key" => title}
     }
+  end
+
+  defp sha256_file!(path) do
+    path
+    |> File.read!()
+    |> then(&:crypto.hash(:sha256, &1))
+    |> Base.encode16(case: :lower)
   end
 
   defp write_archive!(path, envelopes) do
