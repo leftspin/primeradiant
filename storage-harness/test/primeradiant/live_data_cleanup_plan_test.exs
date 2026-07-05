@@ -61,6 +61,18 @@ defmodule Primeradiant.LiveDataCleanupPlanTest do
     assert plan["counts"]["story_card_version_count"] == 1
   end
 
+  test "dry-run plan excludes story cards already quarantined by T1421" do
+    db_path = tmp_db_path()
+    create_minimal_soup!(db_path)
+    create_quarantine_table!(db_path)
+
+    plan = LiveDataCleanupPlan.build(soup_db: db_path, tenant: @tenant, limit: 80)
+
+    assert plan["affected"]["story_card_version_ids"] == ["card-incomplete"]
+    assert plan["affected"]["story_ids"] == ["story-incomplete"]
+    assert plan["counts"]["story_card_version_count"] == 1
+  end
+
   test "apply refuses a plan hash mismatch before mutation" do
     db_path = tmp_db_path()
     create_minimal_soup!(db_path)
@@ -213,6 +225,41 @@ defmodule Primeradiant.LiveDataCleanupPlanTest do
     VALUES
       ('coverage-incomplete', '#{@tenant}', 'story-incomplete', 'card-incomplete', 'source-1', 'article-1', '{}', '{}', '{}', '{}', '{}', '{}', 'material', '{}', '2026-06-14T00:00:00Z', '2026-06-15T00:00:00Z', '["evidence-1"]', '["fieldprov-1"]', '2026-06-15T00:00:00Z', '2026-06-15T00:00:00Z'),
       ('coverage-complete', '#{@tenant}', 'story-complete', 'card-complete', 'source-3', 'article-3', '{}', '{}', '{}', '{}', '{}', '{}', 'material', '{}', '2026-06-14T00:00:00Z', '2026-06-15T00:00:00Z', '["evidence-3"]', '["fieldprov-3"]', '2026-06-15T00:00:00Z', '2026-06-15T00:00:00Z');
+    """
+
+    {_, 0} = System.cmd("sqlite3", [db_path, sql], stderr_to_stdout: true)
+  end
+
+  defp create_quarantine_table!(db_path) do
+    sql = """
+    CREATE TABLE t1421_story_card_quarantines (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      run_id TEXT NOT NULL,
+      plan_hash TEXT NOT NULL,
+      story_id TEXT NOT NULL,
+      story_card_version_id TEXT NOT NULL,
+      status TEXT NOT NULL,
+      reason TEXT NOT NULL,
+      original_story_json TEXT NOT NULL,
+      original_story_card_json TEXT NOT NULL,
+      dependent_rows_json TEXT NOT NULL,
+      approved_by TEXT NOT NULL,
+      approval_ref TEXT NOT NULL,
+      actor TEXT NOT NULL,
+      snapshot_hash TEXT NOT NULL,
+      quarantined_at TEXT NOT NULL,
+      UNIQUE (tenant_id, plan_hash, story_card_version_id)
+    );
+
+    INSERT INTO t1421_story_card_quarantines
+      (id, tenant_id, run_id, plan_hash, story_id, story_card_version_id, status, reason,
+       original_story_json, original_story_card_json, dependent_rows_json, approved_by,
+       approval_ref, actor, snapshot_hash, quarantined_at)
+    VALUES
+      ('quarantine-card-refused', '#{@tenant}', 'run-1', 'plan-1', 'story-refused', 'card-refused',
+       'refused', 'unfixable_story_card_not_complete', '{}', '{}', '{}', 'operator',
+       'approval-1', 'agent', 'snapshot-1', '2026-07-05T00:00:00Z');
     """
 
     {_, 0} = System.cmd("sqlite3", [db_path, sql], stderr_to_stdout: true)

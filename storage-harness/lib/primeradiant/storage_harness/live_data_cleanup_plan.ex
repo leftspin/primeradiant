@@ -121,6 +121,20 @@ defmodule Primeradiant.StorageHarness.LiveDataCleanupPlan do
         value -> "AND c.inserted_at < #{quote_sql(value)}"
       end
 
+    quarantine_filter =
+      if table_exists?(db_path, "t1421_story_card_quarantines") do
+        """
+        AND NOT EXISTS (
+          SELECT 1
+          FROM t1421_story_card_quarantines q
+          WHERE q.tenant_id = c.tenant_id
+            AND q.story_card_version_id = c.id
+        )
+        """
+      else
+        ""
+      end
+
     top_stories_sql =
       case selected_story_ids do
         [] ->
@@ -168,6 +182,7 @@ defmodule Primeradiant.StorageHarness.LiveDataCleanupPlan do
     JOIN top_stories t ON t.story_id = c.story_id
     WHERE c.status IN (#{status_sql})
     #{inserted_filter}
+    #{quarantine_filter}
     ORDER BY c.story_id ASC, c.card_version DESC, c.id ASC;
     """
 
@@ -279,6 +294,18 @@ defmodule Primeradiant.StorageHarness.LiveDataCleanupPlan do
           ])
         )
     }
+  end
+
+  defp table_exists?(db_path, table) do
+    sql = """
+    SELECT name
+    FROM sqlite_master
+    WHERE type = 'table'
+      AND name = #{quote_sql(table)}
+    LIMIT 1;
+    """
+
+    query_json!(db_path, sql) != []
   end
 
   defp query_json!(db_path, sql) do
