@@ -1,0 +1,12 @@
+[Unit]
+Description=Run Prime Radiant recurring soup cadence every 15 minutes
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=15min
+AccuracySec=1min
+Persistent=true
+Unit=primeradiant-soup-cadence.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,15 @@
+[Unit]
+Description=Prime Radiant recurring soup cadence pass
+Documentation=README:%h/src/primeradiant/specs/primeradiant-eurisko-soup-api-deploy-runbook.md
+After=primeradiant-soup-api.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/src/primeradiant/storage-harness
+EnvironmentFile=%h/.local/state/primeradiant/soup-api/env
+Environment=PRIMERADIANT_SOUP_CADENCE_ENV_FILE=%h/.local/state/primeradiant/soup-api/env
+Environment=PRIMERADIANT_SOUP_CADENCE_REPO=%h/src/primeradiant/storage-harness
+Environment=PRIMERADIANT_SOUP_CADENCE_ACTOR=prime-radiant-cadence-scheduler
+Environment=PRIMERADIANT_SOUP_CADENCE_CADENCE=active_story_transform_detect_link_15m
+Environment=PRIMERADIANT_SOUP_CADENCE_LIMIT=8
+ExecStart=%h/src/primeradiant/storage-harness/scripts/r1/run_soup_cadence_once.sh
