@@ -57,16 +57,39 @@ This RB1 inventory is part of the T1275 artifact parity boundary: product proof
 must name the active runner, invoked source tree, marker SHA, service identity,
 and runtime DB/API target. A source checkout SHA alone is not deploy proof.
 
-## RB1A Recurring Soup Cadence One-Shot
+## RB1A Recurring Soup Cadence Scheduler
 
 The recurring soup cadence runner is a one-shot command over the already-admitted
 Prime Radiant soup DB. It is not source ingest, source fetch, cursor replay, or a
-service installer. Do not add or modify systemd timers, cron, launchd, unit
-files, or environment files from this section unless a separate reviewed deploy
-ticket explicitly authorizes that exact scheduler change.
+News/Reporter projection backfill. T1589 is the reviewed source-owned scheduler
+ticket for installing this cadence as a EURISKO user-systemd timer.
+
+The scheduler shape is:
+
+- User systemd service: `primeradiant-soup-cadence.service`.
+- User systemd timer: `primeradiant-soup-cadence.timer`.
+- Source templates:
+  `storage-harness/deploy/eurisko/primeradiant-soup-cadence.service` and
+  `storage-harness/deploy/eurisko/primeradiant-soup-cadence.timer`.
+- Command wrapper:
+  `storage-harness/scripts/r1/run_soup_cadence_once.sh`.
+- Frequency: `OnBootSec=10min`, then `OnUnitActiveSec=15min` with
+  `Persistent=true`.
+- Target DB/env: the same served soup API env file and
+  `PRIMERADIANT_SOUP_API_SOUP_DB`/`PRIMERADIANT_SOUP_API_TENANT` values used by
+  `primeradiant-soup-api.service`.
+- Cadence: `active_story_transform_detect_link_15m`.
+- Limit: `8`.
+- Actor: `prime-radiant-cadence-scheduler`.
+- Logs and failures: the service is `Type=oneshot`; stdout/stderr and Mix
+  failures are captured by the user journal for
+  `primeradiant-soup-cadence.service`. A failed pass does not retry in a tight
+  loop; the next timer activation runs the next bounded pass.
+- Boot/autostart behavior: enabling the timer installs persistence through
+  `timers.target`; the service itself remains a one-shot and is not enabled.
 
 After a reviewed cadence-capable source deploy, an operator may run one bounded
-pass from the active staged source tree:
+manual proof pass from the active staged source tree:
 
 ```sh
 ssh -i /Users/mike/.ssh/id_ed25519_clu clu@eurisko \
@@ -79,7 +102,7 @@ ssh -i /Users/mike/.ssh/id_ed25519_clu clu@eurisko \
      --soup-db "$PRIMERADIANT_SOUP_API_SOUP_DB" \
      --tenant "$PRIMERADIANT_SOUP_API_TENANT" \
      --actor flynn \
-     --cadence hourly_story_card_synthesis \
+     --cadence active_story_transform_detect_link_15m \
      --limit 8'
 ```
 
@@ -88,11 +111,45 @@ Expected proof from a conforming pass:
 - `source_admission_performed` is `false`.
 - `source_behavior` is `recurring_cadence_over_admitted_soup`.
 - New story-card rows, if any, carry refresh reason
-  `story_card_hourly_synthesis`, agent run provenance, packet hash,
+  `active_story_recurring_15m`, agent run provenance, packet hash,
   prompt/config hash, output hash, model, model route, producer kind, and
   decision source.
 - Runtime model route remains Gibson/Qwen unless a source-of-truth spec
   explicitly authorizes another product soup-agent route.
+- The pass must not invoke `primeradiant.soup_story_backfill_once`, write
+  `source_kind: admitted-soup-story-backfill`, or perform News/Reporter
+  `news-morning`, Magazine readiness, ranking, fallback, or presentation
+  projection backfills.
+
+Approved T1589 scheduler install after the source deploy has been promoted and
+built:
+
+```sh
+ssh -i /Users/mike/.ssh/id_ed25519_clu clu@eurisko \
+  'mkdir -p /home/clu/.config/systemd/user &&
+   cp /home/clu/src/primeradiant/storage-harness/deploy/eurisko/primeradiant-soup-cadence.service \
+      /home/clu/.config/systemd/user/primeradiant-soup-cadence.service &&
+   cp /home/clu/src/primeradiant/storage-harness/deploy/eurisko/primeradiant-soup-cadence.timer \
+      /home/clu/.config/systemd/user/primeradiant-soup-cadence.timer &&
+   systemctl --user daemon-reload &&
+   systemctl --user enable --now primeradiant-soup-cadence.timer &&
+   systemctl --user list-timers primeradiant-soup-cadence.timer --no-pager &&
+   systemctl --user show primeradiant-soup-cadence.timer \
+     -p Id -p FragmentPath -p Unit -p ActiveState -p SubState --no-pager'
+```
+
+Post-install scheduler proof:
+
+```sh
+ssh -i /Users/mike/.ssh/id_ed25519_clu clu@eurisko \
+  'systemctl --user start primeradiant-soup-cadence.service &&
+   journalctl --user -u primeradiant-soup-cadence.service -n 80 --no-pager'
+```
+
+The journal proof must include the JSON report from
+`mix primeradiant.soup_cadence_once` and the conforming-pass fields above. Do
+not run blind story-card, Magazine readiness, News/Reporter projection, or
+`primeradiant.soup_story_backfill_once` jobs as part of this scheduler install.
 
 ## RB2 Copy, Build, And Release Steps
 
