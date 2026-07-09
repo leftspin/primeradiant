@@ -57,9 +57,12 @@ defmodule Primeradiant.Soup.Router do
   defp ack(conn) do
     conn
     |> authorize()
-    |> respond(fn state, assigns ->
-      Soup.ack(state, conn.body_params, ack_log_path: assigns.soup_ack_log_path)
-    end, :ack)
+    |> respond(
+      fn state, assigns ->
+        Soup.ack(state, conn.body_params, ack_log_path: assigns.soup_ack_log_path)
+      end,
+      :ack
+    )
   end
 
   defp respond(%Plug.Conn{halted: true} = conn, _fun, _projection), do: conn
