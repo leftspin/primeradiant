@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>T1618 — Prime Radiant Spirit/Code Ecology Recon</title>
+<style>
+:root {
+  --bg: #ffffff; --fg: #1a1c20; --muted: #5b6470; --border: #d8dde4;
+  --accent: #0d5fa8; --card: #f5f7fa; --warn-bg: #fdf3e0; --warn-border: #d99a2b;
+  --crit: #b3372f; --high: #c06a13; --med: #8a7a12; --low: #3c7a3c;
+  --tag-bg: #e6eef7; --code-bg: #eef1f5;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14161a; --fg: #e4e7eb; --muted: #9aa4b0; --border: #333a44;
+    --accent: #6fb3ec; --card: #1c2027; --warn-bg: #2b2416; --warn-border: #b5822a;
+    --crit: #ef8a80; --high: #eda05a; --med: #d8c356; --low: #86c586;
+    --tag-bg: #24303e; --code-bg: #242932;
+  }
+}
+html { color-scheme: light dark; }
+body { margin: 0 auto; max-width: 62rem; padding: 2rem 1.25rem 5rem; background: var(--bg);
+  color: var(--fg); font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+h1 { font-size: 1.7rem; line-height: 1.25; margin: 0 0 .25rem; }
+h2 { font-size: 1.25rem; margin: 2.4rem 0 .6rem; padding-bottom: .25rem; border-bottom: 1px solid var(--border); }
+h3 { font-size: 1.05rem; margin: 1.4rem 0 .4rem; }
+p, li { max-width: 60rem; }
+code { background: var(--code-bg); padding: .1em .35em; border-radius: 4px; font-size: .87em;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.meta { color: var(--muted); font-size: .9rem; margin-bottom: 1.5rem; }
+.spirit { background: var(--card); border-left: 4px solid var(--accent); padding: .9rem 1.1rem;
+  border-radius: 0 8px 8px 0; font-size: 1.12rem; font-style: italic; margin: 1rem 0; }
+.callout { background: var(--warn-bg); border: 1px solid var(--warn-border); border-radius: 8px;
+  padding: .8rem 1rem; margin: 1rem 0; }
+dl.ids dt { font-weight: 650; margin-top: .8rem; color: var(--accent); }
+dl.ids dd { margin: .15rem 0 0 0; padding-left: 0; }
+table { border-collapse: collapse; width: 100%; font-size: .9rem; margin: .8rem 0; }
+.tablewrap { overflow-x: auto; }
+th, td { border: 1px solid var(--border); padding: .45rem .6rem; text-align: left; vertical-align: top; }
+th { background: var(--card); }
+.tag { display: inline-block; background: var(--tag-bg); color: var(--accent); border-radius: 999px;
+  padding: .05rem .6rem; font-size: .75rem; font-weight: 600; margin-right: .35rem; white-space: nowrap; }
+.sev { font-weight: 700; }
+.sev-crit { color: var(--crit); } .sev-high { color: var(--high); }
+.sev-med { color: var(--med); } .sev-low { color: var(--low); }
+.idref { font-weight: 650; color: var(--accent); }
+footer { margin-top: 3rem; color: var(--muted); font-size: .85rem; border-top: 1px solid var(--border); padding-top: 1rem; }
+</style>
+</head>
+<body>
+
+<h1>T1618 — Prime Radiant Spirit/Code Ecology Recon</h1>
+<p class="meta">Janus ticket <strong>T1618</strong> · branch <code>primeradiant-spirit-ecology-recon</code> · recon date 2026-07-09 · produced on eezo by the T1618 Claude/Fable recon session. Every requirement, finding, and recommendation carries a stable ID (S/B/D/T/C/G/R/N) for citation in follow-up review.</p>
+
+<h2 id="spirit">1. Spirit</h2>
+<div class="spirit" id="S1"><span class="idref">S1.</span> Prime Radiant is an ecology of agents making sense of a soup of items dumped into it from many sources.</div>
+<p>Decomposition of S1 into testable clauses (all later gaps cite these):</p>
+<dl class="ids">
+<dt id="S2">S2 — "an ecology of agents"</dt><dd>Multiple coexisting agent species, autonomous within bounds, coordinating indirectly through the shared substrate — with ecological dynamics: activity, budgets, decay, quarantine/composting, homeostasis. Not a single batch pipeline.</dd>
+<dt id="S3">S3 — "making sense"</dt><dd>Sense-making (story identity, meaning, linking, contradiction, revision) is the product. Conclusions are provisional, revisable, evidence-backed, and provenance-stamped.</dd>
+<dt id="S4">S4 — "a soup of items"</dt><dd>A permissive, heterogeneous, shared substrate. Items are admitted as evidence; structure is earned downstream, never required at the door.</dd>
+<dt id="S5">S5 — "dumped into it"</dt><dd>Admission is cheap, push-shaped, and unconditional on meaning. The soup does not gatekeep on understanding; sources do not decide story meaning.</dd>
+<dt id="S6">S6 — "from many sources"</dt><dd>Source plurality is first-class: per-source identity, provenance, and health. One stalled source must be visible and must not mask the others.</dd>
+</dl>
+
+<h2 id="brainstorm">2. Brainstorm — what the spirit implies (written before reading code)</h2>
+<p>These were derived from S1 alone, per the ticket instruction not to infer product truth from the current implementation.</p>
+<dl class="ids">
+<dt id="B1">B1 · Product shape</dt><dd>The soup is a permissive intake pool: admission must be cheap and schema-light, never blocking on downstream understanding.</dd>
+<dt id="B2">B2 · Product shape</dt><dd>"Many sources" demands per-source identity, per-source health, per-source provenance as first-class axes.</dd>
+<dt id="B3">B3 · Product shape</dt><dd>Sense-making output is emergent, revisable structure (stories, claims, relationships, evidence) — never one-shot ETL output.</dd>
+<dt id="B4">B4 · Product shape</dt><dd>Ecology implies lifecycle: birth (admission), growth (linking/enrichment), decay (staleness), composting (cleanup/quarantine), homeostasis (health). Deletion is rare; state transitions are the norm.</dd>
+<dt id="B5">B5 · Architecture</dt><dd>Blackboard/stigmergic architecture: agents coordinate through what they read/write on the soup, not an orchestrator call-graph. Adding an agent species should require no changes to other agents.</dd>
+<dt id="B6">B6 · Architecture</dt><dd>Every agent output is a provenance-stamped annotation; raw items are never destroyed by interpretation (effectively event-sourced).</dd>
+<dt id="B7">B7 · Architecture</dt><dd>Substrate/product boundary: PR exposes neutral truth, material, health, query capability; consumers own projections, thresholds, readiness, fallback. PR must not branch on consumer needs.</dd>
+<dt id="B8">B8 · Code ownership</dt><dd>Each agent species is an independently owned, independently testable unit with a stable soup contract (read query + write schema). Shared code is substrate plumbing, not agent logic.</dd>
+<dt id="B9">B9 · Code ownership</dt><dd>Prompts are code: versioned, evaluated against fixtures, tied to agent-run provenance.</dd>
+<dt id="B10">B10 · Runtime topology</dt><dd>An ecology is resident and continuous: long-lived supervised processes reacting to soup deltas, with timers only as heartbeat/backstop. If everything only runs when a timer fires, it is a batch pipeline wearing an ecology costume.</dd>
+<dt id="B11">B11 · Runtime topology</dt><dd>Population control: concurrency limits, per-agent budgets (LLM spend, rate limits), backpressure when inflow exceeds digestion capacity.</dd>
+<dt id="B12">B12 · Data model</dt><dd>Core nouns: source, source-event, soup item, admission record, agent run, annotation/claim, story, relationship, evidence link, quarantine record — all linked by provenance.</dd>
+<dt id="B13">B13 · Data model</dt><dd>Story identity is a sense-making conclusion (revisable), not an ingestion-time key.</dd>
+<dt id="B14">B14 · Observability</dt><dd>Health per ecological function, with distinct signals for "upstream stopped delivering" vs "agents stopped digesting" vs "the timer stopped firing." These must never be conflated.</dd>
+<dt id="B15">B15 · Observability</dt><dd>The substrate should be queryable about its own health, so operators and consumers ask the soup, not the logs.</dd>
+<dt id="B16">B16 · Failure handling</dt><dd>Graceful degradation: one sick source/agent/story never halts the rest; failures produce retry/quarantine state on the item, not pipeline abort; reprocessing is idempotent.</dd>
+<dt id="B17">B17 · Failure handling</dt><dd>Poison items are composted: quarantined with reason and provenance, inspectable, re-admittable after repair.</dd>
+<dt id="B18">B18 · Agent behavior</dt><dd>Agents are delta-driven, bounded, idempotent, provenance-stamping, self-reporting, and contract-conformant (structured outputs validated at the boundary).</dd>
+<dt id="B19">B19 · Agent behavior</dt><dd>Agents may disagree; the soup holds competing interpretations with evidence, and later adjudication resolves them. Disagreement is data, not error.</dd>
+</dl>
+
+<h2 id="docs">3. Source Docs Read</h2>
+<p>All 13 assigned docs were read in full, plus three additional live docs found beside them. Key spirit-relevant truth per doc:</p>
+<dl class="ids">
+<dt id="D1">D1 — whitepaper/primeradiant-architecture-whitepaper.html</dt><dd>Defines the three-layer vision: <em>soup</em> (semantically rich, possibly-cyclic graph with legitimate islands), <em>swarm</em> ("many narrower agents with different jobs," nine named roles), <em>authoring system</em>, plus an agentic "spelunking" API. Named edges only ("an edge should not merely say 'related'"), relationships carry provenance, merge/split is non-destructive, ranking is emergent, staleness and seen-state are first-class. Explicitly rejects "memory store," feed reader, and dedupe-engine framings.</dd>
+<dt id="D2">D2 — architecture/primeradiant-system-architecture.html</dt><dd>Implementation-ready commitments: Elixir/Phoenix with "OTP is not an implementation detail… the natural runtime model for supervised swarm agents"; PostgreSQL 17 + pgvector as system of record; Oban queue lanes (<code>ingestion, extraction, swarm, arbitration, projection, authoring, maintenance</code>) as backpressure vocabulary; eleven named seams S1–S11 (only the Soup Core Write Seam commits; all agents propose); 16-agent catalog with prompt kernels; observability doctrine "Agents without traces are bugs."</dd>
+<dt id="D3">D3 — architecture/primeradiant-agent-prompt-pack.html</dt><dd>Prompt contracts per agent with shared output envelope, abstention semantics ("Prefer abstention over weak invention"), risk-flag vocabulary, and a prompt-registry schema (versioned prompts with hashes and eval sets).</dd>
+<dt id="D4">D4 — architecture/primeradiant-elixir-contracts.html</dt><dd>"Agent output is hostile until validated." Typed graph ops only; forbidden ops <code>delete_story, merge_story_destructive, rewrite_seen_state, commit_without_evidence, generic_related_edge</code>; seven ordered validation gates; context API signatures for Soup/Proposals/Arbitration/Authoring.</dd>
+<dt id="D5">D5 — architecture/primeradiant-elixir-implementation-blueprint.html</dt><dd>Always-on supervision tree (Repo, PubSub, Oban, ModelClientSupervisor, AdapterSupervisor, MCP server); non-negotiable gates: no agent writes committed state directly, everything validates through JSON Schema + Ecto, staleness is state not timestamp, "the first code should be a story-semantics proof harness, not a product app."</dd>
+<dt id="D6">D6 — architecture/primeradiant-phoenix-module-map.html</dt><dd>"Contexts own product truth"; workers orchestrate only; agents cannot call commit functions; the golden-corpus end-to-end test is the product guardrail ("if it passes only through shortcuts or seeded trusted state, the implementation is cheating").</dd>
+<dt id="D7">D7 — architecture/t1178-live-gibson-ecology-correction.md</dt><dd>Flynn's ecology invariant: <em>live configured agents must run model inference over soup contents and produce candidate mutations through mediated writes</em> — recorded transcripts do not count. Establishes <code>Primeradiant.Mediation.WriteGate</code> as mechanical containment (schema/evidence/permission/visibility/atomicity), explicitly <em>not</em> truth arbitration; live route is Gibson/Qwen.</dd>
+<dt id="D8">D8 — product/primeradiant-implementation-roadmap.html</dt><dd>Seven phases, each preserving the same proof: fragments → story state → user-relative deltas → evidence-backed proposals → grounded output. Real connectors deliberately last ("Real connectors create noise before the story-state loop is proven").</dd>
+<dt id="D9">D9 — product/primeradiant-mvp-slice.html</dt><dd>Hybrid slice (public story + private thread + user watch + stale/no-op case) proving cross-source story identity, user-relative novelty, evidence-backed narration, staleness. All graph-changing agents propose, never commit.</dd>
+<dt id="D10">D10 — product/primeradiant-fixture-corpus-plan.html</dt><dd>Golden corpus is "a product test, not demo data" — designed so generic summaries, destructive merges, fake novelty, missing seen-state, and ungrounded narration fail. Fixtures must flow through the same production paths as real data.</dd>
+<dt id="D11">D11 — specs/primeradiant-real-ingestion-story-identity.html</dt><dd>Real admission seam: evidence-only, label-free (<code>fixture_id</code> and all <code>expected_*</code>/<code>story_hint</code> fields rejected), content hash is dedupe fingerprint not story identity; seven decision types (attach/split/part_of/conflict/no_op/color/stale) with named-edge proposal obligations; "topic overlap alone is never enough for attach."</dd>
+<dt id="D12">D12 — specs/primeradiant-production-extractor-quality.html</dt><dd>T321 extractor contract: span-backed claims with polarity/modality/attribution/time-scope/uncertainty; refusal is a successful product behavior; numeric quality gates (claim precision ≥ 0.85, false-structural-fact rate &lt; 0.05); framing feeds <code>adds_color</code>, never material deltas.</dd>
+<dt id="D13">D13 — specs/primeradiant-storage-schema-hardening.html</dt><dd>"Postgres is the v1 system of record." 18 canonical tables; DB-level enforcement (graph-commit boundary trigger, <code>edge_type &lt;&gt; 'related'</code> check, verified-output-before-seen-state trigger); <code>Arbitration.commit/2</code> is the only production path allowed to create graph commits.</dd>
+<dt id="D14">D14 — specs/primeradiant-eurisko-soup-api-deploy-runbook.md</dt><dd>Deployed truth: EURISKO user-systemd <code>primeradiant-soup-api.service</code> running <code>mix primeradiant.soup_api</code> on port 4084 over SQLite <code>soup.sqlite3</code>; cadence timer <code>primeradiant-soup-cadence.timer</code> (15 min, oneshot, limit 8, Gibson/Qwen route); cadence is meaning-work over admitted soup and must not perform source ingest or News/Reporter projection backfills.</dd>
+<dt id="D15">D15 — specs/primeradiant-graph-admission-live-repair-runbook.md + specs/primeradiant-t1430-fresh-news-admission-approval-runbook.md</dt><dd>Boundary doctrine: "the DB/schema/write path validates form… ecology/story agents own semantic article-to-story judgment" — no second DB-level semantic judge; repair is quarantine + replay through the repaired ecology loop, never hand-edited rows. T1430 runbook documents the live ingestion pipe (TARS launchd watcher <code>ai.primeradiant.t328-daemon-db-watcher</code> reading the Subspace daemon SQLite read-only → committed-source-item event packages → EURISKO soup DB) and its break: launchd <code>authorization denied</code> on the Microverse source DB, cursor stuck at <code>2026-06-18 18:23:59|7765</code>. Repair is approval-gated and not yet executed.</dd>
+<dt id="D16">D16 — reporter/docs/t1303-prime-radiant-substrate-contract.md</dt><dd>Consumer contract: PR owns the substrate read/ack surface (<code>/api/v1/soup/ready|feed|delta|ack</code>) and story-card <em>meaning</em> fields; Reporter owns projection, layout, ranking, readiness, ack. Ack never advances PR seen-state. Ground truth (2026-06-16): live rows showed only <code>supports</code>/<code>duplicates</code> edges; live agent types <code>story_identity</code>, <code>meaning_update</code>, <code>flynn_seen_delta</code>; no topic-salience/story-card-version storage yet for several requested fields.</dd>
+</dl>
+<div class="callout"><strong>Doc-family tension worth naming (cited later as G5/G13):</strong> the D2/D5/D13 family commits to Phoenix + Postgres + Oban + supervision trees, while the deployed truth (D14/D16) is Plug + SQLite + systemd oneshots with no OTP application at all. The specs also describe a Proposals→Arbitration commit path that the deployed write path does not actually route through.</div>
+
+<h2 id="tickets">4. Ticket History Read</h2>
+<p>All 24 assigned tickets were read via the constrained <code>janus-ticket-context --ssh-host tars</code> route. <strong>No API gap: zero read failures</strong> (most tickets served as DB-synthesized context; T328/T1142 markdown headers carry stale status fields — canonical DB state used throughout). Thread-level findings:</p>
+<dl class="ids">
+<dt id="T1">T1 — Ingestion admits evidence; agents own judgment (T328, T1223 — both Verified)</dt><dd>Foundational rulings: source ingest may only admit refs/hashes/spans/provenance; story identity/meaning must be produced by soup agents, not ingest prequalification. T328 also records Flynn's "No backstop — I want the real system" rejection of polling, forcing event-driven source delivery.</dd>
+<dt id="T2">T2 — Cadence is meaning-work, never re-ingestion (T1352 Verified, T1589 Verified)</dt><dd>Recurring cadence transforms/links/synthesizes over already-admitted soup (<code>source_admission_performed=false</code>). T1589 installed the production systemd timer and survived a user-systemd manager reexec.</dd>
+<dt id="T3">T3 — Substrate/product boundary repeatedly litigated and settled (T1299/T1301/T1303/T1304/T1311/T1312/T1404/T1420/T1503/T1514)</dt><dd>PR owns soup truth/material/feed/query; News/Reporter owns projection, cards, ranking/billing, readiness, fallback, presentation. T1503 was <em>aborted specifically because</em> a PR-owned "Magazine-ready card" health gate violates the boundary; T1514 split monitoring into neutral substrate freshness (PR) vs artifact readiness (News). Projection incompleteness never invalidates soup story existence (T1312/T1420).</dd>
+<dt id="T4">T4 — Data-honesty chain (T1420 Verifiable → T1421 Verifiable → T1501 Verifiable → T1404 Blocked)</dt><dd>Validate model output before durable save → quarantine unfixable story-card records (65 quarantine rows; apply is operator-approved, dry-run hash-locked) → prompt evals on a fixed corpus repaired synthesis quality → backfill stays Blocked until a concrete finite definition exists. Quarantine-not-delete is established practice.</dd>
+<dt id="T5">T5 — Upstream source delivery is a distinct open incident (T1430 Verifiable, T1449 Blocked, T1436 Verifiable)</dt><dd>The served soup stopped admitting fresh news after 2026-06-18 with no loud alert (watcher launchd authorization break); a story-agent proof path fails on a durable-soup FK constraint during persist (T1449); Google News aggregator identity fixed in source but unproven live pending T1449. None of this is covered by T1589's cadence health.</dd>
+<dt id="T6">T6 — Deploy integrity invariant (T1275 Deployable)</dt><dd>Deploy proof must show the active runner is the reviewed repo artifact (runner-artifact parity); a forbidden TARS checkout was removed. Marker SHA alone is not deploy proof.</dd>
+<dt id="T7">T7 — The agentic-meaning proof was corrected once already (T328 correction, T1142 Aborted, D7)</dt><dd>Product truth explicitly distinguishes substrate scaffolding (deterministic transformation code) from the "soup-swimming agent runtime," and recorded transcripts were disallowed as ecology evidence. The pressure to prove a <em>live</em> ecology is longstanding and still not fully discharged.</dd>
+<dt id="T8">T8 — Second real source exists but is one-off (T1308 Verifiable)</dt><dd>Uveal research inputs enter through the same ingestion seam as news — proof that the seam generalizes — but via a manual importer, not a persistent source adapter.</dd>
+</dl>
+<div class="tablewrap"><table>
+<tr><th>Janus ticket</th><th>State</th><th>One-line role</th></tr>
+<tr><td>T328</td><td>Verified</td><td>Daemon-news replay MVP; R1 topology; "no backstop" ruling</td></tr>
+<tr><td>T1142</td><td>Aborted</td><td>Real source event → story delta slice (spec only)</td></tr>
+<tr><td>T1223</td><td>Verified</td><td>Ingest admits evidence; agents own judgment</td></tr>
+<tr><td>T1275</td><td>Deployable</td><td>Runner-artifact parity deploy invariant</td></tr>
+<tr><td>T1299</td><td>Verifiable</td><td>Reporter Gazette replaces vr-ai-news cron (parent)</td></tr>
+<tr><td>T1301</td><td>Verifiable</td><td>Reporter-owned News Projection layer + billing invariant</td></tr>
+<tr><td>T1303</td><td>Code Review Done</td><td>Canonical PR↔Reporter substrate contract</td></tr>
+<tr><td>T1304</td><td>Verified</td><td>Supported soup API surface on EURISKO :4084</td></tr>
+<tr><td>T1308</td><td>Verifiable</td><td>Uveal research as second real soup source</td></tr>
+<tr><td>T1311</td><td>Verified</td><td>Feed exposes source/material fields; boundary codified</td></tr>
+<tr><td>T1312</td><td>Bounce Back</td><td>Living story material in soup; repair rides T1501/T1421</td></tr>
+<tr><td>T1352</td><td>Verified</td><td>Recurring cadence model (meaning-work only)</td></tr>
+<tr><td>T1404</td><td>Blocked</td><td>One-time backfill parked until concretely defined</td></tr>
+<tr><td>T1420</td><td>Verifiable</td><td>Validate story-card model output before durable save</td></tr>
+<tr><td>T1421</td><td>Verifiable</td><td>Quarantine unfixable story-card records (65 rows)</td></tr>
+<tr><td>T1430</td><td>Verifiable</td><td>Fresh-news admission stopped without loud alert</td></tr>
+<tr><td>T1436</td><td>Verifiable</td><td>Google News aggregator ≠ publisher identity</td></tr>
+<tr><td>T1448</td><td>Verifiable</td><td>Freshness alert follows served readiness contract</td></tr>
+<tr><td>T1449</td><td>Blocked</td><td>Story-agent proof path FK failure on durable persist</td></tr>
+<tr><td>T1501</td><td>Verifiable</td><td>Story-card prompt evals; synthesis repair live</td></tr>
+<tr><td>T1503</td><td>Aborted</td><td>Aborted: PR-owned Magazine-ready gate violates boundary</td></tr>
+<tr><td>T1514</td><td>Verifiable</td><td>Monitoring split: substrate freshness vs artifact readiness</td></tr>
+<tr><td>T1589</td><td>Verified</td><td>Recurring soup cadence scheduler installed, reexec-proof</td></tr>
+<tr><td>T1618</td><td>In Progress</td><td>This recon</td></tr>
+</table></div>
+
+<h2 id="code">5. Current Code Shape</h2>
+<p>The repo holds the spec docs plus two Elixir apps. Findings (file:line evidence available in each):</p>
+<dl class="ids">
+<dt id="C1">C1 — No OTP application anywhere</dt><dd>Neither app declares a <code>mod:</code> in <code>application/0</code> (<code>proof-harness/mix.exs:14-18</code>, <code>storage-harness/mix.exs:15-19</code>); zero <code>GenServer</code>/<code>Supervisor</code>/<code>spawn</code>/<code>Task</code> usage across both <code>lib/</code> trees. There are no supervised processes, no PubSub, no Oban.</dd>
+<dt id="C2">C2 — The production "agent ecology" is a sequential in-process chain</dt><dd><code>LiveStoryAgentLoop.run_for_admission</code> (<code>storage-harness/.../live_story_agent_loop.ex:335-467</code>) runs story_identity → meaning_update → story_synthesis as plain function calls per admitted input inside one process. Agents never observe the soup independently, never run concurrently, and coordinate only via the hardcoded next-step call.</dd>
+<dt id="C3">C3 — Trigger/lease/cascade-budget scheduling exists only as proof fiction</dt><dd><code>Primeradiant.Agentic.EcologyRuntime</code> fabricates trigger rows, lease records, suppressions, and failure taxonomies as literal maps with frozen timestamps (<code>@proof_now = "2026-06-04T20:00:00Z"</code>, <code>ecology_runtime.ex:10-11, 206-281, 294-338, 677-735</code>) and self-audits against its own construction. Nothing in storage-harness implements triggers or leases.</dd>
+<dt id="C4">C4 — The only recurring runtime is a 15-minute systemd oneshot, and its default synthesis is not an agent</dt><dd>Cadence mode without a custom adapter replaces story synthesis with deterministic packet-completion or refusal — <code>producer_kind: "deterministic_product_logic"</code>, route <code>internal://story-synthesis/grounded-cadence-packet</code> (<code>live_story_agent_loop.ex:219-261</code>). Live model inference happens only on event-driven ingest with <code>--story-agents</code> (off by default) or backfill.</dd>
+<dt id="C5">C5 — The soup is load-mutate-rewrite of a SQLite file via the sqlite3 CLI</dt><dd>Whole tenant state loads into one struct, mutates in memory, and re-persists by shelling out (<code>durable_soup_db.ex:30-101, 1242-1256</code>). Concurrency safety is a single abort-on-revision-mismatch guard. The Ecto Postgres <code>Repo</code> (5 lines) and the hardened Postgres migration with its enforcement triggers are test artifacts unused at runtime.</dd>
+<dt id="C6">C6 — Production writes are self-approved</dt><dd>The live loop inserts proposals pre-set <code>status: "accepted"</code>, ops pre-set <code>"committed"</code>, and authors its own decision row (<code>actor_type: "agentic_write_gate"</code>, <code>live_story_agent_loop.ex:1470-1650</code>). The proof-harness <code>Mediation.WriteGate</code> validation (<code>write_gate.ex:380-518</code>) is not used by the production path; the Postgres commit-boundary trigger that would enforce it doesn't run on SQLite.</dd>
+<dt id="C7">C7 — One model, hardcoded endpoint, shell-out transport</dt><dd>All live agents call one Qwen model at hardcoded <code>http://gibson:8080</code> via <code>System.cmd("curl", …)</code> with raise-on-failure (<code>live_gibson.ex:4-5, 30-48</code>). No per-agent model routing despite registry rows claiming <code>model_route</code>; no retry/backoff at transport level; a transport failure crashes the task.</dd>
+<dt id="C8">C8 — One real source family live</dt><dd>Production adapters: daemon-news event envelopes (single message type <code>swarm.channel.news.report.v0</code>) plus a one-off uveal-research importer. No persistent emitter/watcher is installed (<code>daemon_news_event.ex:82-83</code>); the r1 scripts are explicitly one-shot/manual. Argus appears only as a test-fixture string.</dd>
+<dt id="C9">C9 — Substrate branches on a specific consumer</dt><dd><code>Primeradiant.Soup</code> hardcodes <code>consumer must be reporter</code> and projections <code>story_cards</code>/<code>news-morning</code> (<code>soup.ex:114-137</code>) — the substrate names and rejects consumers/projections rather than treating them as dumb filter inputs.</dd>
+<dt id="C10">C10 — Two parallel, divergent soup implementations</dt><dd>proof-harness has its own store/normalizer/classifier/write-gate over fixtures (with fixture-phrase keyword rules, <code>normalizer.ex:54-148</code>); storage-harness re-implements identity/meaning/synthesis differently (live path reduces the 13 specced op types to essentially <code>record_event</code>-shaped writes).</dd>
+<dt id="C11">C11 — Observability is thin but health semantics are good</dt><dd>No <code>Logger</code>, no telemetry, no metrics; audit events live in memory; task output is one JSON blob via <code>Mix.shell().info</code>. Credits: <code>/ready</code> exposes freshness + synthesis-health blockers, and <code>/delta</code> has explicit cursor-gap/epoch semantics instead of silent loss (<code>soup.ex:9-228</code>).</dd>
+<dt id="C12">C12 — Failure handling is partial</dt><dd>Story synthesis gets one schema-repair retry and one coverage-repair retry, then a typed refusal card with <code>quarantine_recommendation</code> (<code>live_story_agent_loop.ex:596-830</code>) — good composting. But transport errors raise, and there is no backoff, no dead-letter path, no per-item retry state.</dd>
+<dt id="C13">C13 — Quarantine is real and well-built</dt><dd>T1421 plan/apply quarantines rather than deletes (full original-row JSON preserved, plan hash verified twice, operator approval required, <code>live_data_cleanup_apply.ex:19-231</code>), and <code>Primeradiant.Soup</code> excludes quarantined stories from served projections (<code>soup.ex:585-616</code>). This matches B17 exactly.</dd>
+<dt id="C14">C14 — Contract discipline at admission is real</dt><dd><code>Ingestion.Admission</code> rejects trusted labels (<code>fixture_id</code>, <code>story_hint</code>, <code>expected_*</code>), enforces ACL, dedupes by external-id and content hash (<code>admission.ex:8, 117-129</code>) — matching D11. The deterministic T321 extractor is span-backed and refusal-capable, though regex-based rather than model-based.</dd>
+</dl>
+
+<h2 id="gaps">6. Gap Matrix</h2>
+<div class="callout" id="context-reconciliation"><strong>Standing context, reconciled (do not conflate):</strong> T1589 is Verified — the recurring cadence over <em>already-admitted</em> soup is healthy and survived a systemd manager reexec. Separately, upstream Argus/Subspace <em>source-row delivery</em> is an unresolved incident: the TARS Subspace daemon DB was capped at event 14733 / 2026-07-07T17:57:45Z with zero newer rows at the latest CLU checks, and the TARS watcher cursor has been stuck since 2026-06-18 on a launchd authorization break (D15, T5). Cadence health says nothing about fresh ingestion health; the soup is currently digesting old food. G6/G7 below track this.</div>
+<div class="tablewrap"><table>
+<tr><th>ID</th><th>Gap</th><th>Spirit</th><th>Spec/ticket truth</th><th>Code reality</th><th>Severity</th></tr>
+<tr id="G1"><td class="idref">G1</td><td>No resident agent runtime — the "ecology" is a batch pipeline. No supervised processes, no concurrency, no independent agent observation of the soup.</td><td>S2, B5, B10</td><td>D2/D5 (OTP supervision, Oban lanes), D7 (live ecology invariant)</td><td>C1, C2, C4</td><td class="sev sev-crit">critical</td></tr>
+<tr id="G2"><td class="idref">G2</td><td>Scheduling/trigger/lease machinery was "proven" with fabricated literal data, and never implemented in the production app.</td><td>S2, B10, B18</td><td>D7 (scheduler/trigger/lease named as established substrate)</td><td>C3</td><td class="sev sev-crit">critical</td></tr>
+<tr id="G3"><td class="idref">G3</td><td>Default cadence synthesis is deterministic product logic, not model inference — the recurring path contains no live agent judgment.</td><td>S2, S3</td><td>D7 (recorded/deterministic ≠ ecology evidence), D14 (Gibson/Qwen route)</td><td>C4</td><td class="sev sev-high">high</td></tr>
+<tr id="G4"><td class="idref">G4</td><td>Production write path self-approves: proposals born accepted, decisions authored by the writer. The propose→mediate→commit boundary exists in spec, Postgres triggers, and proof-harness — but not on the running path.</td><td>S3, B6, B18</td><td>D2 (S3/S4/S6 seams), D4, D13, D15 (no second semantic judge, but mechanical containment required)</td><td>C6</td><td class="sev sev-crit">critical</td></tr>
+<tr id="G5"><td class="idref">G5</td><td>System-of-record split: specs say Postgres 17 + enforcement triggers; runtime is SQLite rewritten wholesale through the sqlite3 CLI, so every DB-level invariant is unenforced where it matters.</td><td>S4, B6</td><td>D13</td><td>C5</td><td class="sev sev-high">high</td></tr>
+<tr id="G6"><td class="idref">G6</td><td>"Many sources" is one wired source family plus a manual one-off; no persistent emitter/watcher installed; upstream delivery has been broken at two layers (watcher auth since 2026-06-18; Subspace daemon rows capped 2026-07-07) — the soup is starving.</td><td>S5, S6, B1, B2</td><td>T1 ("no backstop" — event-driven required), T5, T8, D15</td><td>C8</td><td class="sev sev-crit">critical</td></tr>
+<tr id="G7"><td class="idref">G7</td><td>No per-source health in the substrate: nothing distinguishes "upstream stopped delivering" from "agents stopped digesting" from "timer stopped firing" as queryable substrate state; the T1430 loud-alert repair remains unexecuted.</td><td>S6, B14, B15</td><td>T5, D15, T1514's neutral-freshness split</td><td>C11</td><td class="sev sev-high">high</td></tr>
+<tr id="G8"><td class="idref">G8</td><td>Substrate hardcodes <code>consumer=reporter</code> and <code>news-morning</code>/<code>story_cards</code> — the soup names its consumer and their projection instead of treating them as dumb filters.</td><td>B7</td><td>T3 (boundary rulings), D16</td><td>C9</td><td class="sev sev-med">medium</td></tr>
+<tr id="G9"><td class="idref">G9</td><td>Two divergent soup implementations with duplicated, drifting semantics; fixture-tuned keyword normalizer encodes golden-corpus phrases.</td><td>S3, B8</td><td>D10 (fixtures flow through production paths), D11 (fixture-only paths isolated)</td><td>C10</td><td class="sev sev-med">medium</td></tr>
+<tr id="G10"><td class="idref">G10</td><td>Model layer: one hardcoded endpoint, curl shell-out, raise-on-failure, no per-role routing, no fallback despite T1420's fallback requirement.</td><td>B11, B16</td><td>D2 (provider-agnostic adapters), T4 (T1420 fallback)</td><td>C7</td><td class="sev sev-high">high</td></tr>
+<tr id="G11"><td class="idref">G11</td><td>Agent species and edge vocabulary mostly unrealized: 3 live agent types vs the specced 16-role swarm; live rows show only <code>supports</code>/<code>duplicates</code> of 7 edge types; no contradiction/staleness/connection agents in production.</td><td>S2, S3, B19</td><td>D1/D2 (swarm roster), D16 (ground truth)</td><td>C2, C10</td><td class="sev sev-high">high</td></tr>
+<tr id="G12"><td class="idref">G12</td><td>Observability: no logs/telemetry/metrics; "agents without traces are bugs" is unmet at runtime (hashes exist in rows, but nothing emits or aggregates them).</td><td>B14, B15</td><td>D2 (S11 audit/trace seam)</td><td>C11</td><td class="sev sev-med">medium</td></tr>
+<tr id="G13"><td class="idref">G13</td><td>Spec family describes a system (Phoenix/Postgres/Oban/MCP/LiveView/seen-state authoring) that materially diverges from deployed truth; no doc records which parts are superseded, so every future agent re-derives the delta.</td><td>—</td><td>D2/D5/D13 vs D14/D16</td><td>C1, C5</td><td class="sev sev-med">medium</td></tr>
+<tr id="G14"><td class="idref">G14</td><td>Failure handling stops at typed refusals: transport errors crash the run; no retry/backoff state per item, no dead-letter lane; a sick Gibson halts all sense-making rather than degrading it.</td><td>B16</td><td>D2 (queue lanes/backpressure)</td><td>C7, C12</td><td class="sev sev-high">high</td></tr>
+</table></div>
+<p>What already matches the spirit and should be preserved: evidence-only admission with label rejection (C14 ← T1, D11), quarantine-as-composting (C13 ← B17, T4), cursor-gap honesty in <code>/delta</code> (C11), cadence-as-meaning-work discipline (T2), and the substrate/product boundary case law (T3).</p>
+
+<h2 id="recs">7. Recommendations</h2>
+<p>Each carries its change type. R1–R4 are the spirit-critical core; the rest compound them.</p>
+<dl class="ids">
+<dt id="R1">R1 — Repair upstream source delivery and make source health substrate-visible <span class="tag">runtime topology change</span><span class="tag">observability change</span></dt>
+<dd>Execute the approved T1430 watcher-authorization repair, resolve the T1449 FK persist failure, and drive the Argus/Subspace daemon-row outage (capped 2026-07-07) as its own incident. Then add per-source freshness rows to substrate state (last event id/time per source, admission lag) served through the existing neutral health surface — so "upstream stopped" is a queryable soup fact, not a log archaeology exercise. An ecology with no food is not an ecology (G6, G7).</dd>
+<dt id="R2">R2 — Make storage-harness a real OTP application <span class="tag">architecture change</span><span class="tag">runtime topology change</span></dt>
+<dd>Add an Application module and supervision tree: a soup-DB owner process (single writer; today's revision-guard becomes transactional), the Plug endpoint as a supervised child (replacing <code>mix primeradiant.soup_api</code> + <code>Process.sleep(:infinity)</code>), and an agent supervisor. Run the release under the existing systemd unit unchanged. This is the smallest step that turns "scripts sharing a SQLite file" into a resident system and unlocks R3/R5 (G1, G5-adjacent).</dd>
+<dt id="R3">R3 — Implement the trigger/lease scheduler for real: resident, delta-driven agents <span class="tag">architecture change</span><span class="tag">code change</span></dt>
+<dd>Replace the EcologyRuntime proof fiction with production code: admission events and soup-change deltas enqueue bounded agent work; supervised workers take leases, respect cascade budgets, and record runs — with the 15-minute systemd timer demoted to heartbeat/backstop (its current cadence entrypoint becomes one trigger among several). Delta-driven waking is what makes agents an ecology rather than a cron job (G1, G2; honors T1's "no backstop" by keeping event-driven primary).</dd>
+<dt id="R4">R4 — Route production writes through real mediation <span class="tag">code change</span></dt>
+<dd>Stop inserting pre-accepted proposals. Port the proof-harness WriteGate checks (evidence refs, confidence, permissions, ACL visibility, allowed op/edge types) into storage-harness as the single commit path; proposals enter <code>pending</code> and a mediation step decides. Mechanical containment only — no DB-level semantic judging, per D15 (G4).</dd>
+<dt id="R5">R5 — Neutralize the substrate surface <span class="tag">code change</span></dt>
+<dd>Remove <code>consumer must be reporter</code> and the projection-name whitelist from <code>Primeradiant.Soup</code>; treat consumer/projection as opaque filter/scoping strings over substrate-owned material, and compute blockers only from substrate-owned health (completing T1514's direction) (G8).</dd>
+<dt id="R6">R6 — Restore live inference to the recurring path, with a hardened model client <span class="tag">code change</span></dt>
+<dd>Make cadence synthesis call the live route by default (deterministic completion demoted to explicit fallback with honest <code>producer_kind</code>); replace the curl shell-out with a supervised HTTP client with timeouts, bounded retry/backoff, and typed transport-refusal records instead of raises; config-driven per-role model routes with the T1420 fallback chain (G3, G10, G14).</dd>
+<dt id="R7">R7 — Grow the agent roster one species at a time through the same seam <span class="tag">code change</span><span class="tag">architecture change</span></dt>
+<dd>Next species by product value: a connection/linking agent (edges beyond <code>supports</code>/<code>duplicates</code>), a contradiction scout (populating <code>conflicts</code>/<code>contradicts</code>), and a staleness keeper (state transitions instead of timestamp-only freshness). Each is a bounded, delta-driven worker writing proposals through R4's gate — proving B5's claim that new species need no changes to existing ones (G11).</dd>
+<dt id="R8">R8 — Unify soup semantics into one library <span class="tag">code change</span></dt>
+<dd>Extract classification/op-building/mediation into a single module set used by both harnesses; quarantine the fixture-phrase Normalizer to fixture-only code paths as D11 already requires; make the golden corpus run through the production path per D10 (G9).</dd>
+<dt id="R9">R9 — Minimum ecology observability <span class="tag">observability change</span></dt>
+<dd>Add <code>Logger</code> + <code>:telemetry</code> events for admission, agent run start/stop/refusal, commit, quarantine, cadence pass, and source freshness; persist audit events instead of holding them in memory; emit the already-computed packet/prompt/output hashes. Target: the three failure classes in B14 are distinguishable from substrate queries alone (G12, G7).</dd>
+<dt id="R10">R10 — Decide the system-of-record question explicitly <span class="tag">architecture change</span><span class="tag">ticket/process change</span></dt>
+<dd>Either promote SQLite to spec truth (port the Postgres enforcement triggers to SQLite constraints/app-level gates and amend D13), or schedule the Postgres migration the specs assume. The current state — invariants enforced only in an unused test database — is the worst of both (G5).</dd>
+<dt id="R11">R11 — Reconcile the spec family with deployed truth <span class="tag">ticket/process change</span></dt>
+<dd>Add a short "deployed reality" addendum (or per-doc status banners) recording which D2/D5/D13 commitments are active, superseded, or deferred — the same pattern as D7's correction memo — so future implementation/review agents stop re-deriving the delta (G13).</dd>
+</dl>
+
+<h2 id="next">8. Prioritized Next Tickets</h2>
+<dl class="ids">
+<dt id="N1">N1 — Upstream source delivery incident: execute T1430 repair, unblock T1449, chase the Subspace daemon row cap</dt><dd><span class="tag">runtime topology</span>Implements R1. Highest priority: without fresh items every other improvement operates on stale soup. Includes per-source freshness exposure. Severity source: G6 (critical).</dd>
+<dt id="N2">N2 — Mediated production write path</dt><dd><span class="tag">code change</span>Implements R4. Integrity of committed soup truth; prerequisite for trusting everything agents produce. G4 (critical).</dd>
+<dt id="N3">N3 — OTP application + supervised soup service</dt><dd><span class="tag">architecture</span>Implements R2. Foundation for N4/N6; deployable behind the existing systemd unit with runner-artifact parity per T1275. G1 (critical).</dd>
+<dt id="N4">N4 — Resident delta-driven agent runtime (real triggers/leases/budgets)</dt><dd><span class="tag">architecture</span>Implements R3; discharges the D7 live-ecology invariant in production rather than proof. G1/G2 (critical).</dd>
+<dt id="N5">N5 — Substrate neutrality cleanup</dt><dd><span class="tag">code change</span>Implements R5. Small, sharply bounded, high boundary value given T3's case law. G8 (medium).</dd>
+<dt id="N6">N6 — Model client hardening + live cadence inference</dt><dd><span class="tag">code change</span>Implements R6. G3/G10/G14 (high).</dd>
+<dt id="N7">N7 — Ecology observability baseline</dt><dd><span class="tag">observability</span>Implements R9. G12/G7 (medium/high).</dd>
+<dt id="N8">N8 — System-of-record decision (SQLite hardening vs Postgres migration)</dt><dd><span class="tag">architecture/process</span>Implements R10. G5 (high) — decision ticket first, implementation after.</dd>
+<dt id="N9">N9 — Soup semantics unification + next agent species</dt><dd><span class="tag">code change</span>Implements R8 + R7. G9/G11 (medium/high); best done after N2–N4 so new species land on the mediated, resident substrate.</dd>
+<dt id="N10">N10 — Spec/deployed-truth reconciliation pass</dt><dd><span class="tag">ticket/process</span>Implements R11. Cheap, prevents repeated recon cost. G13 (medium).</dd>
+</dl>
+
+<footer>
+<p><strong>Method:</strong> spirit decomposed and brainstormed before reading implementation; then source docs (D1–D16), then the 24 Janus tickets via the constrained <code>janus-ticket-context --ssh-host tars</code> route (zero read failures — no API gap to record), then full code recon of <code>proof-harness</code> and <code>storage-harness</code> with file:line evidence. No production runtimes, live DBs, or deployments were touched; this report file is the only artifact written.</p>
+<p>T1618 recon · 2026-07-09 · worktree <code>/Users/mike/src/worktrees/primeradiant-spirit-ecology-recon</code></p>
+</footer>
+</body>
+</html>
