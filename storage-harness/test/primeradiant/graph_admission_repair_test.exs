@@ -336,6 +336,19 @@ defmodule Primeradiant.GraphAdmissionRepairTest do
     assert rollback_report["validation"]["replacement_story_ids_hidden"] == true
     assert Enum.any?(state.story_quarantines, &(&1.rollback_status == "restored"))
     assert Enum.any?(state.story_quarantines, &(&1.reason == "rollback_replacement_story"))
+
+    durable_feed =
+      db_path
+      |> DurableSoupDb.load_soup_feed_projection(@tenant, %{"limit" => 20})
+      |> Soup.feed(%{"consumer" => "reporter", "projection" => "story_cards", "limit" => 20})
+
+    durable_story_ids = Enum.map(durable_feed.items, & &1.story_id)
+    assert hd(plan["stories"])["story_id"] in durable_story_ids
+
+    assert Enum.all?(
+             apply_report["validation"]["replacement_story_ids"],
+             &(&1 not in durable_story_ids)
+           )
   end
 
   defp seed_polluted_snapshot!(db_path) do

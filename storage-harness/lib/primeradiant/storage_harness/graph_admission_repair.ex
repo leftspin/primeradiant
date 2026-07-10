@@ -173,7 +173,12 @@ defmodule Primeradiant.StorageHarness.GraphAdmissionRepair do
     })
 
     running_revision =
-      DurableSoupDb.tenant_revision_after_replay!(db_path, tenant_id, first_replay_run_id)
+      DurableSoupDb.tenant_revision_after_replay!(
+        db_path,
+        tenant_id,
+        first_replay_run_id,
+        approved_revision
+      )
 
     try do
       quarantined = quarantine(running, plan, run, now)
@@ -354,6 +359,18 @@ defmodule Primeradiant.StorageHarness.GraphAdmissionRepair do
     feed = repair_feed(rolled_back)
     original_story_ids = Enum.map(plan["stories"], & &1["story_id"])
 
+    created_replacement_story_ids =
+      replacement_memberships
+      |> Enum.filter(& &1["created_by_repair"])
+      |> Enum.map(& &1["story_id"])
+
+    restored_replacement_story_ids =
+      replacement_memberships
+      |> Enum.reject(& &1["created_by_repair"])
+      |> Enum.map(& &1["story_id"])
+
+    feed_story_ids = Enum.map(feed.items, & &1.story_id)
+
     %{
       "ticket" => "T1649",
       "repair_run_id" => run.id,
@@ -365,13 +382,12 @@ defmodule Primeradiant.StorageHarness.GraphAdmissionRepair do
         "original_story_ids_visible" =>
           MapSet.subset?(
             MapSet.new(original_story_ids),
-            MapSet.new(Enum.map(feed.items, & &1.story_id))
+            MapSet.new(feed_story_ids)
           ),
         "replacement_story_ids_hidden" =>
-          Enum.all?(
-            replacement_story_ids,
-            &(&1 not in Enum.map(feed.items, fn item -> item.story_id end))
-          )
+          Enum.all?(created_replacement_story_ids, &(&1 not in feed_story_ids)),
+        "restored_replacement_story_ids_visible" =>
+          Enum.all?(restored_replacement_story_ids, &(&1 in feed_story_ids))
       }
     }
   end

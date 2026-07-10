@@ -783,7 +783,8 @@ defmodule Primeradiant.Soup do
   end
 
   defp story_claim_refs(state, story_id) do
-    state.story_fact_versions
+    state
+    |> active_repair_rows(state.story_fact_versions)
     |> Enum.filter(&(&1.story_id == story_id))
     |> Enum.map(& &1.claim_node_id)
     |> Enum.reject(&is_nil/1)

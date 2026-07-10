@@ -117,7 +117,12 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
 
   def load_tenant(db_path, tenant_id) do
     if File.regular?(db_path) do
-      state = Primeradiant.StorageHarness.State.new(tenant_id: tenant_id, user_id: "flynn")
+      state =
+        Primeradiant.StorageHarness.State.new(tenant_id: tenant_id, user_id: "flynn")
+        |> put_rows(
+          :repair_runs,
+          load_rows(db_path, "repair_runs", tenant_id, Primeradiant.StorageHarness.RepairRun)
+        )
 
       state
       |> put_rows(
@@ -592,7 +597,7 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
     end
   end
 
-  def tenant_revision_after_replay!(db_path, tenant_id, replay_run_id) do
+  def tenant_revision_after_replay!(db_path, tenant_id, replay_run_id, prior_revision) do
     [latest_id, revision] =
       db_path
       |> sqlite!("""
@@ -610,7 +615,10 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
       |> String.trim()
       |> String.split("|", parts: 2)
 
-    if latest_id != replay_run_id do
+    prior_count = prior_revision |> String.split(":", parts: 2) |> hd() |> String.to_integer()
+    current_count = revision |> String.split(":", parts: 2) |> hd() |> String.to_integer()
+
+    if latest_id != replay_run_id or current_count != prior_count + 1 do
       raise ArgumentError, "tenant revision changed after repair write"
     end
 
@@ -1218,7 +1226,7 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
   defp load_feed_stories(db_path, tenant_id, limit) do
     quarantine_filter =
       if table_exists?(db_path, "story_quarantines") do
-        "AND NOT EXISTS (SELECT 1 FROM story_quarantines q WHERE q.tenant_id = stories.tenant_id AND q.story_id = stories.id)"
+        "AND NOT EXISTS (SELECT 1 FROM story_quarantines q WHERE q.tenant_id = stories.tenant_id AND q.story_id = stories.id AND q.rollback_status != 'restored')"
       else
         ""
       end
@@ -1238,6 +1246,12 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
             ) AS row_number
           FROM story_card_versions
           WHERE tenant_id = #{sql_quote(tenant_id)}
+            AND id NOT IN (
+              SELECT json_each.value
+              FROM repair_runs, json_each(repair_runs.mutation_ids)
+              WHERE repair_runs.tenant_id = #{sql_quote(tenant_id)}
+                AND repair_runs.status = 'rolled_back'
+            )
         )
         WHERE row_number = 1
       )
