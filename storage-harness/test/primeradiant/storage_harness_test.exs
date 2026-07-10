@@ -510,6 +510,11 @@ defmodule Primeradiant.StorageHarnessTest do
     assert sql =~ "evidence_refs_subject_contract_trigger"
     assert sql =~ "subject_type IN ("
     assert sql =~ "graph_commit evidence subject is not committed"
+    assert sql =~ "CREATE TABLE repair_runs"
+    assert sql =~ "UNIQUE (tenant_id, plan_hash)"
+    assert sql =~ "CREATE TABLE story_quarantines"
+    assert sql =~ "repair_run_id uuid NOT NULL REFERENCES repair_runs(id)"
+    assert sql =~ "story_id uuid NOT NULL REFERENCES stories(id)"
   end
 
   test "latest output remains user-relative and evidence-backed", %{state: state, report: report} do

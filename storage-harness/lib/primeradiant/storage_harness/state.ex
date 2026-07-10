@@ -23,6 +23,8 @@ defmodule Primeradiant.StorageHarness.State do
             story_card_change_sets: [],
             story_reader_deltas: [],
             story_card_projection_audits: [],
+            repair_runs: [],
+            story_quarantines: [],
             conflicts: [],
             evidence_refs: [],
             authored_outputs: [],

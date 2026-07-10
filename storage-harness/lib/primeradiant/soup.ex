@@ -583,6 +583,7 @@ defmodule Primeradiant.Soup do
   defp feed_visible_stories(state) do
     state.stories
     |> Enum.reject(&t1421_quarantined?/1)
+    |> Enum.reject(&graph_admission_quarantined?(state, &1))
     |> Enum.sort_by(
       &{story_card_serving_rank(state, &1), &1.updated_at_story},
       fn {left_rank, left_updated_at}, {right_rank, right_updated_at} ->
@@ -595,6 +596,7 @@ defmodule Primeradiant.Soup do
   defp visible_stories(state) do
     state.stories
     |> Enum.reject(&t1421_quarantined?/1)
+    |> Enum.reject(&graph_admission_quarantined?(state, &1))
     |> Enum.sort_by(& &1.updated_at_story, {:desc, DateTime})
   end
 
@@ -612,6 +614,9 @@ defmodule Primeradiant.Soup do
       _ -> false
     end
   end
+
+  defp graph_admission_quarantined?(state, story),
+    do: Enum.any?(state.story_quarantines, &(&1.story_id == story.id))
 
   defp story_inputs(state, story_id) do
     input_ids =

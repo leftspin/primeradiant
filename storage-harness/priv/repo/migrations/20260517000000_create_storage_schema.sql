@@ -43,6 +43,44 @@ CREATE TABLE stories (
   CHECK (lower(story_key) NOT IN ('new-story', 'new_story', 'newstory', 'story', 'news-story'))
 );
 
+CREATE TABLE repair_runs (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id uuid NOT NULL,
+  plan_hash text NOT NULL,
+  snapshot_hash text NOT NULL,
+  snapshot_path text NOT NULL,
+  source_db_path text NOT NULL,
+  source_commit text NOT NULL,
+  approval_evidence text NOT NULL,
+  actor text NOT NULL,
+  status text NOT NULL CHECK (status IN ('running', 'succeeded', 'failed', 'rolled_back')),
+  started_at timestamptz NOT NULL,
+  finished_at timestamptz,
+  mutation_ids jsonb NOT NULL DEFAULT '[]'::jsonb,
+  rollback_proof jsonb NOT NULL DEFAULT '{}'::jsonb,
+  validation jsonb NOT NULL DEFAULT '{}'::jsonb,
+  inserted_at timestamptz NOT NULL,
+  updated_at timestamptz NOT NULL,
+  UNIQUE (tenant_id, plan_hash)
+);
+
+CREATE TABLE story_quarantines (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id uuid NOT NULL,
+  repair_run_id uuid NOT NULL REFERENCES repair_runs(id),
+  story_id uuid NOT NULL REFERENCES stories(id),
+  reason text NOT NULL,
+  original_story_key text NOT NULL,
+  original_story_state text NOT NULL,
+  preserved_ids jsonb NOT NULL DEFAULT '{}'::jsonb,
+  source_refs jsonb NOT NULL DEFAULT '[]'::jsonb,
+  quarantined_at timestamptz NOT NULL,
+  rollback_status text NOT NULL CHECK (rollback_status IN ('snapshot_available', 'restored', 'not_required')),
+  inserted_at timestamptz NOT NULL,
+  updated_at timestamptz NOT NULL,
+  UNIQUE (tenant_id, story_id)
+);
+
 CREATE TABLE watches (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   tenant_id uuid NOT NULL,

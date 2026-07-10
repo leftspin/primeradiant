@@ -1369,3 +1369,112 @@ defmodule Primeradiant.StorageHarness.EvidenceRef do
     end
   end
 end
+
+defmodule Primeradiant.StorageHarness.RepairRun do
+  use Primeradiant.StorageHarness.Schema
+
+  schema "repair_runs" do
+    field(:tenant_id, :binary_id)
+    field(:plan_hash, :string)
+    field(:snapshot_hash, :string)
+    field(:snapshot_path, :string)
+    field(:source_db_path, :string)
+    field(:source_commit, :string)
+    field(:approval_evidence, :string)
+    field(:actor, :string)
+    field(:status, :string)
+    field(:started_at, :utc_datetime_usec)
+    field(:finished_at, :utc_datetime_usec)
+    field(:mutation_ids, {:array, :string}, default: [])
+    field(:rollback_proof, :map, default: %{})
+    field(:validation, :map, default: %{})
+    timestamps(type: :utc_datetime_usec)
+  end
+
+  def changeset(struct \\ %__MODULE__{}, attrs) do
+    struct
+    |> cast(attrs, [
+      :id,
+      :tenant_id,
+      :plan_hash,
+      :snapshot_hash,
+      :snapshot_path,
+      :source_db_path,
+      :source_commit,
+      :approval_evidence,
+      :actor,
+      :status,
+      :started_at,
+      :finished_at,
+      :mutation_ids,
+      :rollback_proof,
+      :validation
+    ])
+    |> put_id()
+    |> validate_required([
+      :tenant_id,
+      :plan_hash,
+      :snapshot_hash,
+      :snapshot_path,
+      :source_db_path,
+      :source_commit,
+      :approval_evidence,
+      :actor,
+      :status,
+      :started_at,
+      :mutation_ids,
+      :rollback_proof,
+      :validation
+    ])
+    |> validate_inclusion(:status, ["running", "succeeded", "failed", "rolled_back"])
+  end
+end
+
+defmodule Primeradiant.StorageHarness.StoryQuarantine do
+  use Primeradiant.StorageHarness.Schema
+
+  schema "story_quarantines" do
+    field(:tenant_id, :binary_id)
+    field(:repair_run_id, :binary_id)
+    field(:story_id, :binary_id)
+    field(:reason, :string)
+    field(:original_story_key, :string)
+    field(:original_story_state, :string)
+    field(:preserved_ids, :map, default: %{})
+    field(:source_refs, {:array, :string}, default: [])
+    field(:quarantined_at, :utc_datetime_usec)
+    field(:rollback_status, :string, default: "snapshot_available")
+    timestamps(type: :utc_datetime_usec)
+  end
+
+  def changeset(struct \\ %__MODULE__{}, attrs) do
+    struct
+    |> cast(attrs, [
+      :id,
+      :tenant_id,
+      :repair_run_id,
+      :story_id,
+      :reason,
+      :original_story_key,
+      :original_story_state,
+      :preserved_ids,
+      :source_refs,
+      :quarantined_at,
+      :rollback_status
+    ])
+    |> put_id()
+    |> validate_required([
+      :tenant_id,
+      :repair_run_id,
+      :story_id,
+      :reason,
+      :original_story_key,
+      :original_story_state,
+      :preserved_ids,
+      :source_refs,
+      :quarantined_at,
+      :rollback_status
+    ])
+    |> validate_inclusion(:rollback_status, ["snapshot_available", "restored", "not_required"])
+  end
+end
