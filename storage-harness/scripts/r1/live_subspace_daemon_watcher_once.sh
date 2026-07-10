@@ -106,6 +106,16 @@ fi
 
 mkdir -p "$STATE_ROOT" "$PACKAGE_ROOT" "$LOCAL_RUN_ROOT"
 
+LOCK_DIR="$STATE_ROOT/live-watcher.lock"
+if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+  echo "Primeradiant live watcher already running for state root: $STATE_ROOT" >&2
+  exit 4
+fi
+cleanup_lock() {
+  rmdir "$LOCK_DIR" 2>/dev/null || true
+}
+trap cleanup_lock EXIT
+
 MANIFESTS_JSONL="$STATE_ROOT/$RUN_ID-manifests.jsonl"
 : > "$MANIFESTS_JSONL"
 
@@ -283,7 +293,7 @@ if [[ "$CATCHUP_COUNT" -eq 0 ]]; then
 fi
 
 set +e
-PREPARE_OUTPUT="$(ssh "${SSH_OPTS[@]}" -n -i "$SSH_KEY" "$EURISKO_TARGET" "mkdir -p '$EURISKO_HANDOFF_ROOT' '$EURISKO_RUN_ROOT'" 2>&1)"
+PREPARE_OUTPUT="$(ssh "${SSH_OPTS[@]}" -n -i "$SSH_KEY" "$EURISKO_TARGET" "timeout -k 30 $CONSUME_TIMEOUT_SECONDS mkdir -p '$EURISKO_HANDOFF_ROOT' '$EURISKO_RUN_ROOT'" 2>&1)"
 PREPARE_STATUS=$?
 set -e
 if [[ "$PREPARE_STATUS" -ne 0 ]]; then
@@ -319,7 +329,7 @@ while IFS= read -r package_entry; do
 
   set +e
   SHIP_OUTPUT="$(tar -C "$package_dir" -cf - . 2>&1 |
-    ssh "${SSH_OPTS[@]}" -i "$SSH_KEY" "$EURISKO_TARGET" "mkdir -p '$remote_package' && tar -C '$remote_package' -xf -" 2>&1)"
+    ssh "${SSH_OPTS[@]}" -i "$SSH_KEY" "$EURISKO_TARGET" "timeout -k 30 $CONSUME_TIMEOUT_SECONDS sh -c \"mkdir -p '$remote_package' && tar -C '$remote_package' -xf -\"" 2>&1)"
   SHIP_STATUS=$?
   set -e
   if [[ "$SHIP_STATUS" -ne 0 ]]; then

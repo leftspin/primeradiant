@@ -3740,9 +3740,12 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert source =~ "--eurisko-soup-db PATH"
     assert source =~ "--consume-timeout-seconds N"
     assert source =~ "timeout -k 30 $CONSUME_TIMEOUT_SECONDS scripts/r1/consume_event_package.sh"
+    assert source =~ "timeout -k 30 $CONSUME_TIMEOUT_SECONDS mkdir -p"
+    assert source =~ "timeout -k 30 $CONSUME_TIMEOUT_SECONDS sh -c"
     assert source =~ "consume-ack.json"
     assert source =~ "-o BatchMode=yes"
     assert source =~ "-o ServerAliveInterval=15"
+    assert source =~ ~s(LOCK_DIR="$STATE_ROOT/live-watcher.lock")
 
     assert source =~
              "EURISKO_SOUP_DB=\"/home/clu/.local/state/primeradiant/soup-api/soup.sqlite3\""
@@ -4054,6 +4057,147 @@ defmodule Primeradiant.DaemonNewsReplayTest do
            ]
 
     assert String.trim(File.read!(Path.join(stub_state, "consume-count"))) == "4"
+  end
+
+  test "re-emitted event package replays as durable admission no-op" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-event-replay-noop-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    soup_db_path = Path.join(tmp, "primeradiant-event-soup.sqlite3")
+    raw_path = Path.join(tmp, "archive.jsonl")
+
+    row =
+      envelope(
+        "Agent Civic Clinic triage open",
+        "Agent Civic Clinic triage is open venue is north speaker is desk."
+      )
+
+    [{offset, length}] = write_archive!(raw_path, [row])
+    event = committed_source_item_event("event-replay-news-1", raw_path, offset, length, row)
+
+    {:ok, _state, _report} =
+      DaemonNewsEvent.consume_event(event,
+        soup_db_path: soup_db_path,
+        tenant_id: @tenant,
+        actor_id: "flynn",
+        story_agent_loop?: true,
+        story_agent_opts: [adapter: &stub_story_agent/3]
+      )
+
+    revision = DurableSoupDb.tenant_revision(soup_db_path, @tenant)
+
+    counts =
+      for table <- ~w(inputs story_events story_card_versions story_reader_deltas proposals) do
+        {table, DurableSoupDb.table_count(soup_db_path, table, @tenant)}
+      end
+
+    assert {"inputs", 1} in counts
+
+    # A watcher retry after a lost consume ack re-emits the same source item
+    # under a fresh event id.
+    replay_event = Map.put(event, "event_id", "evt-event-replay-news-1-retry")
+
+    {:ok, _replay_state, replay_report} =
+      DaemonNewsEvent.consume_event(replay_event,
+        soup_db_path: soup_db_path,
+        tenant_id: @tenant,
+        actor_id: "flynn",
+        story_agent_loop?: true,
+        story_agent_opts: [adapter: &stub_story_agent/3]
+      )
+
+    assert replay_report.already_admitted == true
+    assert replay_report.admission_replay.status == "already_admitted"
+    assert replay_report.admission_replay.source_ref == "news_article:event-replay-news-1"
+    assert replay_report.ingestion.replay_noop == true
+    assert replay_report.changed_stories == []
+    assert replay_report.primeradiant_writes.mutated == false
+
+    assert DurableSoupDb.tenant_revision(soup_db_path, @tenant) == revision
+
+    for {table, count} <- counts do
+      assert DurableSoupDb.table_count(soup_db_path, table, @tenant) == count,
+             "replay mutated #{table}"
+    end
+  end
+
+  test "live watcher records typed ack failure and holds cursor when remote ack is lost" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-live-watch-lost-ack-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    source_db = Path.join(tmp, "daemon.sqlite3")
+    state_root = Path.join(tmp, "state")
+    stub_state = Path.join(tmp, "stub-state")
+    bin_dir = Path.join(tmp, "bin")
+    ssh_key = Path.join(tmp, "ssh-key")
+
+    File.mkdir_p!(state_root)
+    File.write!(ssh_key, "stub-key")
+
+    create_subspace_daemon_db!(
+      source_db,
+      [
+        {"lost-ack-news-1", "2026-06-03 05:00:00",
+         envelope("Lost ack", "Lost ack service is open venue is north speaker is desk.")}
+      ]
+    )
+
+    write_stub_ssh!(bin_dir, stub_state)
+    File.write!(Path.join(stub_state, "no-ack-on"), "1")
+
+    watcher_script = Path.expand("scripts/r1/live_subspace_daemon_watcher_once.sh")
+
+    {output, status} =
+      System.cmd(
+        watcher_script,
+        [
+          "--source-db",
+          source_db,
+          "--tenant",
+          @tenant,
+          "--state-root",
+          state_root,
+          "--eurisko-target",
+          "clu@eurisko-test",
+          "--eurisko-repo",
+          "/home/clu/src/primeradiant",
+          "--ssh-key",
+          ssh_key,
+          "--run-id",
+          "lost-ack-test",
+          "--limit",
+          "10"
+        ],
+        stderr_to_stdout: true,
+        env: [{"PATH", bin_dir <> ":" <> System.get_env("PATH")}]
+      )
+
+    assert status == 1
+    assert output =~ "live watcher package consumption failed"
+    refute File.exists?(Path.join(state_root, "cursor.txt"))
+
+    failed_report =
+      Path.join(state_root, "lost-ack-test-failed-report.json")
+      |> File.read!()
+      |> Jason.decode!()
+
+    assert failed_report["status"] == "package_ack_invalid"
+    assert failed_report["failed_stage"] == "package_ack"
+    assert failed_report["package_cursor"] == "2026-06-03 05:00:00|1"
+    assert failed_report["last_acked_cursor"] == ""
+    assert failed_report["unconsumed_range_retained"] == true
   end
 
   test "SQLite wakeup with checkpoint-cursor false leaves durable cursor to consumer ack" do
@@ -4393,6 +4537,10 @@ defmodule Primeradiant.DaemonNewsReplayTest do
       if [[ -f "$STATE_DIR/fail-on" && "$n" -eq "$(cat "$STATE_DIR/fail-on")" ]]; then
         echo "simulated remote consume failure" >&2
         exit 17
+      fi
+      if [[ -f "$STATE_DIR/no-ack-on" && "$n" -eq "$(cat "$STATE_DIR/no-ack-on")" ]]; then
+        echo "simulated remote consume success with lost ack"
+        exit 0
       fi
       event_id="$(printf '%s' "$cmd" | sed -n "s|.*/\\([^/']*\\)/consume-ack.json.*|\\1|p")"
       echo "remote consume output noise before ack"

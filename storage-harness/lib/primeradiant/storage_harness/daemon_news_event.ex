@@ -1,6 +1,8 @@
 defmodule Primeradiant.StorageHarness.DaemonNewsEvent do
   @moduledoc false
 
+  alias Primeradiant.Ingestion.Admission
+
   alias Primeradiant.StorageHarness.{
     DaemonNewsAdapter,
     DaemonNewsSourceIdentity,
@@ -31,23 +33,41 @@ defmodule Primeradiant.StorageHarness.DaemonNewsEvent do
 
     prior_state = DurableSoupDb.load_event_admission_state(soup_db_path, tenant_id)
 
-    with {:ok, item, summary} <- event_to_item(event, tenant_id, raw_root),
-         {:ok, state, ingestion_report} <- RealIngestion.ingest_items([item], actor_id) do
+    with {:ok, item, summary} <- event_to_item(event, tenant_id, raw_root) do
+      case existing_admitted_input(prior_state, item) do
+        nil ->
+          admit_new_event(prior_state, item, summary, %{
+            tenant_id: tenant_id,
+            actor_id: actor_id,
+            soup_db_path: soup_db_path,
+            expected_tenant_revision: expected_tenant_revision,
+            story_agent_loop?: story_agent_loop?,
+            story_agent_opts: story_agent_opts
+          })
+
+        input ->
+          {:ok, prior_state, already_admitted_report(soup_db_path, summary, input)}
+      end
+    end
+  end
+
+  defp admit_new_event(prior_state, item, summary, ctx) do
+    with {:ok, state, ingestion_report} <- RealIngestion.ingest_items([item], ctx.actor_id) do
       admissions = Map.get(ingestion_report, :admissions, [])
       state = DurableSoupDb.merge_state(prior_state, state)
 
       {state, report} =
-        if story_agent_loop? and admissions != [] do
+        if ctx.story_agent_loop? and admissions != [] do
           {state, story_agent_report} =
             LiveStoryAgentLoop.run(
               state,
               admissions,
-              actor_id,
-              story_agent_opts
+              ctx.actor_id,
+              ctx.story_agent_opts
             )
 
           {:ok, state, delta_output} =
-            KnowledgeWork.record_verified_delta(state, actor_id, advance_seen?: false)
+            KnowledgeWork.record_verified_delta(state, ctx.actor_id, advance_seen?: false)
 
           {state, story_agent_report(state, summary, ingestion_report, story_agent_report)}
           |> then(fn {state, report_fun} ->
@@ -67,15 +87,15 @@ defmodule Primeradiant.StorageHarness.DaemonNewsEvent do
           {state, source_admission_report(state, summary, ingestion_report)}
         end
 
-      DurableSoupDb.persist_delta!(soup_db_path, prior_state, state, %{
+      DurableSoupDb.persist_delta!(ctx.soup_db_path, prior_state, state, %{
         source_kind: DaemonNewsAdapter.source_adapter(),
         source_db_path: "event:#{summary.event_id}",
         source_row_count: 1,
-        expected_tenant_revision: expected_tenant_revision
+        expected_tenant_revision: ctx.expected_tenant_revision
       })
 
       report =
-        report.(soup_db_path, tenant_id)
+        report.(ctx.soup_db_path, ctx.tenant_id)
         |> Map.put(:event_driven_r1, %{
           event_type: DaemonNewsAdapter.event_type(),
           adapter: DaemonNewsAdapter.source_adapter(),
@@ -85,6 +105,48 @@ defmodule Primeradiant.StorageHarness.DaemonNewsEvent do
 
       {:ok, state, report}
     end
+  end
+
+  # Re-emitted packages after a lost consume acknowledgement must replay as a
+  # durable no-op: the source item identity rules match Admission's dedupe
+  # (same source_type + external_id, or same content hash).
+  defp existing_admitted_input(prior_state, item) do
+    normalized = Admission.normalize_keys(item)
+    content_sha = normalized["content_sha256"] || Admission.content_hash(normalized)
+
+    Enum.find(prior_state.inputs, fn input ->
+      (input.source_type == normalized["source_type"] and
+         input.external_id == normalized["external_id"]) or
+        input.content_sha256 == content_sha
+    end)
+  end
+
+  defp already_admitted_report(soup_db_path, summary, input) do
+    %{
+      source: summary,
+      already_admitted: true,
+      admission_replay: %{
+        status: "already_admitted",
+        source_ref: "#{input.source_type}:#{input.external_id}",
+        external_id: input.external_id,
+        content_sha256: input.content_sha256,
+        input_id: input.id
+      },
+      primeradiant_writes: %{
+        owned_state_only: true,
+        durable: true,
+        soup_db_path: soup_db_path,
+        mutated: false
+      },
+      ingestion: %{admissions: [], replay_noop: true},
+      changed_stories: [],
+      event_driven_r1: %{
+        event_type: DaemonNewsAdapter.event_type(),
+        adapter: DaemonNewsAdapter.source_adapter(),
+        production_source_event_emitter_present: false,
+        persistent_service_installed: false
+      }
+    }
   end
 
   defp source_admission_report(_state, summary, ingestion_report) do
