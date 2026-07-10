@@ -353,8 +353,8 @@ while IFS= read -r package_entry; do
     exit 1
   fi
 
-  # The package name embeds the source-controlled message_id; it is
-  # interpolated into remote commands and must stay shell-inert.
+  # The package name is interpolated into remote commands and must stay
+  # shell-inert; the emitter derives it from the numeric daemon row id.
   if [[ ! "$package_name" =~ ^[A-Za-z0-9._-]+$ ]]; then
     package_failure_report "package_name_unsafe" "package_name" "basename package_dir" \
       1 "package name contains shell-unsafe characters: $package_name" \
