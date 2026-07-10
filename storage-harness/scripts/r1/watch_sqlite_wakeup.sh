@@ -4,7 +4,7 @@ set -euo pipefail
 usage() {
   cat <<'USAGE'
 Usage:
-  watch_sqlite_wakeup.sh --source-db PATH --tenant TENANT --cursor-file PATH --package-root DIR --run-root DIR [--actor ACTOR] [--limit N] [--run-id ID] [--timeout-seconds N] [--poll-interval-seconds N] [--debounce-seconds N] [--emit-cursor-script PATH] [--consume-packages true|false]
+  watch_sqlite_wakeup.sh --source-db PATH --tenant TENANT --cursor-file PATH --package-root DIR --run-root DIR [--actor ACTOR] [--limit N] [--run-id ID] [--timeout-seconds N] [--poll-interval-seconds N] [--debounce-seconds N] [--emit-cursor-script PATH] [--consume-packages true|false] [--checkpoint-cursor true|false]
 
 Observes daemon-news SQLite DB/WAL/SHM file changes as a wakeup bell, then runs
 the normal read-only cursor importer in serialized bounded passes until caught
@@ -25,6 +25,7 @@ POLL_INTERVAL_SECONDS="1"
 DEBOUNCE_SECONDS="1"
 EMIT_CURSOR_SCRIPT=""
 CONSUME_PACKAGES="true"
+CHECKPOINT_CURSOR="true"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -41,6 +42,7 @@ while [[ $# -gt 0 ]]; do
     --debounce-seconds) DEBOUNCE_SECONDS="$2"; shift 2 ;;
     --emit-cursor-script) EMIT_CURSOR_SCRIPT="$2"; shift 2 ;;
     --consume-packages) CONSUME_PACKAGES="$2"; shift 2 ;;
+    --checkpoint-cursor) CHECKPOINT_CURSOR="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown argument: $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -73,6 +75,11 @@ fi
 
 if [[ "$CONSUME_PACKAGES" != "true" && "$CONSUME_PACKAGES" != "false" ]]; then
   echo "consume-packages must be true or false" >&2
+  exit 2
+fi
+
+if [[ "$CHECKPOINT_CURSOR" != "true" && "$CHECKPOINT_CURSOR" != "false" ]]; then
+  echo "checkpoint-cursor must be true or false" >&2
   exit 2
 fi
 
@@ -240,7 +247,9 @@ while :; do
 
   if [[ -n "$NEXT_CURSOR" && "$NEXT_CURSOR" != "null" ]]; then
     CURRENT_CURSOR="$NEXT_CURSOR"
-    printf "%s\n" "$CURRENT_CURSOR" > "$CURSOR_FILE"
+    if [[ "$CHECKPOINT_CURSOR" == "true" ]]; then
+      printf "%s\n" "$CURRENT_CURSOR" > "$CURSOR_FILE"
+    fi
   fi
 
   LAST_IMPORT_SIGNATURE="$PASS_END_SIGNATURE"
@@ -262,6 +271,7 @@ jq -s \
   --arg wake_signature "$WAKE_SIGNATURE" \
   --arg final_signature "$LAST_IMPORT_SIGNATURE" \
   --arg consume_packages "$CONSUME_PACKAGES" \
+  --arg checkpoint_cursor "$CHECKPOINT_CURSOR" \
   --argjson pass_count "$PASS_COUNT" \
   --argjson emitted_count "$TOTAL_EMITTED" \
   '{
@@ -274,6 +284,7 @@ jq -s \
     importer_single_flight: true,
     importer_catch_up_until_empty: true,
     consume_packages: $consume_packages,
+    checkpoint_cursor: $checkpoint_cursor,
     wake_payload_trusted_as_story_fact: false,
     source_db_mutated_by_primeradiant: false,
     persistent_service_installed: false,

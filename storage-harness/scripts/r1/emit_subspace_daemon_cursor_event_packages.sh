@@ -129,7 +129,16 @@ while IFS= read -r ROW_JSON; do
   ROW_ID="$(jq -r '.id' <<<"$ROW_JSON")"
   MESSAGE_ID="$(jq -r '.message_id' <<<"$ROW_JSON")"
   ACCEPTED_AT="$(jq -r '.accepted_at' <<<"$ROW_JSON")"
-  PACKAGE_DIR="$PACKAGE_ROOT/packages/$(printf '%04d' "$COUNT")-$MESSAGE_ID"
+
+  if ! [[ "$ROW_ID" =~ ^[0-9]+$ ]]; then
+    echo "daemon_event id is not numeric: $ROW_ID" >&2
+    exit 1
+  fi
+
+  # Package directories are named by the numeric daemon row id only; the
+  # source-controlled message_id is carried as JSON data, never as a path or
+  # shell-interpolated value.
+  PACKAGE_DIR="$PACKAGE_ROOT/packages/$(printf '%04d' "$COUNT")-$ROW_ID"
   EVENT_ID="$RUN_ID-$COUNT"
   mkdir -p "$PACKAGE_DIR/raw"
 
