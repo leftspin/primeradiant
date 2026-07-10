@@ -2,6 +2,7 @@ defmodule Primeradiant.GraphAdmissionRepairTest do
   use ExUnit.Case, async: false
 
   alias Primeradiant.Ingestion.Admission
+  alias Primeradiant.Soup
 
   alias Primeradiant.StorageHarness.{
     ChangesetStore,
@@ -52,6 +53,55 @@ defmodule Primeradiant.GraphAdmissionRepairTest do
     assert length(story["evidence_ref_ids"]) > 0
     assert story["input_ids"] != []
     assert story["source_refs"] != []
+    assert story["title_history"] == ["Clinic event", "repaired-clinic-event"]
+    assert plan_replay_memberships(first) == ["repaired-clinic-event"]
+    assert length(first["replay_outputs"]) == 3
+  end
+
+  test "discovery includes edge-only input material when no story event remains", %{
+    db_path: db_path
+  } do
+    {_, 0} = System.cmd("sqlite3", [db_path, "DELETE FROM story_events;"], stderr_to_stdout: true)
+
+    [story] = plan(db_path)["stories"]
+    assert story["story_event_ids"] == []
+    assert length(story["edge_ids"]) == 1
+    assert length(story["input_ids"]) == 1
+    assert length(story["source_refs"]) == 1
+    assert length(story["evidence_ref_ids"]) > 0
+  end
+
+  test "plan hash binds proposed replacement membership and exact agent outputs", %{
+    db_path: db_path
+  } do
+    approved = plan(db_path)
+    different = plan(db_path, &alternate_adapter/3)
+
+    assert approved["plan_hash"] != different["plan_hash"]
+    assert plan_replay_memberships(approved) == ["repaired-clinic-event"]
+    assert plan_replay_memberships(different) == ["alternate-clinic-event"]
+    assert approved["replay_outputs"] != different["replay_outputs"]
+  end
+
+  test "dry-run refuses nondeterministic agent proposals for the same snapshot", %{
+    db_path: db_path
+  } do
+    Process.put(:t1649_adapter_calls, 0)
+
+    unstable = fn config, packet, ctx ->
+      count = Process.get(:t1649_adapter_calls) + 1
+      Process.put(:t1649_adapter_calls, count)
+
+      if count > 3 do
+        alternate_adapter(config, packet, ctx)
+      else
+        adapter(config, packet, ctx)
+      end
+    end
+
+    assert_raise ArgumentError, ~r/replay proposal is not deterministic/, fn ->
+      plan(db_path, unstable)
+    end
   end
 
   test "apply refuses absent, mismatched, and stale exact approval before mutation", %{
@@ -108,6 +158,18 @@ defmodule Primeradiant.GraphAdmissionRepairTest do
     assert report["validation"]["active_quarantined_exposure_count"] == 0
     assert report["validation"]["replacement_edge_metadata_failure_count"] == 0
     assert report["validation"]["history_ids_preserved"] == true
+    assert report["validation"]["approved_memberships_match"] == true
+    assert report["validation"]["replacement_story_ids"] != []
+    assert report["validation"]["replacement_edge_ids"] != []
+    assert report["validation"]["feed_story_ids"] == []
+    assert hd(plan["stories"])["story_id"] not in report["validation"]["feed_story_ids"]
+
+    durable_feed =
+      db_path
+      |> DurableSoupDb.load_soup_feed_projection(@tenant, %{"limit" => 20})
+      |> Soup.feed(%{"limit" => 20})
+
+    assert hd(plan["stories"])["story_id"] not in Enum.map(durable_feed.items, & &1.story_id)
 
     assert [run] = after_state.repair_runs
     assert run.status == "succeeded"
@@ -120,6 +182,10 @@ defmodule Primeradiant.GraphAdmissionRepairTest do
     assert run.finished_at
     assert Enum.sort(run.mutation_ids) == Enum.sort(report["mutation_ids"])
 
+    replay_run_ids = sqlite_ids(db_path, "replay_runs")
+    assert length(replay_run_ids) == 3
+    assert Enum.all?(replay_run_ids -- [hd(replay_run_ids)], &(&1 in report["mutation_ids"]))
+
     assert [quarantine] = after_state.story_quarantines
     assert quarantine.story_id == hd(plan["stories"])["story_id"]
     assert quarantine.original_story_key == "new-story"
@@ -130,7 +196,16 @@ defmodule Primeradiant.GraphAdmissionRepairTest do
     missing_evidence = before_history.evidence_refs -- current_history.evidence_refs
 
     assert missing_evidence == [],
-           inspect(Enum.filter(before.evidence_refs, &(&1.id in missing_evidence)))
+           inspect(%{
+             evidence: Enum.filter(before.evidence_refs, &(&1.id in missing_evidence)),
+             nodes:
+               Enum.filter(before.soup_nodes, fn node ->
+                 Enum.any?(
+                   before.evidence_refs,
+                   &(&1.id in missing_evidence and &1.subject_id == node.id)
+                 )
+               end)
+           })
 
     assert_history_preserved(before_history, current_history)
     assert Enum.any?(after_state.stories, &(&1.story_key == "repaired-clinic-event"))
@@ -144,7 +219,7 @@ defmodule Primeradiant.GraphAdmissionRepairTest do
     root: root,
     db_path: db_path
   } do
-    plan = plan(db_path)
+    plan = plan(db_path, &refusing_adapter/3)
     plan_path = write_plan!(root, plan)
 
     report =
@@ -153,8 +228,7 @@ defmodule Primeradiant.GraphAdmissionRepairTest do
         plan: plan_path,
         approved_plan_hash: plan["plan_hash"],
         approval_evidence: "approval:T1649:test",
-        actor: "operator",
-        adapter: &refusing_adapter/3
+        actor: "operator"
       )
 
     assert report["validation"]["replay_refusal_count"] == 1
@@ -168,24 +242,30 @@ defmodule Primeradiant.GraphAdmissionRepairTest do
          db_path: db_path
        } do
     plan = plan(db_path)
+
+    plan =
+      plan
+      |> Map.update!("replay_outputs", &tl/1)
+      |> Map.delete("plan_hash")
+      |> then(&Map.put(&1, "plan_hash", test_stable_hash(&1)))
+
     plan_path = write_plan!(root, plan)
     before = DurableSoupDb.load_tenant(db_path, @tenant)
 
-    assert_raise RuntimeError, "fixture replay failure", fn ->
+    assert_raise ArgumentError, ~r/approved replay output sequence does not match/, fn ->
       GraphAdmissionRepair.apply!(
         soup_db: db_path,
         plan: plan_path,
         approved_plan_hash: plan["plan_hash"],
         approval_evidence: "approval:T1649:test",
-        actor: "operator",
-        adapter: fn _config, _packet, _ctx -> raise "fixture replay failure" end
+        actor: "operator"
       )
     end
 
     failed = DurableSoupDb.load_tenant(db_path, @tenant)
     assert [run] = failed.repair_runs
     assert run.status == "failed"
-    assert run.validation["failure"] == "fixture replay failure"
+    assert run.validation["failure"] =~ "approved replay output sequence does not match"
     assert run.rollback_proof["snapshot_hash"] == plan["source"]["snapshot_hash"]
     assert failed.story_quarantines == []
     assert history_ids(failed) == history_ids(before)
@@ -243,19 +323,20 @@ defmodule Primeradiant.GraphAdmissionRepairTest do
     sql = """
     PRAGMA ignore_check_constraints = ON;
     UPDATE stories SET story_key = 'new-story';
-    UPDATE soup_nodes SET node_key = 'new-story' WHERE node_type = 'story';
+    UPDATE soup_nodes SET node_key = replace(node_key, 'repaired-clinic-event', 'new-story');
     PRAGMA ignore_check_constraints = OFF;
     """
 
     {_, 0} = System.cmd("sqlite3", [db_path, sql], stderr_to_stdout: true)
   end
 
-  defp plan(db_path) do
+  defp plan(db_path, replay_adapter \\ &adapter/3) do
     GraphAdmissionRepair.build_plan(
       source_db: "/source/live/soup.sqlite3",
       snapshot: db_path,
       tenant: @tenant,
-      source_commit: "source-commit-test"
+      source_commit: "source-commit-test",
+      adapter: replay_adapter
     )
   end
 
@@ -271,8 +352,7 @@ defmodule Primeradiant.GraphAdmissionRepairTest do
       plan: plan_path,
       approved_plan_hash: plan_hash,
       approval_evidence: "approval:T1649:test",
-      actor: "operator",
-      adapter: &adapter/3
+      actor: "operator"
     )
   end
 
@@ -311,6 +391,14 @@ defmodule Primeradiant.GraphAdmissionRepairTest do
       })
 
   defp refusing_adapter(config, packet, ctx), do: adapter(config, packet, ctx)
+
+  defp alternate_adapter(%{role: role} = config, packet, ctx)
+       when role in [:story_identity, :meaning_update] do
+    response = adapter(config, packet, ctx)
+    put_in(response, [:output, "story_key"], "alternate-clinic-event")
+  end
+
+  defp alternate_adapter(config, packet, ctx), do: adapter(config, packet, ctx)
 
   defp refusal_response(packet) do
     response(%{
@@ -369,4 +457,36 @@ defmodule Primeradiant.GraphAdmissionRepairTest do
         end
       )
   end
+
+  defp plan_replay_memberships(plan),
+    do: Enum.map(plan["proposed_replay"]["replacement_memberships"], & &1["story_key"])
+
+  defp sqlite_ids(db_path, table) do
+    {json, 0} =
+      System.cmd("sqlite3", [
+        "-json",
+        db_path,
+        "SELECT id FROM #{table} ORDER BY inserted_at, id;"
+      ])
+
+    json |> Jason.decode!() |> Enum.map(& &1["id"])
+  end
+
+  defp test_stable_hash(value) do
+    value
+    |> test_canonicalize()
+    |> Jason.encode!()
+    |> then(&:crypto.hash(:sha256, &1))
+    |> Base.encode16(case: :lower)
+  end
+
+  defp test_canonicalize(value) when is_map(value) do
+    value
+    |> Enum.sort_by(fn {key, _} -> to_string(key) end)
+    |> Enum.map(fn {key, nested} -> {key, test_canonicalize(nested)} end)
+    |> Jason.OrderedObject.new()
+  end
+
+  defp test_canonicalize(value) when is_list(value), do: Enum.map(value, &test_canonicalize/1)
+  defp test_canonicalize(value), do: value
 end

@@ -22,8 +22,12 @@ responsible for artifact readiness and presentation policy.
 
 1. Run `--dry-run` against a snapshot/copy, never the live soup path. Supply the
    source DB path as provenance, the snapshot path, tenant, source commit, and an
-   output plan path.
-2. Review the machine-readable plan. Approval must name the exact `plan_hash`.
+   output plan path. Dry-run invokes the current story agents in memory and records
+   their exact outputs, proposed replacement memberships/edges, and refusals; it
+   performs no database write.
+2. Review the machine-readable old-versus-proposed membership comparison and
+   refusals. Approval must name the exact `plan_hash`, which also binds the recorded
+   replay outputs used by apply.
 3. Run `--apply` only with the reviewed plan, matching approved hash, approval
    evidence, actor, and the database whose bytes match the plan snapshot hash.
 4. Preserve the snapshot until post-validation is accepted. On failure, restore
@@ -57,6 +61,10 @@ mix primeradiant.graph_admission_repair --apply \
 ```
 
 `--apply` checks both the canonical plan hash and the database byte hash before
-opening the durable write transaction. Its T1325-shaped `validation` object
+opening the durable write transaction, then uses the tenant revision guard in each
+write transaction. Its T1325-shaped `validation` object
 reports placeholder replacement failures, quarantine exposure, edge metadata
-failures, historical-ID preservation, and replay refusals.
+failures, historical-ID preservation, approved-versus-applied membership equality,
+typed replacement story/edge IDs, feed membership, and replay refusals. Durable
+mutation IDs include the write-membrane replay audit rows as well as graph and repair
+rows.

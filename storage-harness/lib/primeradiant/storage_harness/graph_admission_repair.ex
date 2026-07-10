@@ -12,6 +12,8 @@ defmodule Primeradiant.StorageHarness.GraphAdmissionRepair do
     StoryQuarantine
   }
 
+  alias Primeradiant.Soup
+
   @placeholder_keys ~w(new-story new_story newstory story news-story)
   @history_fields ~w(story_events edges proposals proposal_ops graph_commits evidence_refs)a
   @mutation_fields ~w(repair_runs story_quarantines agent_runs proposals proposal_ops proposal_decisions graph_commits stories soup_nodes edges story_fact_versions story_events story_card_versions story_source_coverage story_key_claims story_card_change_sets evidence_refs)a
@@ -23,6 +25,7 @@ defmodule Primeradiant.StorageHarness.GraphAdmissionRepair do
     source_commit = require_nonblank!(opts, :source_commit)
     snapshot_hash = file_hash!(snapshot_path)
     state = DurableSoupDb.load_tenant(snapshot_path, tenant_id)
+    adapter = Keyword.get(opts, :adapter, &LiveStoryAgentLoop.invoke_live_agent/3)
 
     stories =
       state.stories
@@ -59,6 +62,20 @@ defmodule Primeradiant.StorageHarness.GraphAdmissionRepair do
       }
     }
 
+    first_proposal = propose_replay(state, body, adapter)
+    second_proposal = propose_replay(state, body, adapter)
+
+    if first_proposal != second_proposal do
+      raise ArgumentError, "replay proposal is not deterministic for the approved snapshot"
+    end
+
+    {proposed_replay, replay_outputs} = first_proposal
+
+    body =
+      body
+      |> Map.put("proposed_replay", proposed_replay)
+      |> Map.put("replay_outputs", replay_outputs)
+
     Map.put(body, "plan_hash", stable_hash(body))
   end
 
@@ -80,8 +97,6 @@ defmodule Primeradiant.StorageHarness.GraphAdmissionRepair do
     approved_hash = require_nonblank!(opts, :approved_plan_hash)
     approval_evidence = require_nonblank!(opts, :approval_evidence)
     actor = require_nonblank!(opts, :actor)
-    adapter = Keyword.get(opts, :adapter, &LiveStoryAgentLoop.invoke_live_agent/3)
-
     verify_plan_hash!(plan, approved_hash)
 
     if file_hash!(db_path) != get_in(plan, ["source", "snapshot_hash"]) do
@@ -89,9 +104,17 @@ defmodule Primeradiant.StorageHarness.GraphAdmissionRepair do
     end
 
     tenant_id = get_in(plan, ["source", "tenant_id"])
+    approved_revision = DurableSoupDb.tenant_revision(db_path, tenant_id)
     before = DurableSoupDb.load_tenant(db_path, tenant_id)
+
+    if file_hash!(db_path) != get_in(plan, ["source", "snapshot_hash"]) do
+      raise ArgumentError, "snapshot hash mismatch: apply database changed while loading"
+    end
+
     history_before = history_ids(before)
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    first_replay_run_id = Ecto.UUID.generate()
+    second_replay_run_id = Ecto.UUID.generate()
 
     run =
       ChangesetStore.insert!(RepairRun, %{
@@ -105,7 +128,7 @@ defmodule Primeradiant.StorageHarness.GraphAdmissionRepair do
         actor: actor,
         status: "running",
         started_at: now,
-        mutation_ids: [],
+        mutation_ids: [first_replay_run_id],
         rollback_proof: plan["rollback"],
         validation: %{}
       })
@@ -115,18 +138,27 @@ defmodule Primeradiant.StorageHarness.GraphAdmissionRepair do
     DurableSoupDb.persist_delta!(db_path, before, running, %{
       source_kind: "graph_admission_repair",
       source_db_path: get_in(plan, ["source", "db_path"]),
-      source_row_count: 0
+      source_row_count: 0,
+      replay_run_id: first_replay_run_id,
+      expected_tenant_revision: approved_revision
     })
 
     try do
       quarantined = quarantine(running, plan, run, now)
       admissions = admissions(quarantined, plan)
 
+      {adapter, assert_outputs_consumed} = planned_adapter(plan["replay_outputs"])
+
       {replayed, replay_report} =
         LiveStoryAgentLoop.run(quarantined, admissions, actor, adapter: adapter)
 
-      mutation_ids = mutation_ids(before, replayed)
-      validation = validation(replayed, plan, history_before, replay_report)
+      assert_outputs_consumed.()
+      validate_no_node_key_replacement!(before, replayed)
+
+      mutation_ids =
+        clean_ids([first_replay_run_id, second_replay_run_id] ++ mutation_ids(before, replayed))
+
+      validation = validation(replayed, plan, before, history_before, replay_report)
 
       finished_run =
         ChangesetStore.update!(run, %{
@@ -141,7 +173,9 @@ defmodule Primeradiant.StorageHarness.GraphAdmissionRepair do
       DurableSoupDb.persist_delta!(db_path, running, final, %{
         source_kind: "graph_admission_repair",
         source_db_path: get_in(plan, ["source", "db_path"]),
-        source_row_count: length(admissions)
+        source_row_count: length(admissions),
+        replay_run_id: second_replay_run_id,
+        expected_tenant_revision: DurableSoupDb.tenant_revision(db_path, tenant_id)
       })
 
       %{
@@ -155,10 +189,13 @@ defmodule Primeradiant.StorageHarness.GraphAdmissionRepair do
       }
     rescue
       error ->
+        failed_replay_run_id = Ecto.UUID.generate()
+
         failed_run =
           ChangesetStore.update!(run, %{
             status: "failed",
             finished_at: DateTime.utc_now() |> DateTime.truncate(:microsecond),
+            mutation_ids: clean_ids([first_replay_run_id, failed_replay_run_id]),
             validation: %{"failure" => Exception.message(error)}
           })
 
@@ -167,7 +204,9 @@ defmodule Primeradiant.StorageHarness.GraphAdmissionRepair do
         DurableSoupDb.persist_delta!(db_path, running, failed, %{
           source_kind: "graph_admission_repair_failed",
           source_db_path: get_in(plan, ["source", "db_path"]),
-          source_row_count: 0
+          source_row_count: 0,
+          replay_run_id: failed_replay_run_id,
+          expected_tenant_revision: DurableSoupDb.tenant_revision(db_path, tenant_id)
         })
 
         reraise error, __STACKTRACE__
@@ -184,15 +223,26 @@ defmodule Primeradiant.StorageHarness.GraphAdmissionRepair do
 
   defp story_plan(state, story) do
     events = Enum.filter(state.story_events, &(&1.story_id == story.id))
-    input_ids = events |> Enum.map(& &1.input_id) |> Enum.uniq() |> Enum.sort()
     story_node_ids = state.soup_nodes |> Enum.filter(&(&1.story_id == story.id)) |> ids()
-    input_node_ids = state.soup_nodes |> Enum.filter(&(&1.input_id in input_ids)) |> ids()
 
     edges =
       Enum.filter(
         state.edges,
-        &(&1.from_node_id in input_node_ids or &1.to_node_id in story_node_ids)
+        &(&1.from_node_id in story_node_ids or &1.to_node_id in story_node_ids)
       )
+
+    edge_node_ids =
+      edges
+      |> Enum.flat_map(&[&1.from_node_id, &1.to_node_id])
+      |> Enum.reject(&(&1 in story_node_ids))
+      |> clean_ids()
+
+    edge_input_ids =
+      state.soup_nodes
+      |> Enum.filter(&(&1.id in edge_node_ids and not is_nil(&1.input_id)))
+      |> Enum.map(& &1.input_id)
+
+    input_ids = clean_ids(Enum.map(events, & &1.input_id) ++ edge_input_ids)
 
     proposal_ids =
       (Enum.map(events, & &1.proposal_id) ++ Enum.map(edges, & &1.proposal_id)) |> clean_ids()
@@ -230,10 +280,21 @@ defmodule Primeradiant.StorageHarness.GraphAdmissionRepair do
           row.subject_id in Enum.map(events, & &1.id) or row.subject_id in commit_ids
       end)
 
+    title_history =
+      state.story_card_versions
+      |> Enum.filter(&(&1.story_id == story.id))
+      |> Enum.sort_by(&{&1.card_version, &1.id})
+      |> Enum.map(&get_in(&1.title || %{}, ["text"]))
+      |> then(
+        &([scalar_title(story.title) | &1]
+          |> Enum.reject(fn title -> title in [nil, ""] end)
+          |> Enum.uniq())
+      )
+
     %{
       "story_id" => story.id,
       "story_key" => story.story_key,
-      "title_history" => [story.title],
+      "title_history" => title_history,
       "original_state" => story.state,
       "story_event_ids" => ids(events),
       "edge_ids" => ids(edges),
@@ -262,6 +323,154 @@ defmodule Primeradiant.StorageHarness.GraphAdmissionRepair do
         "source_refs" => inputs |> Enum.map(&Admission.input_ref/1) |> Enum.sort()
       }
     end)
+  end
+
+  defp propose_replay(state, plan, adapter) do
+    simulated =
+      Enum.reduce(plan["stories"], state, fn story, acc ->
+        quarantine = %StoryQuarantine{
+          id: "dry-run:#{story["story_id"]}",
+          tenant_id: state.tenant_id,
+          story_id: story["story_id"],
+          repair_run_id: "dry-run"
+        }
+
+        State.append(acc, :story_quarantines, quarantine)
+      end)
+
+    key = {__MODULE__, make_ref()}
+    Process.put(key, [])
+
+    capture_adapter = fn config, packet, ctx ->
+      response = adapter.(config, packet, ctx)
+
+      captured = %{
+        "role" => Atom.to_string(config.role),
+        "input_id" => packet.input_id,
+        "response" => normalize_response(response)
+      }
+
+      Process.put(key, [captured | Process.get(key)])
+      response
+    end
+
+    {replayed, report} =
+      LiveStoryAgentLoop.run(simulated, admissions(simulated, plan), "dry-run-planner",
+        adapter: capture_adapter
+      )
+
+    outputs = key |> Process.get() |> Enum.reverse()
+    Process.delete(key)
+
+    original_story_ids = MapSet.new(ids(state.stories))
+    original_edge_ids = MapSet.new(ids(state.edges))
+
+    replacement_stories =
+      replayed.stories
+      |> Enum.reject(&MapSet.member?(original_story_ids, &1.id))
+      |> Enum.map(fn story ->
+        input_ids =
+          replayed.story_events
+          |> Enum.filter(&(&1.story_id == story.id))
+          |> Enum.map(& &1.input_id)
+          |> clean_ids()
+
+        %{
+          "story_key" => story.story_key,
+          "input_ids" => input_ids,
+          "source_refs" => source_refs(replayed, input_ids)
+        }
+      end)
+      |> Enum.sort_by(& &1["story_key"])
+
+    replacement_edges =
+      replayed.edges
+      |> Enum.reject(&MapSet.member?(original_edge_ids, &1.id))
+      |> Enum.map(fn edge ->
+        from_node = Enum.find(replayed.soup_nodes, &(&1.id == edge.from_node_id))
+        to_node = Enum.find(replayed.soup_nodes, &(&1.id == edge.to_node_id))
+        story = to_node && Enum.find(replayed.stories, &(&1.id == to_node.story_id))
+
+        %{
+          "input_id" => from_node && from_node.input_id,
+          "story_key" => story && story.story_key,
+          "edge_type" => edge.edge_type
+        }
+      end)
+      |> Enum.sort_by(&{&1["input_id"], &1["story_key"], &1["edge_type"]})
+
+    refusals =
+      report.correlation_chains
+      |> Enum.filter(&(is_binary(&1.refusal_reason) and &1.refusal_reason != ""))
+      |> Enum.map(&%{"source_ref" => &1.source_ref, "reason" => &1.refusal_reason})
+      |> Enum.sort_by(&{&1["source_ref"], &1["reason"]})
+
+    {%{
+       "replacement_memberships" => replacement_stories,
+       "replacement_edges" => replacement_edges,
+       "refusals" => refusals,
+       "old_polluted_memberships" =>
+         Enum.map(plan["stories"], &Map.take(&1, ~w(story_id story_key input_ids source_refs)))
+     }, outputs}
+  end
+
+  defp normalize_response(response) do
+    output_hash =
+      response[:output_hash] || ChangesetStore.hash(Jason.encode!(response.output))
+
+    %{
+      "output" => response.output,
+      "model" => response.model,
+      "model_route" => response.model_route,
+      "producer_kind" => response.producer_kind,
+      "decision_source" => response.decision_source,
+      "output_hash" => output_hash,
+      "invocation_transport_id" => "approved-dry-run:#{output_hash}",
+      "duration_ms" => 0
+    }
+  end
+
+  defp planned_adapter(outputs) do
+    key = {__MODULE__, make_ref()}
+    Process.put(key, outputs)
+
+    adapter = fn config, packet, _ctx ->
+      expected_role = Atom.to_string(config.role)
+
+      case Process.get(key) do
+        [%{"role" => role, "input_id" => input_id, "response" => response} | rest]
+        when role == expected_role and input_id == packet.input_id ->
+          Process.put(key, rest)
+
+          %{
+            output: response["output"],
+            model: response["model"],
+            model_route: response["model_route"],
+            producer_kind: response["producer_kind"],
+            decision_source: response["decision_source"],
+            output_hash: response["output_hash"],
+            invocation_transport_id: response["invocation_transport_id"],
+            duration_ms: response["duration_ms"]
+          }
+
+        _ ->
+          raise ArgumentError,
+                "approved replay output sequence does not match #{config.role} for #{packet.input_id}"
+      end
+    end
+
+    assert_consumed = fn ->
+      case Process.get(key) do
+        [] ->
+          Process.delete(key)
+
+        remaining ->
+          raise ArgumentError,
+                "approved replay output sequence has #{length(remaining)} unused outputs"
+      end
+    end
+
+    {adapter, assert_consumed}
   end
 
   defp quarantine(state, plan, run, now) do
@@ -324,9 +533,38 @@ defmodule Primeradiant.StorageHarness.GraphAdmissionRepair do
     end)
   end
 
-  defp validation(state, plan, history_before, replay_report) do
+  defp validation(state, plan, before, history_before, replay_report) do
     quarantined_story_ids = Enum.map(plan["stories"], & &1["story_id"])
     replacement_edges = Enum.reject(state.edges, &(&1.id in history_before.edges))
+    original_story_ids = MapSet.new(ids(before.stories))
+    replacement_stories = Enum.reject(state.stories, &MapSet.member?(original_story_ids, &1.id))
+    feed = Soup.feed(state, %{"limit" => max(length(state.stories), 1)})
+    feed_story_ids = Enum.map(feed.items, & &1.story_id)
+
+    replacement_memberships =
+      replacement_stories
+      |> Enum.map(fn story ->
+        input_ids =
+          state.story_events
+          |> Enum.filter(&(&1.story_id == story.id))
+          |> Enum.map(& &1.input_id)
+          |> clean_ids()
+
+        %{
+          "story_id" => story.id,
+          "story_key" => story.story_key,
+          "input_ids" => input_ids,
+          "source_refs" => source_refs(state, input_ids)
+        }
+      end)
+      |> Enum.sort_by(& &1["story_key"])
+
+    approved_memberships =
+      plan["proposed_replay"]["replacement_memberships"]
+      |> Enum.map(&Map.take(&1, ~w(story_key input_ids source_refs)))
+
+    actual_memberships =
+      Enum.map(replacement_memberships, &Map.take(&1, ~w(story_key input_ids source_refs)))
 
     %{
       "placeholder_story_count" =>
@@ -336,9 +574,7 @@ defmodule Primeradiant.StorageHarness.GraphAdmissionRepair do
               &1.id not in quarantined_story_ids)
         ),
       "active_quarantined_exposure_count" =>
-        Enum.count(quarantined_story_ids, fn story_id ->
-          not Enum.any?(state.story_quarantines, &(&1.story_id == story_id))
-        end),
+        Enum.count(quarantined_story_ids, &(&1 in feed_story_ids)),
       "replacement_placeholder_key_count" =>
         Enum.count(
           state.stories,
@@ -352,6 +588,17 @@ defmodule Primeradiant.StorageHarness.GraphAdmissionRepair do
               missing_edge_metadata?(&1.attrs))
         ),
       "history_ids_preserved" => history_preserved?(history_before, history_ids(state)),
+      "approved_memberships_match" => approved_memberships == actual_memberships,
+      "feed_story_ids" => feed_story_ids,
+      "quarantined_story_ids" => quarantined_story_ids,
+      "replacement_story_ids" => ids(replacement_stories),
+      "replacement_edge_ids" => ids(replacement_edges),
+      "replacement_memberships" => replacement_memberships,
+      "membership_comparison" => %{
+        "polluted" => plan["proposed_replay"]["old_polluted_memberships"],
+        "approved_replacement" => approved_memberships,
+        "applied_replacement" => actual_memberships
+      },
       "replay_refusal_count" =>
         Enum.count(
           replay_report.correlation_chains,
@@ -370,6 +617,21 @@ defmodule Primeradiant.StorageHarness.GraphAdmissionRepair do
   end
 
   defp history_ids(state), do: Map.new(@history_fields, &{&1, ids(Map.fetch!(state, &1))})
+
+  defp validate_no_node_key_replacement!(before, replayed) do
+    original = Map.new(before.soup_nodes, &{&1.node_key, &1.id})
+
+    case Enum.find(replayed.soup_nodes, fn node ->
+           Map.has_key?(original, node.node_key) and original[node.node_key] != node.id
+         end) do
+      nil ->
+        :ok
+
+      node ->
+        raise ArgumentError,
+              "approved replay would replace historical soup node key #{node.node_key}"
+    end
+  end
 
   defp history_preserved?(before_ids, current_ids) do
     Enum.all?(before_ids, fn {field, ids} ->
@@ -394,6 +656,10 @@ defmodule Primeradiant.StorageHarness.GraphAdmissionRepair do
     |> Enum.map(&Admission.input_ref/1)
     |> Enum.sort()
   end
+
+  defp scalar_title([title]) when is_binary(title), do: title
+  defp scalar_title(title) when is_binary(title), do: title
+  defp scalar_title(_title), do: nil
 
   defp ids(rows), do: rows |> Enum.map(& &1.id) |> clean_ids()
   defp clean_ids(values), do: values |> Enum.reject(&is_nil/1) |> Enum.uniq() |> Enum.sort()

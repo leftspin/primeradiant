@@ -885,7 +885,7 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
 
   defp replay_run_sql(state, attrs) do
     insert_sql(:replay_runs, %{
-      id: Ecto.UUID.generate(),
+      id: Map.get(attrs, :replay_run_id, Ecto.UUID.generate()),
       tenant_id: state.tenant_id,
       source_kind: Map.fetch!(attrs, :source_kind),
       source_db_path: Map.fetch!(attrs, :source_db_path),

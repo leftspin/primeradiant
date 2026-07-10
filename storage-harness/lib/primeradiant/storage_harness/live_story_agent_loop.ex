@@ -1684,7 +1684,8 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
         proposal_op.id,
         input_node.id
       )
-      |> evidence(
+      |> maybe_evidence_node(
+        true,
         "soup_node",
         story_node.id,
         input,
@@ -1751,18 +1752,26 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
          proposal_id,
          proposal_op_id,
          soup_node_id
-       ),
-       do:
-         evidence(
-           state,
-           subject_type,
-           subject_id,
-           input,
-           refs,
-           proposal_id,
-           proposal_op_id,
-           soup_node_id
-         )
+       ) do
+    if Enum.any?(state.evidence_refs, fn existing ->
+         existing.subject_type == subject_type and existing.subject_id == subject_id and
+           existing.input_id == input.id and existing.span_start == 0 and
+           existing.span_end == byte_size(input.body_text || "")
+       end) do
+      state
+    else
+      evidence(
+        state,
+        subject_type,
+        subject_id,
+        input,
+        refs,
+        proposal_id,
+        proposal_op_id,
+        soup_node_id
+      )
+    end
+  end
 
   defp write_story_card(
          state,
@@ -2070,33 +2079,23 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
          edge_id \\ nil
        ) do
     Enum.reduce(refs, state, fn ref, state ->
-      span_end = byte_size(input.body_text || "")
+      evidence =
+        ChangesetStore.insert!(EvidenceRef, %{
+          tenant_id: state.tenant_id,
+          subject_type: subject_type,
+          subject_id: subject_id,
+          input_id: input.id,
+          soup_node_id: soup_node_id,
+          proposal_id: proposal_id,
+          proposal_op_id: proposal_op_id,
+          edge_id: edge_id,
+          span_start: 0,
+          span_end: byte_size(input.body_text || ""),
+          evidence_label: ref,
+          evidence_hash: input.content_sha256
+        })
 
-      if Enum.any?(state.evidence_refs, fn evidence ->
-           evidence.subject_type == subject_type and evidence.subject_id == subject_id and
-             evidence.input_id == input.id and evidence.span_start == 0 and
-             evidence.span_end == span_end
-         end) do
-        state
-      else
-        evidence =
-          ChangesetStore.insert!(EvidenceRef, %{
-            tenant_id: state.tenant_id,
-            subject_type: subject_type,
-            subject_id: subject_id,
-            input_id: input.id,
-            soup_node_id: soup_node_id,
-            proposal_id: proposal_id,
-            proposal_op_id: proposal_op_id,
-            edge_id: edge_id,
-            span_start: 0,
-            span_end: span_end,
-            evidence_label: ref,
-            evidence_hash: input.content_sha256
-          })
-
-        State.append(state, :evidence_refs, evidence)
-      end
+      State.append(state, :evidence_refs, evidence)
     end)
   end
 
