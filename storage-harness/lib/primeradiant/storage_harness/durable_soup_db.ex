@@ -2,6 +2,15 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
   @moduledoc false
 
   @tables [
+    :package_acknowledgements,
+    :resolution_outcomes,
+    :resolution_attempts,
+    :resolved_source_fields,
+    :resolution_evidence,
+    :resolution_cases,
+    :raw_envelopes,
+    :source_gap_records,
+    :source_registrations,
     :story_quarantines,
     :repair_runs,
     :story_card_projection_audits,
@@ -29,6 +38,47 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
     :stories
   ]
 
+  @source_evidence_tables [
+    :source_registrations,
+    :source_gap_records,
+    :raw_envelopes,
+    :resolution_cases,
+    :resolution_evidence,
+    :resolved_source_fields,
+    :resolution_attempts,
+    :resolution_outcomes,
+    :package_acknowledgements
+  ]
+
+  @insert_only_tables [
+    :raw_envelopes,
+    :resolution_evidence,
+    :resolution_attempts,
+    :package_acknowledgements
+  ]
+
+  @dedupe_keys %{
+    raw_envelopes: [
+      :tenant_id,
+      :source_key,
+      :source_event_external_id,
+      :content_digest,
+      :adapter_version
+    ],
+    resolution_cases: [:tenant_id, :raw_envelope_id, :policy_version],
+    resolution_evidence: [:id],
+    resolution_attempts: [:tenant_id, :attempt_key],
+    package_acknowledgements: [:tenant_id, :package_id, :manifest_digest]
+  }
+
+  @dedupe_modules %{
+    raw_envelopes: Primeradiant.StorageHarness.RawEnvelope,
+    resolution_cases: Primeradiant.StorageHarness.ResolutionCase,
+    resolution_evidence: Primeradiant.StorageHarness.ResolutionEvidence,
+    resolution_attempts: Primeradiant.StorageHarness.ResolutionAttempt,
+    package_acknowledgements: Primeradiant.StorageHarness.PackageAcknowledgement
+  }
+
   def persist!(db_path, state, attrs \\ %{}) do
     db_path |> Path.dirname() |> File.mkdir_p!()
     validate_existing_foreign_keys!(db_path)
@@ -43,6 +93,15 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
         tenant_revision_guard_sql(state.tenant_id, Map.get(attrs, :expected_tenant_revision)),
         clear_tenant_sql(state.tenant_id),
         replay_run_sql(state, attrs),
+        rows_sql(:source_registrations, state.source_registrations),
+        rows_sql(:source_gap_records, state.source_gap_records),
+        rows_sql(:raw_envelopes, state.raw_envelopes),
+        rows_sql(:resolution_cases, state.resolution_cases),
+        rows_sql(:resolution_evidence, state.resolution_evidence),
+        rows_sql(:resolved_source_fields, state.resolved_source_fields),
+        rows_sql(:resolution_attempts, state.resolution_attempts),
+        rows_sql(:resolution_outcomes, state.resolution_outcomes),
+        rows_sql(:package_acknowledgements, state.package_acknowledgements),
         rows_sql(:agent_runs, state.agent_runs),
         rows_sql(:inputs, state.inputs),
         rows_sql(:stories, state.stories),
@@ -120,6 +179,82 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
       state = Primeradiant.StorageHarness.State.new(tenant_id: tenant_id, user_id: "flynn")
 
       state
+      |> put_rows(
+        :source_registrations,
+        load_rows(
+          db_path,
+          "source_registrations",
+          tenant_id,
+          Primeradiant.StorageHarness.SourceRegistration
+        )
+      )
+      |> put_rows(
+        :source_gap_records,
+        load_rows(
+          db_path,
+          "source_gap_records",
+          tenant_id,
+          Primeradiant.StorageHarness.SourceGapRecord
+        )
+      )
+      |> put_rows(
+        :raw_envelopes,
+        load_rows(db_path, "raw_envelopes", tenant_id, Primeradiant.StorageHarness.RawEnvelope)
+      )
+      |> put_rows(
+        :resolution_cases,
+        load_rows(
+          db_path,
+          "resolution_cases",
+          tenant_id,
+          Primeradiant.StorageHarness.ResolutionCase
+        )
+      )
+      |> put_rows(
+        :resolution_evidence,
+        load_rows(
+          db_path,
+          "resolution_evidence",
+          tenant_id,
+          Primeradiant.StorageHarness.ResolutionEvidence
+        )
+      )
+      |> put_rows(
+        :resolved_source_fields,
+        load_rows(
+          db_path,
+          "resolved_source_fields",
+          tenant_id,
+          Primeradiant.StorageHarness.ResolvedSourceField
+        )
+      )
+      |> put_rows(
+        :resolution_attempts,
+        load_rows(
+          db_path,
+          "resolution_attempts",
+          tenant_id,
+          Primeradiant.StorageHarness.ResolutionAttempt
+        )
+      )
+      |> put_rows(
+        :resolution_outcomes,
+        load_rows(
+          db_path,
+          "resolution_outcomes",
+          tenant_id,
+          Primeradiant.StorageHarness.ResolutionOutcome
+        )
+      )
+      |> put_rows(
+        :package_acknowledgements,
+        load_rows(
+          db_path,
+          "package_acknowledgements",
+          tenant_id,
+          Primeradiant.StorageHarness.PackageAcknowledgement
+        )
+      )
       |> put_rows(
         :agent_runs,
         load_rows(db_path, "agent_runs", tenant_id, Primeradiant.StorageHarness.AgentRun)
@@ -720,6 +855,37 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
 
   def table_count(db_path, table, tenant_id), do: count(db_path, table, tenant_id)
 
+  def insert_deduped!(db_path, table, row) when is_map_key(@dedupe_keys, table) do
+    db_path |> Path.dirname() |> File.mkdir_p!()
+    validate_existing_foreign_keys!(db_path)
+
+    attrs = row_map(table, row)
+    keys = Map.fetch!(@dedupe_keys, table)
+
+    sql =
+      [
+        ".bail on",
+        "PRAGMA foreign_keys = ON;",
+        "BEGIN IMMEDIATE;",
+        schema_sql(),
+        insert_ignore_sql(table, attrs),
+        "COMMIT;"
+      ]
+      |> Enum.join("\n")
+
+    sqlite!(db_path, sql)
+
+    where_sql =
+      Enum.map_join(keys, " AND ", fn key ->
+        "#{key} = #{sql_value(Map.fetch!(attrs, key))}"
+      end)
+
+    db_path
+    |> query_table_json("SELECT * FROM #{table} WHERE #{where_sql} LIMIT 1;")
+    |> List.first()
+    |> then(&row_struct(Map.fetch!(@dedupe_modules, table), &1))
+  end
+
   defp seen_state_delta_report(db_path, tenant_id) do
     %{
       authored_outputs: count(db_path, "authored_outputs", tenant_id),
@@ -891,6 +1057,7 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
 
   defp clear_tenant_sql(tenant_id) do
     @tables
+    |> Enum.reject(&(&1 in @source_evidence_tables))
     |> Enum.map(fn table -> "DELETE FROM #{table} WHERE tenant_id = #{sql_quote(tenant_id)};" end)
     |> Enum.join("\n")
   end
@@ -931,6 +1098,69 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
 
   defp rows_sql(table, rows),
     do: Enum.map_join(rows, "\n", &insert_sql(table, row_map(table, &1)))
+
+  defp row_map(:source_registrations, row) do
+    take(
+      row,
+      ~w(id tenant_id source_key adapter_module adapter_version mode resolution_policy policy_version policy_hash budgets config cursor last_received_at last_resolution_terminal_at last_admission_at gap_count refusal_count unresolved_count quarantine_count circuit_state inserted_at updated_at)a
+    )
+  end
+
+  defp row_map(:source_gap_records, row) do
+    take(
+      row,
+      ~w(id tenant_id source_key source_position status opened_at closed_at inserted_at updated_at)a
+    )
+  end
+
+  defp row_map(:raw_envelopes, row) do
+    take(
+      row,
+      ~w(id tenant_id source_key adapter_version source_event_external_id received_at content_digest integrity_metadata raw_object_ref retained_bytes visibility correlation_id idempotency_key inserted_at)a
+    )
+  end
+
+  defp row_map(:resolution_cases, row) do
+    take(
+      row,
+      ~w(id tenant_id raw_envelope_id policy_version state attempt_count next_retry_at outcome_code config_policy_hash trace_id inserted_at updated_at)a
+    )
+  end
+
+  defp row_map(:resolution_evidence, row) do
+    take(
+      row,
+      ~w(id tenant_id resolution_case_id kind value protected_ref source locator span_start span_end digest retrieved_at visibility provenance transformation_chain inserted_at)a
+    )
+  end
+
+  defp row_map(:resolved_source_fields, row) do
+    take(
+      row,
+      ~w(id tenant_id resolution_case_id field_name normalized_value confidence evidence_refs resolver_provenance transform contradiction_status selected inserted_at updated_at)a
+    )
+  end
+
+  defp row_map(:resolution_attempts, row) do
+    take(
+      row,
+      ~w(id tenant_id resolution_case_id raw_envelope_id raw_envelope_digest attempt_key stage resolver input_hash attempt_ordinal budgets_consumed outcome error_class response_evidence_refs started_at ended_at inserted_at)a
+    )
+  end
+
+  defp row_map(:resolution_outcomes, row) do
+    take(
+      row,
+      ~w(id tenant_id resolution_case_id outcome_code reason retryable quarantine_ref validator_version admission_material_ref inserted_at updated_at)a
+    )
+  end
+
+  defp row_map(:package_acknowledgements, row) do
+    take(
+      row,
+      ~w(id tenant_id package_id manifest_digest source_position_range status envelope_disposition_refs policy_hash completed_at trace_id inserted_at)a
+    )
+  end
 
   defp row_map(:agent_runs, row) do
     take(
@@ -1113,7 +1343,29 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
     columns = Map.keys(attrs)
     values = Enum.map(columns, &sql_value(Map.fetch!(attrs, &1)))
 
-    "INSERT OR REPLACE INTO #{table} (#{Enum.join(columns, ", ")}) VALUES (#{Enum.join(values, ", ")});"
+    cond do
+      table in @insert_only_tables ->
+        "INSERT OR IGNORE INTO #{table} (#{Enum.join(columns, ", ")}) VALUES (#{Enum.join(values, ", ")});"
+
+      table in @source_evidence_tables ->
+        updates =
+          columns
+          |> Enum.reject(&(&1 == :id))
+          |> Enum.map_join(", ", &"#{&1} = excluded.#{&1}")
+
+        "INSERT INTO #{table} (#{Enum.join(columns, ", ")}) VALUES (#{Enum.join(values, ", ")}) ON CONFLICT(id) DO UPDATE SET #{updates};"
+
+      true ->
+        "INSERT OR REPLACE INTO #{table} (#{Enum.join(columns, ", ")}) VALUES (#{Enum.join(values, ", ")});"
+    end
+  end
+
+  defp insert_ignore_sql(table, attrs) do
+    attrs = fill_storage_timestamps(attrs)
+    columns = Map.keys(attrs)
+    values = Enum.map(columns, &sql_value(Map.fetch!(attrs, &1)))
+
+    "INSERT OR IGNORE INTO #{table} (#{Enum.join(columns, ", ")}) VALUES (#{Enum.join(values, ", ")});"
   end
 
   defp fill_storage_timestamps(attrs) do
@@ -1328,14 +1580,16 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
   defp load_value("confidence", value), do: Decimal.new(to_string(value))
   defp load_value("verified", value), do: value in [1, true, "1"]
   defp load_value("appears_in_current_card", value), do: value in [1, true, "1"]
+  defp load_value("selected", value), do: value in [1, true, "1"]
+  defp load_value("retryable", value), do: value in [1, true, "1"]
 
   defp load_value(key, value)
-       when key in ~w(acl scope normalized facts background questions colors topic_tokens attrs payload evidence_refs changed_facts structural_facts background_facts evidence_packet claim_refs title deck summary freshness field_completeness topic_salience provenance canonical_public_url source_domain source_label publication source_posture contribution_reason source_weight provenance_refs conflict_refs uncertainty changed_field_keys added_claim_refs removed_claim_refs changed_claim_refs changed_source_coverage_refs change_summary material_unseen_deltas nonmaterial_exclusions story_card_version_ids omitted_story_reasons visibility_scope mutation_ids rollback_proof validation preserved_ids source_refs) and
+       when key in ~w(acl scope normalized facts background questions colors topic_tokens attrs payload evidence_refs changed_facts structural_facts background_facts evidence_packet claim_refs title deck summary freshness field_completeness topic_salience provenance canonical_public_url source_domain source_label publication source_posture contribution_reason source_weight provenance_refs conflict_refs uncertainty changed_field_keys added_claim_refs removed_claim_refs changed_claim_refs changed_source_coverage_refs change_summary material_unseen_deltas nonmaterial_exclusions story_card_version_ids omitted_story_reasons visibility_scope mutation_ids rollback_proof validation preserved_ids source_refs resolution_policy budgets config cursor integrity_metadata locator transformation_chain resolver_provenance budgets_consumed response_evidence_refs source_position_range envelope_disposition_refs) and
               is_binary(value),
        do: decode_json(value, %{})
 
   defp load_value(key, value)
-       when key in ~w(inserted_at updated_at started_at ended_at finished_at committed_at observed_at first_observed_at updated_at_story last_material_at seen_at first_observed_at last_observed_at query_time quarantined_at) and
+       when key in ~w(inserted_at updated_at started_at ended_at finished_at committed_at observed_at first_observed_at updated_at_story last_material_at seen_at first_observed_at last_observed_at query_time quarantined_at received_at retrieved_at next_retry_at completed_at opened_at closed_at last_received_at last_resolution_terminal_at last_admission_at) and
               is_binary(value),
        do: Primeradiant.StorageHarness.ChangesetStore.iso!(value)
 
@@ -1372,6 +1626,163 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
       source_row_count INTEGER NOT NULL,
       source_mode TEXT NOT NULL CHECK (source_mode = 'read_only'),
       inserted_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS source_registrations (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      source_key TEXT NOT NULL,
+      adapter_module TEXT NOT NULL,
+      adapter_version TEXT NOT NULL,
+      mode TEXT NOT NULL,
+      resolution_policy TEXT NOT NULL,
+      policy_version TEXT NOT NULL,
+      policy_hash TEXT NOT NULL,
+      budgets TEXT NOT NULL,
+      config TEXT NOT NULL,
+      cursor TEXT NOT NULL,
+      last_received_at TEXT,
+      last_resolution_terminal_at TEXT,
+      last_admission_at TEXT,
+      gap_count INTEGER NOT NULL,
+      refusal_count INTEGER NOT NULL,
+      unresolved_count INTEGER NOT NULL,
+      quarantine_count INTEGER NOT NULL,
+      circuit_state TEXT NOT NULL,
+      inserted_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE (tenant_id, source_key)
+    );
+
+    CREATE TABLE IF NOT EXISTS source_gap_records (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      source_key TEXT NOT NULL,
+      source_position TEXT NOT NULL,
+      status TEXT NOT NULL,
+      opened_at TEXT NOT NULL,
+      closed_at TEXT,
+      inserted_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS raw_envelopes (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      source_key TEXT NOT NULL,
+      adapter_version TEXT NOT NULL,
+      source_event_external_id TEXT NOT NULL,
+      received_at TEXT NOT NULL,
+      content_digest TEXT NOT NULL,
+      integrity_metadata TEXT NOT NULL,
+      raw_object_ref TEXT,
+      retained_bytes TEXT,
+      visibility TEXT NOT NULL,
+      correlation_id TEXT NOT NULL,
+      idempotency_key TEXT NOT NULL,
+      inserted_at TEXT NOT NULL,
+      UNIQUE (tenant_id, source_key, source_event_external_id, content_digest, adapter_version)
+    );
+
+    CREATE TABLE IF NOT EXISTS resolution_cases (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      raw_envelope_id TEXT NOT NULL REFERENCES raw_envelopes(id),
+      policy_version TEXT NOT NULL,
+      state TEXT NOT NULL,
+      attempt_count INTEGER NOT NULL,
+      next_retry_at TEXT,
+      outcome_code TEXT,
+      config_policy_hash TEXT NOT NULL,
+      trace_id TEXT NOT NULL,
+      inserted_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE (tenant_id, raw_envelope_id, policy_version)
+    );
+
+    CREATE TABLE IF NOT EXISTS resolution_evidence (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      resolution_case_id TEXT NOT NULL REFERENCES resolution_cases(id),
+      kind TEXT NOT NULL,
+      value TEXT,
+      protected_ref TEXT,
+      source TEXT NOT NULL,
+      locator TEXT NOT NULL,
+      span_start INTEGER,
+      span_end INTEGER,
+      digest TEXT NOT NULL,
+      retrieved_at TEXT NOT NULL,
+      visibility TEXT NOT NULL,
+      provenance TEXT NOT NULL,
+      transformation_chain TEXT NOT NULL,
+      inserted_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS resolved_source_fields (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      resolution_case_id TEXT NOT NULL REFERENCES resolution_cases(id),
+      field_name TEXT NOT NULL,
+      normalized_value TEXT NOT NULL,
+      confidence TEXT NOT NULL,
+      evidence_refs TEXT NOT NULL,
+      resolver_provenance TEXT NOT NULL,
+      transform TEXT NOT NULL,
+      contradiction_status TEXT NOT NULL,
+      selected INTEGER NOT NULL,
+      inserted_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS resolution_attempts (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      resolution_case_id TEXT NOT NULL REFERENCES resolution_cases(id),
+      raw_envelope_id TEXT NOT NULL REFERENCES raw_envelopes(id),
+      raw_envelope_digest TEXT NOT NULL,
+      attempt_key TEXT NOT NULL,
+      stage TEXT NOT NULL,
+      resolver TEXT,
+      input_hash TEXT NOT NULL,
+      attempt_ordinal INTEGER NOT NULL,
+      budgets_consumed TEXT NOT NULL,
+      outcome TEXT NOT NULL,
+      error_class TEXT,
+      response_evidence_refs TEXT NOT NULL,
+      started_at TEXT NOT NULL,
+      ended_at TEXT NOT NULL,
+      inserted_at TEXT NOT NULL,
+      UNIQUE (tenant_id, attempt_key)
+    );
+
+    CREATE TABLE IF NOT EXISTS resolution_outcomes (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      resolution_case_id TEXT NOT NULL REFERENCES resolution_cases(id),
+      outcome_code TEXT NOT NULL,
+      reason TEXT NOT NULL,
+      retryable INTEGER NOT NULL,
+      quarantine_ref TEXT,
+      validator_version TEXT NOT NULL,
+      admission_material_ref TEXT,
+      inserted_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS package_acknowledgements (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      package_id TEXT NOT NULL,
+      manifest_digest TEXT NOT NULL,
+      source_position_range TEXT NOT NULL,
+      status TEXT NOT NULL,
+      envelope_disposition_refs TEXT NOT NULL,
+      policy_hash TEXT NOT NULL,
+      completed_at TEXT NOT NULL,
+      trace_id TEXT NOT NULL,
+      inserted_at TEXT NOT NULL,
+      UNIQUE (tenant_id, package_id, manifest_digest)
     );
 
     CREATE TABLE IF NOT EXISTS repair_runs (
