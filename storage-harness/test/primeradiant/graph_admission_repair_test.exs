@@ -143,8 +143,15 @@ defmodule Primeradiant.GraphAdmissionRepairTest do
       apply_plan!(db_path, plan_path, String.duplicate("0", 64))
     end
 
-    assert_raise ArgumentError, ~r/must not be the preserved snapshot path/, fn ->
+    assert_raise ArgumentError, ~r/must not be the preserved snapshot file/, fn ->
       apply_plan!(snapshot_path, plan_path, plan["plan_hash"])
+    end
+
+    hard_link = Path.join(root, "snapshot-hard-link.sqlite3")
+    File.ln!(snapshot_path, hard_link)
+
+    assert_raise ArgumentError, ~r/must not be the preserved snapshot file/, fn ->
+      apply_plan!(hard_link, plan_path, plan["plan_hash"])
     end
 
     assert GraphAdmissionRepair.file_hash!(db_path) == before_hash

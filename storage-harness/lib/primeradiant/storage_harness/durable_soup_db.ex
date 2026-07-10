@@ -592,6 +592,31 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
     end
   end
 
+  def tenant_revision_after_replay!(db_path, tenant_id, replay_run_id) do
+    [latest_id, revision] =
+      db_path
+      |> sqlite!("""
+      SELECT
+        COALESCE((
+          SELECT id FROM replay_runs
+          WHERE tenant_id = #{sql_quote(tenant_id)}
+          ORDER BY inserted_at DESC, id DESC
+          LIMIT 1
+        ), '') || '|' ||
+        COUNT(*) || ':' || COALESCE(MAX(inserted_at || ':' || id), '')
+      FROM replay_runs
+      WHERE tenant_id = #{sql_quote(tenant_id)};
+      """)
+      |> String.trim()
+      |> String.split("|", parts: 2)
+
+    if latest_id != replay_run_id do
+      raise ArgumentError, "tenant revision changed after repair write"
+    end
+
+    revision
+  end
+
   def merge_state(%Primeradiant.StorageHarness.State{} = prior, current) do
     %Primeradiant.StorageHarness.State{
       prior
