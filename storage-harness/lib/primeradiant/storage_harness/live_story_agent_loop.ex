@@ -1485,8 +1485,7 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
     title = story_title(meaning.output, input)
     existing_story? = Enum.any?(state.stories, &(&1.story_key == story_key))
 
-    event_classification =
-      event_classification(meaning.output, not existing_story?, soup_candidate_hint)
+    event_classification = event_classification(meaning.output, not existing_story?)
 
     changed_facts =
       if material_event_classification?(event_classification), do: raw_changed_facts, else: %{}
@@ -1941,14 +1940,14 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
             updated_at_story: input.observed_at,
             last_material_at:
               if(
-                material_event_classification?(event_classification(meaning.output, false, nil)) and
+                material_event_classification?(event_classification(meaning.output, false)) and
                   changed_facts != %{},
                 do: input.observed_at,
                 else: existing.last_material_at
               ),
             structural_facts:
               if(
-                material_event_classification?(event_classification(meaning.output, false, nil)) and
+                material_event_classification?(event_classification(meaning.output, false)) and
                   changed_facts != %{},
                 do: Map.merge(existing.structural_facts || %{}, changed_facts),
                 else: existing.structural_facts || %{}
@@ -2964,24 +2963,18 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
     end
   end
 
-  defp event_classification(_output, true, _hint), do: "split"
+  defp event_classification(_output, true), do: "split"
 
-  defp event_classification(output, false, hint) do
+  defp event_classification(output, false) do
     case classification(output, "substantive_update") do
       "duplicate" -> "duplicate"
       "no_op" -> "no_op"
       "repeated_noop_input" -> "no_op"
       "adds_color" -> "color"
       "stale" -> "stale"
-      _ -> hinted_event_classification(hint)
+      _ -> "attach"
     end
   end
-
-  defp hinted_event_classification(%{suggested_classification: "no_op"}), do: "no_op"
-
-  defp hinted_event_classification(%{"suggested_classification" => "no_op"}), do: "no_op"
-
-  defp hinted_event_classification(_hint), do: "attach"
 
   defp edge_type_for_event("duplicate"), do: "duplicates"
   defp edge_type_for_event("no_op"), do: "duplicates"

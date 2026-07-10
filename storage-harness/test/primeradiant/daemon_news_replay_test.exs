@@ -2857,25 +2857,11 @@ defmodule Primeradiant.DaemonNewsReplayTest do
         """
       )
 
-    assert Enum.map(events, & &1["classification"]) == ["split", "no_op"]
+    assert Enum.map(events, & &1["classification"]) == ["split", "attach"]
 
-    assert Jason.decode!(List.last(events)["changed_facts"]) == %{}
-
-    [delta] =
-      sqlite_json_rows!(
-        soup_db_path,
-        """
-        SELECT nonmaterial_exclusions
-        FROM story_reader_deltas
-        WHERE tenant_id = '#{@tenant}'
-        ORDER BY inserted_at DESC
-        LIMIT 1;
-        """
-      )
-
-    [exclusion] = Jason.decode!(delta["nonmaterial_exclusions"])
-    assert String.contains?(exclusion["text"], "no material new update")
-    assert exclusion["claim_refs"] == []
+    assert Jason.decode!(List.last(events)["changed_facts"]) == %{
+             "strategy" => "exclusive-content-case-by-case"
+           }
   end
 
   test "live story-agent loop does not claim story proof with zero admissions" do
