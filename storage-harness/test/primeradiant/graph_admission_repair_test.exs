@@ -25,22 +25,28 @@ defmodule Primeradiant.GraphAdmissionRepairTest do
     File.mkdir_p!(root)
     on_exit(fn -> File.rm_rf!(root) end)
 
-    db_path = Path.join(root, "snapshot.sqlite3")
-    seed_polluted_snapshot!(db_path)
-    %{root: root, db_path: db_path}
+    snapshot_path = Path.join(root, "snapshot.sqlite3")
+    db_path = Path.join(root, "repair-target.sqlite3")
+    seed_polluted_snapshot!(snapshot_path)
+    File.cp!(snapshot_path, db_path)
+    %{root: root, snapshot_path: snapshot_path, db_path: db_path}
   end
 
   test "dry-run is deterministic, read-only, and preserves every historical ID", %{
-    db_path: db_path
+    snapshot_path: snapshot_path
   } do
-    before_hash = GraphAdmissionRepair.file_hash!(db_path)
-    first = plan(db_path)
-    second = plan(db_path)
+    before_hash = GraphAdmissionRepair.file_hash!(snapshot_path)
+    first = plan(snapshot_path)
+    second = plan(snapshot_path)
 
     assert first == second
     assert first["plan_hash"] == second["plan_hash"]
     assert first["writes_attempted"] == false
-    assert GraphAdmissionRepair.file_hash!(db_path) == before_hash
+
+    assert first["source"]["tenant_revision"] ==
+             DurableSoupDb.tenant_revision(snapshot_path, @tenant)
+
+    assert GraphAdmissionRepair.file_hash!(snapshot_path) == before_hash
 
     assert [story] = first["stories"]
     assert story["story_key"] == "new-story"
@@ -59,11 +65,12 @@ defmodule Primeradiant.GraphAdmissionRepairTest do
   end
 
   test "discovery includes edge-only input material when no story event remains", %{
-    db_path: db_path
+    snapshot_path: snapshot_path
   } do
-    {_, 0} = System.cmd("sqlite3", [db_path, "DELETE FROM story_events;"], stderr_to_stdout: true)
+    {_, 0} =
+      System.cmd("sqlite3", [snapshot_path, "DELETE FROM story_events;"], stderr_to_stdout: true)
 
-    [story] = plan(db_path)["stories"]
+    [story] = plan(snapshot_path)["stories"]
     assert story["story_event_ids"] == []
     assert length(story["edge_ids"]) == 1
     assert length(story["input_ids"]) == 1
@@ -72,10 +79,10 @@ defmodule Primeradiant.GraphAdmissionRepairTest do
   end
 
   test "plan hash binds proposed replacement membership and exact agent outputs", %{
-    db_path: db_path
+    snapshot_path: snapshot_path
   } do
-    approved = plan(db_path)
-    different = plan(db_path, &alternate_adapter/3)
+    approved = plan(snapshot_path)
+    different = plan(snapshot_path, &alternate_adapter/3)
 
     assert approved["plan_hash"] != different["plan_hash"]
     assert plan_replay_memberships(approved) == ["repaired-clinic-event"]
@@ -84,7 +91,7 @@ defmodule Primeradiant.GraphAdmissionRepairTest do
   end
 
   test "dry-run refuses nondeterministic agent proposals for the same snapshot", %{
-    db_path: db_path
+    snapshot_path: snapshot_path
   } do
     Process.put(:t1649_adapter_calls, 0)
 
@@ -100,15 +107,26 @@ defmodule Primeradiant.GraphAdmissionRepairTest do
     end
 
     assert_raise ArgumentError, ~r/replay proposal is not deterministic/, fn ->
-      plan(db_path, unstable)
+      plan(snapshot_path, unstable)
+    end
+  end
+
+  test "dry-run refuses a snapshot with uncheckpointed WAL state", %{
+    snapshot_path: snapshot_path
+  } do
+    File.write!(snapshot_path <> "-wal", "uncheckpointed")
+
+    assert_raise ArgumentError, ~r/transactionally complete SQLite copy without WAL/, fn ->
+      plan(snapshot_path)
     end
   end
 
   test "apply refuses absent, mismatched, and stale exact approval before mutation", %{
     root: root,
+    snapshot_path: snapshot_path,
     db_path: db_path
   } do
-    plan = plan(db_path)
+    plan = plan(snapshot_path)
     plan_path = write_plan!(root, plan)
     before_hash = GraphAdmissionRepair.file_hash!(db_path)
 
@@ -123,6 +141,10 @@ defmodule Primeradiant.GraphAdmissionRepairTest do
 
     assert_raise ArgumentError, ~r/approved plan hash mismatch/, fn ->
       apply_plan!(db_path, plan_path, String.duplicate("0", 64))
+    end
+
+    assert_raise ArgumentError, ~r/must not be the preserved snapshot path/, fn ->
+      apply_plan!(snapshot_path, plan_path, plan["plan_hash"])
     end
 
     assert GraphAdmissionRepair.file_hash!(db_path) == before_hash
@@ -141,9 +163,10 @@ defmodule Primeradiant.GraphAdmissionRepairTest do
   test "approved apply quarantines, replays through the membrane, records provenance, and validates for T1325",
        %{
          root: root,
+         snapshot_path: snapshot_path,
          db_path: db_path
        } do
-    plan = plan(db_path)
+    plan = plan(snapshot_path)
     plan_path = write_plan!(root, plan)
     before = DurableSoupDb.load_tenant(db_path, @tenant)
     before_history = history_ids(before)
@@ -161,13 +184,17 @@ defmodule Primeradiant.GraphAdmissionRepairTest do
     assert report["validation"]["approved_memberships_match"] == true
     assert report["validation"]["replacement_story_ids"] != []
     assert report["validation"]["replacement_edge_ids"] != []
-    assert report["validation"]["feed_story_ids"] == []
+    assert report["validation"]["feed_blockers"] == []
+
+    assert report["validation"]["feed_story_ids"] ==
+             report["validation"]["replacement_story_ids"]
+
     assert hd(plan["stories"])["story_id"] not in report["validation"]["feed_story_ids"]
 
     durable_feed =
       db_path
       |> DurableSoupDb.load_soup_feed_projection(@tenant, %{"limit" => 20})
-      |> Soup.feed(%{"limit" => 20})
+      |> Soup.feed(%{"consumer" => "reporter", "projection" => "story_cards", "limit" => 20})
 
     assert hd(plan["stories"])["story_id"] not in Enum.map(durable_feed.items, & &1.story_id)
 
@@ -217,9 +244,10 @@ defmodule Primeradiant.GraphAdmissionRepairTest do
 
   test "replay refusal is recorded without losing rollback or historical proof", %{
     root: root,
+    snapshot_path: snapshot_path,
     db_path: db_path
   } do
-    plan = plan(db_path, &refusing_adapter/3)
+    plan = plan(snapshot_path, &refusing_adapter/3)
     plan_path = write_plan!(root, plan)
 
     report =
@@ -239,9 +267,10 @@ defmodule Primeradiant.GraphAdmissionRepairTest do
   test "failed replay durably records failure and snapshot rollback proof without graph mutation",
        %{
          root: root,
+         snapshot_path: snapshot_path,
          db_path: db_path
        } do
-    plan = plan(db_path)
+    plan = plan(snapshot_path)
 
     plan =
       plan
@@ -269,6 +298,37 @@ defmodule Primeradiant.GraphAdmissionRepairTest do
     assert run.rollback_proof["snapshot_hash"] == plan["source"]["snapshot_hash"]
     assert failed.story_quarantines == []
     assert history_ids(failed) == history_ids(before)
+    assert run.id in run.mutation_ids
+  end
+
+  test "rollback restores original feed visibility and quarantines replacement material", %{
+    root: root,
+    snapshot_path: snapshot_path,
+    db_path: db_path
+  } do
+    plan = plan(snapshot_path)
+    plan_path = write_plan!(root, plan)
+    apply_report = apply_plan!(db_path, plan_path, plan["plan_hash"])
+
+    rollback_report =
+      GraphAdmissionRepair.rollback!(
+        soup_db: db_path,
+        plan: plan_path,
+        approved_plan_hash: plan["plan_hash"],
+        repair_run_id: apply_report["repair_run_id"],
+        actor: "rollback-operator"
+      )
+
+    state = DurableSoupDb.load_tenant(db_path, @tenant)
+    assert [run] = state.repair_runs
+    assert run.status == "rolled_back"
+    assert run.rollback_proof["snapshot_verified"] == true
+    assert run.rollback_proof["rolled_back_by"] == "rollback-operator"
+    assert rollback_report["validation"]["feed_blockers"] == []
+    assert rollback_report["validation"]["original_story_ids_visible"] == true
+    assert rollback_report["validation"]["replacement_story_ids_hidden"] == true
+    assert Enum.any?(state.story_quarantines, &(&1.rollback_status == "restored"))
+    assert Enum.any?(state.story_quarantines, &(&1.reason == "rollback_replacement_story"))
   end
 
   defp seed_polluted_snapshot!(db_path) do

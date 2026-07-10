@@ -14,6 +14,7 @@ defmodule Mix.Tasks.Primeradiant.GraphAdmissionRepair do
         strict: [
           dry_run: :boolean,
           apply: :boolean,
+          rollback: :boolean,
           source_db: :string,
           snapshot: :string,
           soup_db: :string,
@@ -22,6 +23,7 @@ defmodule Mix.Tasks.Primeradiant.GraphAdmissionRepair do
           plan: :string,
           approved_plan_hash: :string,
           approval_evidence: :string,
+          repair_run_id: :string,
           actor: :string
         ]
       )
@@ -29,10 +31,15 @@ defmodule Mix.Tasks.Primeradiant.GraphAdmissionRepair do
     if invalid != [], do: raise(ArgumentError, "invalid options: #{inspect(invalid)}")
     Mix.Task.run("app.start")
 
-    case {Keyword.get(opts, :dry_run, false), Keyword.get(opts, :apply, false)} do
-      {true, false} -> dry_run(opts)
-      {false, true} -> apply(opts)
-      _ -> raise ArgumentError, "choose exactly one of --dry-run or --apply"
+    case {
+      Keyword.get(opts, :dry_run, false),
+      Keyword.get(opts, :apply, false),
+      Keyword.get(opts, :rollback, false)
+    } do
+      {true, false, false} -> dry_run(opts)
+      {false, true, false} -> apply(opts)
+      {false, false, true} -> rollback(opts)
+      _ -> raise ArgumentError, "choose exactly one of --dry-run, --apply, or --rollback"
     end
   end
 
@@ -62,6 +69,19 @@ defmodule Mix.Tasks.Primeradiant.GraphAdmissionRepair do
         plan: Keyword.fetch!(opts, :plan),
         approved_plan_hash: Keyword.get(opts, :approved_plan_hash),
         approval_evidence: Keyword.get(opts, :approval_evidence),
+        actor: Keyword.get(opts, :actor)
+      )
+
+    Mix.shell().info(Jason.encode!(report))
+  end
+
+  defp rollback(opts) do
+    report =
+      GraphAdmissionRepair.rollback!(
+        soup_db: Keyword.fetch!(opts, :soup_db),
+        plan: Keyword.fetch!(opts, :plan),
+        approved_plan_hash: Keyword.get(opts, :approved_plan_hash),
+        repair_run_id: Keyword.get(opts, :repair_run_id),
         actor: Keyword.get(opts, :actor)
       )
 

@@ -23,8 +23,15 @@ defmodule Primeradiant.StorageHarness.GraphAdmissionRepair do
     tenant_id = Keyword.fetch!(opts, :tenant)
     source_db_path = require_nonblank!(opts, :source_db)
     source_commit = require_nonblank!(opts, :source_commit)
+    ensure_wal_free!(snapshot_path, "snapshot")
     snapshot_hash = file_hash!(snapshot_path)
     state = DurableSoupDb.load_tenant(snapshot_path, tenant_id)
+    snapshot_revision = DurableSoupDb.tenant_revision(snapshot_path, tenant_id)
+
+    if file_hash!(snapshot_path) != snapshot_hash do
+      raise ArgumentError, "snapshot changed while building the dry-run plan"
+    end
+
     adapter = Keyword.get(opts, :adapter, &LiveStoryAgentLoop.invoke_live_agent/3)
 
     stories =
@@ -43,7 +50,8 @@ defmodule Primeradiant.StorageHarness.GraphAdmissionRepair do
         "tenant_id" => tenant_id,
         "source_commit" => source_commit,
         "snapshot_path" => snapshot_path,
-        "snapshot_hash" => snapshot_hash
+        "snapshot_hash" => snapshot_hash,
+        "tenant_revision" => snapshot_revision
       },
       "placeholder_keys" => @placeholder_keys,
       "stories" => story_plans,
@@ -99,13 +107,34 @@ defmodule Primeradiant.StorageHarness.GraphAdmissionRepair do
     actor = require_nonblank!(opts, :actor)
     verify_plan_hash!(plan, approved_hash)
 
+    snapshot_path = get_in(plan, ["source", "snapshot_path"])
+
+    if Path.expand(db_path) == Path.expand(snapshot_path) do
+      raise ArgumentError, "apply database must not be the preserved snapshot path"
+    end
+
+    ensure_wal_free!(snapshot_path, "snapshot")
+    ensure_wal_free!(db_path, "apply database")
+
+    if file_hash!(snapshot_path) != get_in(plan, ["source", "snapshot_hash"]) do
+      raise ArgumentError, "snapshot hash mismatch: preserved snapshot changed"
+    end
+
     if file_hash!(db_path) != get_in(plan, ["source", "snapshot_hash"]) do
       raise ArgumentError, "snapshot hash mismatch: apply database is not the approved snapshot"
     end
 
     tenant_id = get_in(plan, ["source", "tenant_id"])
-    approved_revision = DurableSoupDb.tenant_revision(db_path, tenant_id)
+    approved_revision = get_in(plan, ["source", "tenant_revision"])
+
+    if DurableSoupDb.tenant_revision(db_path, tenant_id) != approved_revision do
+      raise ArgumentError,
+            "snapshot revision mismatch: apply database is not the approved tenant revision"
+    end
+
     before = DurableSoupDb.load_tenant(db_path, tenant_id)
+
+    ensure_wal_free!(db_path, "apply database")
 
     if file_hash!(db_path) != get_in(plan, ["source", "snapshot_hash"]) do
       raise ArgumentError, "snapshot hash mismatch: apply database changed while loading"
@@ -158,7 +187,7 @@ defmodule Primeradiant.StorageHarness.GraphAdmissionRepair do
       mutation_ids =
         clean_ids([first_replay_run_id, second_replay_run_id] ++ mutation_ids(before, replayed))
 
-      validation = validation(replayed, plan, before, history_before, replay_report)
+      validation = validation(replayed, plan, history_before, replay_report)
 
       finished_run =
         ChangesetStore.update!(run, %{
@@ -195,7 +224,7 @@ defmodule Primeradiant.StorageHarness.GraphAdmissionRepair do
           ChangesetStore.update!(run, %{
             status: "failed",
             finished_at: DateTime.utc_now() |> DateTime.truncate(:microsecond),
-            mutation_ids: clean_ids([first_replay_run_id, failed_replay_run_id]),
+            mutation_ids: clean_ids([run.id, first_replay_run_id, failed_replay_run_id]),
             validation: %{"failure" => Exception.message(error)}
           })
 
@@ -211,6 +240,120 @@ defmodule Primeradiant.StorageHarness.GraphAdmissionRepair do
 
         reraise error, __STACKTRACE__
     end
+  end
+
+  def rollback!(opts) do
+    db_path = Keyword.fetch!(opts, :soup_db)
+    plan = opts |> Keyword.fetch!(:plan) |> File.read!() |> Jason.decode!()
+    approved_hash = require_nonblank!(opts, :approved_plan_hash)
+    repair_run_id = require_nonblank!(opts, :repair_run_id)
+    actor = require_nonblank!(opts, :actor)
+    verify_plan_hash!(plan, approved_hash)
+
+    snapshot_path = get_in(plan, ["source", "snapshot_path"])
+    ensure_wal_free!(snapshot_path, "snapshot")
+    ensure_wal_free!(db_path, "rollback database")
+
+    if file_hash!(snapshot_path) != get_in(plan, ["source", "snapshot_hash"]) do
+      raise ArgumentError, "snapshot hash mismatch: rollback snapshot changed"
+    end
+
+    tenant_id = get_in(plan, ["source", "tenant_id"])
+    expected_revision = DurableSoupDb.tenant_revision(db_path, tenant_id)
+    before = DurableSoupDb.load_tenant(db_path, tenant_id)
+
+    run =
+      Enum.find(before.repair_runs, &(&1.id == repair_run_id and &1.plan_hash == approved_hash)) ||
+        raise ArgumentError, "approved repair run not found"
+
+    if run.status != "succeeded" do
+      raise ArgumentError, "only a succeeded repair run can be rolled back"
+    end
+
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    restored =
+      Enum.reduce(before.story_quarantines, before, fn quarantine, state ->
+        if quarantine.repair_run_id == run.id do
+          updated = ChangesetStore.update!(quarantine, %{rollback_status: "restored"})
+          State.replace(state, :story_quarantines, quarantine.id, updated)
+        else
+          state
+        end
+      end)
+
+    replacement_story_ids = run.validation["replacement_story_ids"] || []
+
+    restored =
+      Enum.reduce(replacement_story_ids, restored, fn story_id, state ->
+        story = Enum.find(state.stories, &(&1.id == story_id))
+
+        quarantine =
+          ChangesetStore.insert!(StoryQuarantine, %{
+            tenant_id: tenant_id,
+            repair_run_id: run.id,
+            story_id: story.id,
+            reason: "rollback_replacement_story",
+            original_story_key: story.story_key,
+            original_story_state: story.state,
+            preserved_ids: %{},
+            source_refs: [],
+            quarantined_at: now,
+            rollback_status: "snapshot_available"
+          })
+
+        State.append(state, :story_quarantines, quarantine)
+      end)
+
+    rollback_replay_run_id = Ecto.UUID.generate()
+    rollback_ids = clean_ids([rollback_replay_run_id] ++ mutation_ids(before, restored))
+
+    rolled_back_run =
+      ChangesetStore.update!(run, %{
+        status: "rolled_back",
+        mutation_ids: clean_ids(run.mutation_ids ++ [run.id] ++ rollback_ids),
+        rollback_proof:
+          Map.merge(run.rollback_proof, %{
+            "rolled_back_at" => DateTime.to_iso8601(now),
+            "rolled_back_by" => actor,
+            "snapshot_verified" => true,
+            "strategy" => "restore_original_visibility_quarantine_replacements"
+          })
+      })
+
+    rolled_back = State.replace(restored, :repair_runs, run.id, rolled_back_run)
+
+    DurableSoupDb.persist_delta!(db_path, before, rolled_back, %{
+      source_kind: "graph_admission_repair_rollback",
+      source_db_path: get_in(plan, ["source", "db_path"]),
+      source_row_count: length(replacement_story_ids),
+      replay_run_id: rollback_replay_run_id,
+      expected_tenant_revision: expected_revision
+    })
+
+    feed = repair_feed(rolled_back)
+    original_story_ids = Enum.map(plan["stories"], & &1["story_id"])
+
+    %{
+      "ticket" => "T1649",
+      "repair_run_id" => run.id,
+      "status" => "rolled_back",
+      "mutation_ids" => rolled_back_run.mutation_ids,
+      "rollback" => rolled_back_run.rollback_proof,
+      "validation" => %{
+        "feed_blockers" => feed.blockers,
+        "original_story_ids_visible" =>
+          MapSet.subset?(
+            MapSet.new(original_story_ids),
+            MapSet.new(Enum.map(feed.items, & &1.story_id))
+          ),
+        "replacement_story_ids_hidden" =>
+          Enum.all?(
+            replacement_story_ids,
+            &(&1 not in Enum.map(feed.items, fn item -> item.story_id end))
+          )
+      }
+    }
   end
 
   def file_hash!(path) do
@@ -362,12 +505,12 @@ defmodule Primeradiant.StorageHarness.GraphAdmissionRepair do
     outputs = key |> Process.get() |> Enum.reverse()
     Process.delete(key)
 
-    original_story_ids = MapSet.new(ids(state.stories))
     original_edge_ids = MapSet.new(ids(state.edges))
+    replacement_story_ids = report.correlation_chains |> Enum.map(& &1.story_id) |> clean_ids()
 
     replacement_stories =
       replayed.stories
-      |> Enum.reject(&MapSet.member?(original_story_ids, &1.id))
+      |> Enum.filter(&(&1.id in replacement_story_ids))
       |> Enum.map(fn story ->
         input_ids =
           replayed.story_events
@@ -533,12 +676,15 @@ defmodule Primeradiant.StorageHarness.GraphAdmissionRepair do
     end)
   end
 
-  defp validation(state, plan, before, history_before, replay_report) do
+  defp validation(state, plan, history_before, replay_report) do
     quarantined_story_ids = Enum.map(plan["stories"], & &1["story_id"])
     replacement_edges = Enum.reject(state.edges, &(&1.id in history_before.edges))
-    original_story_ids = MapSet.new(ids(before.stories))
-    replacement_stories = Enum.reject(state.stories, &MapSet.member?(original_story_ids, &1.id))
-    feed = Soup.feed(state, %{"limit" => max(length(state.stories), 1)})
+
+    replacement_story_ids =
+      replay_report.correlation_chains |> Enum.map(& &1.story_id) |> clean_ids()
+
+    replacement_stories = Enum.filter(state.stories, &(&1.id in replacement_story_ids))
+    feed = repair_feed(state)
     feed_story_ids = Enum.map(feed.items, & &1.story_id)
 
     replacement_memberships =
@@ -590,6 +736,7 @@ defmodule Primeradiant.StorageHarness.GraphAdmissionRepair do
       "history_ids_preserved" => history_preserved?(history_before, history_ids(state)),
       "approved_memberships_match" => approved_memberships == actual_memberships,
       "feed_story_ids" => feed_story_ids,
+      "feed_blockers" => feed.blockers,
       "quarantined_story_ids" => quarantined_story_ids,
       "replacement_story_ids" => ids(replacement_stories),
       "replacement_edge_ids" => ids(replacement_edges),
@@ -641,13 +788,31 @@ defmodule Primeradiant.StorageHarness.GraphAdmissionRepair do
 
   defp mutation_ids(before_state, current_state) do
     Enum.flat_map(@mutation_fields, fn field ->
-      old = before_state |> Map.fetch!(field) |> ids() |> MapSet.new()
+      old = before_state |> Map.fetch!(field) |> Map.new(&{&1.id, &1})
 
       current_state
       |> Map.fetch!(field)
-      |> Enum.reject(&MapSet.member?(old, &1.id))
+      |> Enum.reject(&(Map.get(old, &1.id) == &1))
       |> ids()
     end)
+  end
+
+  defp repair_feed(state) do
+    Soup.feed(state, %{
+      "consumer" => "reporter",
+      "projection" => "story_cards",
+      "limit" => max(length(state.stories), 1)
+    })
+  end
+
+  defp ensure_wal_free!(path, label) do
+    wal_path = path <> "-wal"
+
+    if File.exists?(wal_path) and File.stat!(wal_path).size > 0 do
+      raise ArgumentError, "#{label} must be a transactionally complete SQLite copy without WAL"
+    end
+
+    :ok
   end
 
   defp source_refs(state, input_ids) do

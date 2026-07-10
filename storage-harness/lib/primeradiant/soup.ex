@@ -616,7 +616,11 @@ defmodule Primeradiant.Soup do
   end
 
   defp graph_admission_quarantined?(state, story),
-    do: Enum.any?(state.story_quarantines, &(&1.story_id == story.id))
+    do:
+      Enum.any?(
+        state.story_quarantines,
+        &(&1.story_id == story.id and &1.rollback_status != "restored")
+      )
 
   defp story_inputs(state, story_id) do
     input_ids =
