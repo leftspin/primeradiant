@@ -8,7 +8,8 @@ Usage:
 
 Consumes a bounded daemon-news R1 event package and writes Primeradiant-owned
 soup/output under RUN_ROOT. The source event, not a timer or snapshot cadence,
-drives admission.
+drives admission. After durable persistence it writes a typed
+consume-ack.json under the output directory.
 USAGE
 }
 
@@ -76,5 +77,26 @@ mix "${MIX_ARGS[@]}" > "$MIX_OUTPUT"
 popd >/dev/null
 
 awk 'found || /^\{/ {found=1; print}' "$MIX_OUTPUT" > "$REPORT"
+
+if ! jq -e . "$REPORT" >/dev/null 2>&1; then
+  echo "consume produced no valid changed-stories report: $REPORT" >&2
+  exit 1
+fi
+
+jq -n \
+  --arg event_id "$EVENT_ID" \
+  --arg package_dir "$PACKAGE_DIR" \
+  --arg out_dir "$OUT_DIR" \
+  --arg soup_db "$SOUP_DB" \
+  --arg report_path "$REPORT" \
+  '{
+    schema: "primeradiant.consume_ack.v1",
+    status: "consumed",
+    event_id: $event_id,
+    package_dir: $package_dir,
+    out_dir: $out_dir,
+    soup_db_path: $soup_db,
+    report_path: $report_path
+  }' > "$OUT_DIR/consume-ack.json"
 
 printf "%s\n" "$OUT_DIR"

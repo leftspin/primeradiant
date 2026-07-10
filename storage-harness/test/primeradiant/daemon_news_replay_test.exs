@@ -3724,16 +3724,411 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert source =~ "--story-agents true|false"
     assert source =~ "consume_event_package.sh"
     assert source =~ ~s(if [[ "$STORY_AGENTS" == "true" ]]; then)
-    assert source =~ "--actor '$ACTOR' --story-agents --soup-db '$EURISKO_SOUP_DB'"
-    assert source =~ "--actor '$ACTOR' --soup-db '$EURISKO_SOUP_DB'"
+    assert source =~ ~s(STORY_AGENTS_ARG=" --story-agents")
+    assert source =~ "--actor '$ACTOR'$STORY_AGENTS_ARG --soup-db '$EURISKO_SOUP_DB'"
     assert source =~ "--consume-packages false"
+    assert source =~ "--checkpoint-cursor false"
     assert source =~ "--eurisko-soup-db PATH"
+    assert source =~ "--consume-timeout-seconds N"
+    assert source =~ "timeout -k 30 $CONSUME_TIMEOUT_SECONDS scripts/r1/consume_event_package.sh"
+    assert source =~ "consume-ack.json"
+    assert source =~ "-o BatchMode=yes"
+    assert source =~ "-o ServerAliveInterval=15"
 
     assert source =~
              "EURISKO_SOUP_DB=\"/home/clu/.local/state/primeradiant/soup-api/soup.sqlite3\""
 
     assert source =~ "eurisko_soup_db: $eurisko_soup_db"
     assert emitter_source =~ ~s(sqlite3 -readonly -cmd ".timeout 10000" -json "$SOURCE_DB")
+  end
+
+  test "event admission hydration stays bounded at production reader-delta cardinality" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-bounded-admission-cardinality-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    soup_db_path = Path.join(tmp, "primeradiant-event-soup.sqlite3")
+    raw_path = Path.join(tmp, "archive.jsonl")
+
+    rows = [
+      envelope(
+        "Agent Civic Clinic triage open",
+        "Agent Civic Clinic triage is open venue is north speaker is desk."
+      ),
+      envelope(
+        "Agent Civic Clinic triage adds west desk",
+        "Agent Civic Clinic triage remains open and now adds west desk coverage."
+      )
+    ]
+
+    offsets = write_archive!(raw_path, rows)
+
+    first_event =
+      committed_source_item_event(
+        "event-agent-news-1",
+        raw_path,
+        elem(Enum.at(offsets, 0), 0),
+        elem(Enum.at(offsets, 0), 1),
+        Enum.at(rows, 0)
+      )
+
+    second_event =
+      committed_source_item_event(
+        "event-agent-news-2",
+        raw_path,
+        elem(Enum.at(offsets, 1), 0),
+        elem(Enum.at(offsets, 1), 1),
+        Enum.at(rows, 1)
+      )
+
+    {:ok, _first_state, _first_report} =
+      DaemonNewsEvent.consume_event(first_event,
+        soup_db_path: soup_db_path,
+        tenant_id: @tenant,
+        actor_id: "flynn",
+        story_agent_loop?: true,
+        story_agent_opts: [adapter: &stub_story_agent_with_later_update/3]
+      )
+
+    baseline = DurableSoupDb.table_count(soup_db_path, "story_reader_deltas", @tenant)
+    assert baseline >= 1
+
+    seed_id =
+      sqlite_json!(
+        soup_db_path,
+        "SELECT id FROM story_reader_deltas WHERE tenant_id = '#{@tenant}' LIMIT 1;"
+      )
+
+    bulk_count = 183_751 - baseline
+
+    {_out, 0} =
+      System.cmd("sqlite3", [
+        soup_db_path,
+        """
+        WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM seq WHERE n < #{bulk_count})
+        INSERT INTO story_reader_deltas (
+          id, tenant_id, user_id, story_id, seen_state_id, prior_seen_story_version,
+          prior_seen_card_version_id, current_story_version, current_card_version_id,
+          material_unseen_deltas, nonmaterial_exclusions, producing_agent_run_id,
+          evidence_refs, provenance_refs, inserted_at, updated_at
+        )
+        SELECT
+          'bulk-reader-delta-' || seq.n, d.tenant_id, d.user_id, d.story_id, d.seen_state_id,
+          d.prior_seen_story_version, d.prior_seen_card_version_id, d.current_story_version,
+          d.current_card_version_id, d.material_unseen_deltas, d.nonmaterial_exclusions,
+          d.producing_agent_run_id, d.evidence_refs, d.provenance_refs, d.inserted_at,
+          d.updated_at
+        FROM seq, story_reader_deltas AS d
+        WHERE d.id = '#{seed_id}';
+        """
+      ])
+
+    assert DurableSoupDb.table_count(soup_db_path, "story_reader_deltas", @tenant) == 183_751
+
+    admission_state = DurableSoupDb.load_event_admission_state(soup_db_path, @tenant)
+    assert admission_state.story_reader_deltas == []
+    assert length(admission_state.inputs) == 1
+    assert length(admission_state.stories) == 1
+    assert admission_state.story_card_versions != []
+
+    {:ok, second_state, second_report} =
+      DaemonNewsEvent.consume_event(second_event,
+        soup_db_path: soup_db_path,
+        tenant_id: @tenant,
+        actor_id: "flynn",
+        story_agent_loop?: true,
+        story_agent_opts: [adapter: &stub_story_agent_with_later_update/3]
+      )
+
+    assert length(second_state.inputs) == 2
+    assert length(second_state.stories) == 1
+
+    new_delta_count = length(second_state.story_reader_deltas)
+    assert new_delta_count >= 1
+    assert new_delta_count <= 4
+
+    assert DurableSoupDb.table_count(soup_db_path, "story_reader_deltas", @tenant) ==
+             183_751 + new_delta_count
+
+    assert second_report.primeradiant_writes.inputs == 2
+    assert second_report.primeradiant_writes.stories == 1
+  end
+
+  test "live watcher checkpoints cursor only after per-package durable remote ack" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-live-watch-ack-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    source_db = Path.join(tmp, "daemon.sqlite3")
+    state_root = Path.join(tmp, "state")
+    stub_state = Path.join(tmp, "stub-state")
+    bin_dir = Path.join(tmp, "bin")
+    ssh_key = Path.join(tmp, "ssh-key")
+
+    File.mkdir_p!(state_root)
+    File.write!(ssh_key, "stub-key")
+
+    create_subspace_daemon_db!(
+      source_db,
+      [
+        {"ack-news-1", "2026-06-03 05:00:00",
+         envelope("Ack first", "Ack first service is open venue is north speaker is desk.")},
+        {"ack-news-2", "2026-06-03 05:01:00",
+         envelope("Ack second", "Ack second service is open venue is north speaker is desk.")},
+        {"ack-news-3", "2026-06-03 05:02:00",
+         envelope("Ack third", "Ack third service is open venue is north speaker is desk.")}
+      ]
+    )
+
+    write_stub_ssh!(bin_dir, stub_state)
+    watcher_script = Path.expand("scripts/r1/live_subspace_daemon_watcher_once.sh")
+
+    {output, status} =
+      System.cmd(
+        watcher_script,
+        [
+          "--source-db",
+          source_db,
+          "--tenant",
+          @tenant,
+          "--state-root",
+          state_root,
+          "--eurisko-target",
+          "clu@eurisko-test",
+          "--eurisko-repo",
+          "/home/clu/src/primeradiant",
+          "--ssh-key",
+          ssh_key,
+          "--run-id",
+          "ack-success-test",
+          "--limit",
+          "10"
+        ],
+        stderr_to_stdout: true,
+        env: [{"PATH", bin_dir <> ":" <> System.get_env("PATH")}]
+      )
+
+    assert status == 0, output
+
+    report_path = output |> String.split("\n", trim: true) |> List.last()
+    report = report_path |> File.read!() |> Jason.decode!()
+
+    assert report["cursor_checkpointing"] == "durable_remote_ack_per_package"
+    assert report["checkpointed_cursor"] == "2026-06-03 05:02:00|3"
+    assert report["consume_timeout_seconds"] == 900
+    assert File.read!(Path.join(state_root, "cursor.txt")) == "2026-06-03 05:02:00|3\n"
+
+    consumed = report["consumed"]
+    assert length(consumed) == 3
+
+    assert Enum.map(consumed, & &1["cursor"]) == [
+             "2026-06-03 05:00:00|1",
+             "2026-06-03 05:01:00|2",
+             "2026-06-03 05:02:00|3"
+           ]
+
+    assert Enum.all?(consumed, &(get_in(&1, ["ack", "status"]) == "consumed"))
+    assert Enum.all?(consumed, &(get_in(&1, ["ack", "event_id"]) == &1["event_id"]))
+  end
+
+  test "live watcher retains unconsumed range on consume failure and retries safely" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-live-watch-retry-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    source_db = Path.join(tmp, "daemon.sqlite3")
+    state_root = Path.join(tmp, "state")
+    stub_state = Path.join(tmp, "stub-state")
+    bin_dir = Path.join(tmp, "bin")
+    ssh_key = Path.join(tmp, "ssh-key")
+    cursor_file = Path.join(state_root, "cursor.txt")
+
+    File.mkdir_p!(state_root)
+    File.write!(ssh_key, "stub-key")
+
+    create_subspace_daemon_db!(
+      source_db,
+      [
+        {"retry-news-1", "2026-06-03 05:00:00",
+         envelope("Retry first", "Retry first service is open venue is north speaker is desk.")},
+        {"retry-news-2", "2026-06-03 05:01:00",
+         envelope("Retry second", "Retry second service is open venue is north speaker is desk.")},
+        {"retry-news-3", "2026-06-03 05:02:00",
+         envelope("Retry third", "Retry third service is open venue is north speaker is desk.")}
+      ]
+    )
+
+    write_stub_ssh!(bin_dir, stub_state)
+    File.write!(Path.join(stub_state, "fail-on"), "2")
+
+    watcher_script = Path.expand("scripts/r1/live_subspace_daemon_watcher_once.sh")
+
+    base_args = [
+      "--source-db",
+      source_db,
+      "--tenant",
+      @tenant,
+      "--state-root",
+      state_root,
+      "--eurisko-target",
+      "clu@eurisko-test",
+      "--eurisko-repo",
+      "/home/clu/src/primeradiant",
+      "--ssh-key",
+      ssh_key,
+      "--limit",
+      "10"
+    ]
+
+    {output, status} =
+      System.cmd(
+        watcher_script,
+        base_args ++ ["--run-id", "ack-failure-test"],
+        stderr_to_stdout: true,
+        env: [{"PATH", bin_dir <> ":" <> System.get_env("PATH")}]
+      )
+
+    assert status == 17
+    assert output =~ "live watcher package consumption failed"
+
+    assert File.read!(cursor_file) == "2026-06-03 05:00:00|1\n"
+
+    failed_report =
+      Path.join(state_root, "ack-failure-test-failed-report.json")
+      |> File.read!()
+      |> Jason.decode!()
+
+    assert failed_report["status"] == "package_consume_failed"
+    assert failed_report["failed_stage"] == "package_consume"
+    assert failed_report["event_id"] == "ack-failure-test-catchup-0001-2"
+    assert failed_report["package_cursor"] == "2026-06-03 05:01:00|2"
+    assert failed_report["last_acked_cursor"] == "2026-06-03 05:00:00|1"
+    assert failed_report["cursor_checkpointing"] == "durable_remote_ack_per_package"
+    assert failed_report["unconsumed_range_retained"] == true
+    assert get_in(failed_report, ["error", "exit_status"]) == 17
+    assert get_in(failed_report, ["error", "message"]) =~ "simulated remote consume failure"
+
+    File.rm!(Path.join(stub_state, "fail-on"))
+
+    {retry_output, retry_status} =
+      System.cmd(
+        watcher_script,
+        base_args ++ ["--run-id", "ack-retry-test"],
+        stderr_to_stdout: true,
+        env: [{"PATH", bin_dir <> ":" <> System.get_env("PATH")}]
+      )
+
+    assert retry_status == 0, retry_output
+    assert File.read!(cursor_file) == "2026-06-03 05:02:00|3\n"
+
+    retry_report_path = retry_output |> String.split("\n", trim: true) |> List.last()
+    retry_report = retry_report_path |> File.read!() |> Jason.decode!()
+
+    assert Enum.map(retry_report["consumed"], & &1["cursor"]) == [
+             "2026-06-03 05:01:00|2",
+             "2026-06-03 05:02:00|3"
+           ]
+
+    assert String.trim(File.read!(Path.join(stub_state, "consume-count"))) == "4"
+  end
+
+  test "SQLite wakeup with checkpoint-cursor false leaves durable cursor to consumer ack" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-wakeup-no-checkpoint-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    source_db = Path.join(tmp, "daemon.sqlite3")
+    cursor_file = Path.join(tmp, "primeradiant/cursor.txt")
+    package_root = Path.join(tmp, "packages")
+    run_root = Path.join(tmp, "runs")
+
+    create_subspace_daemon_db!(
+      source_db,
+      [
+        {"no-checkpoint-news-1", "2026-06-03 05:00:00",
+         envelope(
+           "No checkpoint first",
+           "No checkpoint first service is open venue is north speaker is desk."
+         )}
+      ]
+    )
+
+    File.mkdir_p!(Path.dirname(cursor_file))
+    File.write!(cursor_file, "2026-06-03 05:00:00|1\n")
+
+    watcher_script = Path.expand("scripts/r1/watch_sqlite_wakeup.sh")
+    emitter_script = Path.expand("scripts/r1/emit_subspace_daemon_cursor_event_packages.sh")
+
+    task =
+      Task.async(fn ->
+        System.cmd(watcher_script, [
+          "--source-db",
+          source_db,
+          "--tenant",
+          @tenant,
+          "--cursor-file",
+          cursor_file,
+          "--package-root",
+          package_root,
+          "--run-root",
+          run_root,
+          "--limit",
+          "10",
+          "--run-id",
+          "no-checkpoint-test",
+          "--timeout-seconds",
+          "8",
+          "--poll-interval-seconds",
+          "1",
+          "--emit-cursor-script",
+          emitter_script,
+          "--consume-packages",
+          "false",
+          "--checkpoint-cursor",
+          "false"
+        ])
+      end)
+
+    Process.sleep(1200)
+
+    insert_subspace_daemon_event!(
+      source_db,
+      2,
+      "no-checkpoint-news-2",
+      "2026-06-03 05:01:00",
+      envelope(
+        "No checkpoint second",
+        "No checkpoint second service is open venue is north speaker is desk."
+      )
+    )
+
+    {report_path, 0} = Task.await(task, 10_000)
+    report = report_path |> String.trim() |> File.read!() |> Jason.decode!()
+
+    assert report["checkpoint_cursor"] == "false"
+    assert report["emitted_count"] == 1
+    assert report["next_cursor"] == "2026-06-03 05:01:00|2"
+    assert File.read!(cursor_file) == "2026-06-03 05:00:00|1\n"
   end
 
   test "R1 push and consume handoff keeps source read-only and writes primeradiant output" do
@@ -3966,6 +4361,40 @@ defmodule Primeradiant.DaemonNewsReplayTest do
   end
 
   defp sql_string(value), do: String.replace(value, "'", "''")
+
+  defp write_stub_ssh!(bin_dir, state_dir) do
+    File.mkdir_p!(bin_dir)
+    File.mkdir_p!(state_dir)
+    stub = Path.join(bin_dir, "ssh")
+
+    File.write!(stub, """
+    #!/usr/bin/env bash
+    set -uo pipefail
+    STATE_DIR="#{state_dir}"
+    cmd="${@: -1}"
+    if [[ "$cmd" == *"tar -C"* && "$cmd" == *"-xf -"* ]]; then
+      cat > /dev/null
+      exit 0
+    fi
+    if [[ "$cmd" == *consume_event_package.sh* ]]; then
+      count_file="$STATE_DIR/consume-count"
+      n=$(( $(cat "$count_file" 2>/dev/null || echo 0) + 1 ))
+      printf '%s\\n' "$n" > "$count_file"
+      printf '%s\\n' "$cmd" >> "$STATE_DIR/consume-commands.log"
+      if [[ -f "$STATE_DIR/fail-on" && "$n" -eq "$(cat "$STATE_DIR/fail-on")" ]]; then
+        echo "simulated remote consume failure" >&2
+        exit 17
+      fi
+      event_id="$(printf '%s' "$cmd" | sed -n "s|.*/\\([^/']*\\)/consume-ack.json.*|\\1|p")"
+      printf '{"schema":"primeradiant.consume_ack.v1","status":"consumed","event_id":"%s"}\\n' "$event_id"
+      exit 0
+    fi
+    exit 0
+    """)
+
+    File.chmod!(stub, 0o755)
+    stub
+  end
 
   defp create_source_db_with_hashes!(db_path, raw_path, offsets, ids, rows) do
     inserts =

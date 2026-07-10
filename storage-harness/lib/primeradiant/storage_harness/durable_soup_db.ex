@@ -29,6 +29,39 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
     :stories
   ]
 
+  @table_modules %{
+    story_quarantines: Primeradiant.StorageHarness.StoryQuarantine,
+    repair_runs: Primeradiant.StorageHarness.RepairRun,
+    story_card_projection_audits: Primeradiant.StorageHarness.StoryCardProjectionAudit,
+    story_reader_deltas: Primeradiant.StorageHarness.StoryReaderDelta,
+    story_card_change_sets: Primeradiant.StorageHarness.StoryCardChangeSet,
+    story_key_claims: Primeradiant.StorageHarness.StoryKeyClaim,
+    story_source_coverage: Primeradiant.StorageHarness.StorySourceCoverage,
+    story_card_versions: Primeradiant.StorageHarness.StoryCardVersion,
+    evidence_refs: Primeradiant.StorageHarness.EvidenceRef,
+    conflicts: Primeradiant.StorageHarness.Conflict,
+    story_events: Primeradiant.StorageHarness.StoryEvent,
+    story_fact_versions: Primeradiant.StorageHarness.StoryFactVersion,
+    edges: Primeradiant.StorageHarness.Edge,
+    soup_nodes: Primeradiant.StorageHarness.SoupNode,
+    graph_commits: Primeradiant.StorageHarness.GraphCommit,
+    seen_state_refs: Primeradiant.StorageHarness.SeenStateRef,
+    seen_states: Primeradiant.StorageHarness.SeenState,
+    authored_output_units: Primeradiant.StorageHarness.AuthoredOutputUnit,
+    authored_outputs: Primeradiant.StorageHarness.AuthoredOutput,
+    proposal_decisions: Primeradiant.StorageHarness.ProposalDecision,
+    proposal_ops: Primeradiant.StorageHarness.ProposalOp,
+    proposals: Primeradiant.StorageHarness.Proposal,
+    agent_runs: Primeradiant.StorageHarness.AgentRun,
+    inputs: Primeradiant.StorageHarness.Input,
+    stories: Primeradiant.StorageHarness.Story
+  }
+
+  # Event admission never reads prior reader-delta history; it only appends new
+  # deltas computed from seen_states/story_card_versions, so hydrating the full
+  # story_reader_deltas history is unbounded cost with no admission semantics.
+  @event_admission_excluded_tables [:story_reader_deltas]
+
   def persist!(db_path, state, attrs \\ %{}) do
     db_path |> Path.dirname() |> File.mkdir_p!()
     validate_existing_foreign_keys!(db_path)
@@ -116,177 +149,28 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
   end
 
   def load_tenant(db_path, tenant_id) do
-    if File.regular?(db_path) do
-      state = Primeradiant.StorageHarness.State.new(tenant_id: tenant_id, user_id: "flynn")
+    load_tenant_tables(db_path, tenant_id, @tables)
+  end
 
-      state
-      |> put_rows(
-        :agent_runs,
-        load_rows(db_path, "agent_runs", tenant_id, Primeradiant.StorageHarness.AgentRun)
-      )
-      |> put_rows(
-        :inputs,
-        load_rows(db_path, "inputs", tenant_id, Primeradiant.StorageHarness.Input)
-      )
-      |> put_rows(
-        :stories,
-        load_rows(db_path, "stories", tenant_id, Primeradiant.StorageHarness.Story)
-      )
-      |> put_rows(
-        :story_quarantines,
-        load_rows(
-          db_path,
-          "story_quarantines",
-          tenant_id,
-          Primeradiant.StorageHarness.StoryQuarantine
+  def load_event_admission_state(db_path, tenant_id) do
+    load_tenant_tables(db_path, tenant_id, @tables -- @event_admission_excluded_tables)
+  end
+
+  defp load_tenant_tables(db_path, tenant_id, tables) do
+    state = Primeradiant.StorageHarness.State.new(tenant_id: tenant_id, user_id: "flynn")
+
+    if File.regular?(db_path) do
+      tables
+      |> Enum.reduce(state, fn table, acc ->
+        put_rows(
+          acc,
+          table,
+          load_rows(db_path, to_string(table), tenant_id, Map.fetch!(@table_modules, table))
         )
-      )
-      |> put_rows(
-        :proposals,
-        load_rows(db_path, "proposals", tenant_id, Primeradiant.StorageHarness.Proposal)
-      )
-      |> put_rows(
-        :proposal_ops,
-        load_rows(db_path, "proposal_ops", tenant_id, Primeradiant.StorageHarness.ProposalOp)
-      )
-      |> put_rows(
-        :proposal_decisions,
-        load_rows(
-          db_path,
-          "proposal_decisions",
-          tenant_id,
-          Primeradiant.StorageHarness.ProposalDecision
-        )
-      )
-      |> put_rows(
-        :graph_commits,
-        load_rows(db_path, "graph_commits", tenant_id, Primeradiant.StorageHarness.GraphCommit)
-      )
-      |> put_rows(
-        :authored_outputs,
-        load_rows(
-          db_path,
-          "authored_outputs",
-          tenant_id,
-          Primeradiant.StorageHarness.AuthoredOutput
-        )
-      )
-      |> put_rows(
-        :authored_output_units,
-        load_rows(
-          db_path,
-          "authored_output_units",
-          tenant_id,
-          Primeradiant.StorageHarness.AuthoredOutputUnit
-        )
-      )
-      |> put_rows(
-        :seen_states,
-        load_rows(db_path, "seen_states", tenant_id, Primeradiant.StorageHarness.SeenState)
-      )
-      |> put_rows(
-        :seen_state_refs,
-        load_rows(db_path, "seen_state_refs", tenant_id, Primeradiant.StorageHarness.SeenStateRef)
-      )
-      |> put_rows(
-        :soup_nodes,
-        load_rows(db_path, "soup_nodes", tenant_id, Primeradiant.StorageHarness.SoupNode)
-      )
-      |> put_rows(
-        :edges,
-        load_rows(db_path, "edges", tenant_id, Primeradiant.StorageHarness.Edge)
-      )
-      |> put_rows(
-        :story_fact_versions,
-        load_rows(
-          db_path,
-          "story_fact_versions",
-          tenant_id,
-          Primeradiant.StorageHarness.StoryFactVersion
-        )
-      )
-      |> put_rows(
-        :story_events,
-        load_rows(db_path, "story_events", tenant_id, Primeradiant.StorageHarness.StoryEvent)
-      )
-      |> put_rows(
-        :story_card_versions,
-        load_rows(
-          db_path,
-          "story_card_versions",
-          tenant_id,
-          Primeradiant.StorageHarness.StoryCardVersion
-        )
-      )
-      |> put_rows(
-        :story_source_coverage,
-        load_rows(
-          db_path,
-          "story_source_coverage",
-          tenant_id,
-          Primeradiant.StorageHarness.StorySourceCoverage
-        )
-      )
-      |> put_rows(
-        :story_key_claims,
-        load_rows(
-          db_path,
-          "story_key_claims",
-          tenant_id,
-          Primeradiant.StorageHarness.StoryKeyClaim
-        )
-      )
-      |> put_rows(
-        :story_card_change_sets,
-        load_rows(
-          db_path,
-          "story_card_change_sets",
-          tenant_id,
-          Primeradiant.StorageHarness.StoryCardChangeSet
-        )
-      )
-      |> put_rows(
-        :story_reader_deltas,
-        load_rows(
-          db_path,
-          "story_reader_deltas",
-          tenant_id,
-          Primeradiant.StorageHarness.StoryReaderDelta
-        )
-      )
-      |> put_rows(
-        :story_card_projection_audits,
-        load_rows(
-          db_path,
-          "story_card_projection_audits",
-          tenant_id,
-          Primeradiant.StorageHarness.StoryCardProjectionAudit
-        )
-      )
-      |> put_rows(
-        :repair_runs,
-        load_rows(db_path, "repair_runs", tenant_id, Primeradiant.StorageHarness.RepairRun)
-      )
-      |> put_rows(
-        :story_quarantines,
-        load_rows(
-          db_path,
-          "story_quarantines",
-          tenant_id,
-          Primeradiant.StorageHarness.StoryQuarantine
-        )
-      )
-      |> put_rows(
-        :conflicts,
-        load_rows(db_path, "conflicts", tenant_id, Primeradiant.StorageHarness.Conflict)
-      )
-      |> put_rows(
-        :evidence_refs,
-        load_rows(db_path, "evidence_refs", tenant_id, Primeradiant.StorageHarness.EvidenceRef)
-      )
+      end)
       |> rebuild_source_ids()
     else
-      Primeradiant.StorageHarness.State.new(tenant_id: tenant_id, user_id: "flynn")
+      state
     end
   end
 

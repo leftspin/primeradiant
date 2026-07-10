@@ -29,7 +29,7 @@ defmodule Primeradiant.StorageHarness.DaemonNewsEvent do
     expected_tenant_revision =
       if File.regular?(soup_db_path), do: DurableSoupDb.tenant_revision(soup_db_path, tenant_id)
 
-    prior_state = DurableSoupDb.load_tenant(soup_db_path, tenant_id)
+    prior_state = DurableSoupDb.load_event_admission_state(soup_db_path, tenant_id)
 
     with {:ok, item, summary} <- event_to_item(event, tenant_id, raw_root),
          {:ok, state, ingestion_report} <- RealIngestion.ingest_items([item], actor_id) do

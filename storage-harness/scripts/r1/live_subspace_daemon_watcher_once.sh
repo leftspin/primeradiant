@@ -4,12 +4,15 @@ set -euo pipefail
 usage() {
   cat <<'USAGE'
 Usage:
-  live_subspace_daemon_watcher_once.sh --source-db PATH --tenant TENANT --state-root DIR --eurisko-target USER@HOST --eurisko-repo DIR [--actor ACTOR] [--story-agents true|false] [--ssh-key PATH] [--eurisko-mix PATH] [--eurisko-erlang-bin DIR] [--eurisko-sqlite-bin DIR] [--limit N] [--timeout-seconds N] [--poll-interval-seconds N] [--debounce-seconds N] [--run-id ID] [--eurisko-soup-db PATH]
+  live_subspace_daemon_watcher_once.sh --source-db PATH --tenant TENANT --state-root DIR --eurisko-target USER@HOST --eurisko-repo DIR [--actor ACTOR] [--story-agents true|false] [--ssh-key PATH] [--eurisko-mix PATH] [--eurisko-erlang-bin DIR] [--eurisko-sqlite-bin DIR] [--limit N] [--timeout-seconds N] [--poll-interval-seconds N] [--debounce-seconds N] [--consume-timeout-seconds N] [--run-id ID] [--eurisko-soup-db PATH]
 
 Runs one live Subspace daemon SQLite DB/WAL wakeup pass on the source host,
 ships bounded Primeradiant event packages to EURISKO, and consumes them there
 into Primeradiant-owned soup/output. The source DB is read with sqlite3
--readonly and is not copied or mutated.
+-readonly and is not copied or mutated. The watcher cursor is checkpointed
+only after each package returns a durable remote consume-ack; remote
+consumption is bounded by a remote process-group timeout so failures leave no
+orphan SSH/BEAM/sqlite lock holders and retain the unconsumed cursor range.
 USAGE
 }
 
@@ -28,6 +31,7 @@ LIMIT="50"
 TIMEOUT_SECONDS="300"
 POLL_INTERVAL_SECONDS="2"
 DEBOUNCE_SECONDS="2"
+CONSUME_TIMEOUT_SECONDS="900"
 RUN_ID=""
 EURISKO_SOUP_DB=""
 
@@ -48,6 +52,7 @@ while [[ $# -gt 0 ]]; do
     --timeout-seconds) TIMEOUT_SECONDS="$2"; shift 2 ;;
     --poll-interval-seconds) POLL_INTERVAL_SECONDS="$2"; shift 2 ;;
     --debounce-seconds) DEBOUNCE_SECONDS="$2"; shift 2 ;;
+    --consume-timeout-seconds) CONSUME_TIMEOUT_SECONDS="$2"; shift 2 ;;
     --run-id) RUN_ID="$2"; shift 2 ;;
     --eurisko-soup-db) EURISKO_SOUP_DB="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
@@ -69,6 +74,18 @@ if [[ ! -r "$SSH_KEY" ]]; then
   echo "SSH key is not readable: $SSH_KEY" >&2
   exit 1
 fi
+
+if ! [[ "$CONSUME_TIMEOUT_SECONDS" =~ ^[0-9]+$ ]] || [[ "$CONSUME_TIMEOUT_SECONDS" -lt 1 ]]; then
+  echo "consume-timeout-seconds must be a positive integer" >&2
+  exit 2
+fi
+
+SSH_OPTS=(
+  -o BatchMode=yes
+  -o ConnectTimeout=15
+  -o ServerAliveInterval=15
+  -o ServerAliveCountMax=4
+)
 
 if [[ -z "$RUN_ID" ]]; then
   RUN_ID="live-subspace-$(date -u +%Y%m%dT%H%M%SZ)"
@@ -96,6 +113,48 @@ CURRENT_CURSOR=""
 if [[ -s "$CURSOR_FILE" ]]; then
   CURRENT_CURSOR="$(tr -d '\r\n' < "$CURSOR_FILE")"
 fi
+LAST_ACKED_CURSOR="$CURRENT_CURSOR"
+
+package_failure_report() {
+  local status_kind="$1" failed_stage="$2" command="$3" exit_status="$4" message="$5"
+  local package_dir="$6" remote_package="$7" event_id="$8" package_cursor="$9"
+  FAILED_REPORT="$STATE_ROOT/$RUN_ID-failed-report.json"
+  jq -n \
+    --arg run_id "$RUN_ID" \
+    --arg source_db "$SOURCE_DB" \
+    --arg status_kind "$status_kind" \
+    --arg failed_stage "$failed_stage" \
+    --arg package_dir "$package_dir" \
+    --arg remote_package "$remote_package" \
+    --arg event_id "$event_id" \
+    --arg package_cursor "$package_cursor" \
+    --arg last_acked_cursor "$LAST_ACKED_CURSOR" \
+    --arg command "$command" \
+    --arg message "$message" \
+    --argjson exit_status "$exit_status" \
+    '{
+      run_id: $run_id,
+      source_db_path: $source_db,
+      source_host: "tars",
+      consume_host: "eurisko",
+      source_mode: "live_subspace_daemon_watcher_once",
+      status: $status_kind,
+      failed_stage: $failed_stage,
+      package_dir: $package_dir,
+      remote_package: $remote_package,
+      event_id: $event_id,
+      package_cursor: $package_cursor,
+      last_acked_cursor: $last_acked_cursor,
+      cursor_checkpointing: "durable_remote_ack_per_package",
+      unconsumed_range_retained: true,
+      error: {
+        command: $command,
+        exit_status: $exit_status,
+        message: $message
+      }
+    }' > "$FAILED_REPORT"
+  printf "live watcher package consumption failed; report: %s\n" "$FAILED_REPORT" >&2
+}
 
 CATCHUP_COUNT=0
 CATCHUP_PASS=0
@@ -154,8 +213,9 @@ while :; do
   NEXT_CURSOR="$(jq -r '.next_cursor' "$CATCHUP_MANIFEST")"
   CATCHUP_COUNT=$((CATCHUP_COUNT + EMITTED_COUNT))
   if [[ -n "$NEXT_CURSOR" && "$NEXT_CURSOR" != "null" ]]; then
+    # Advance only the in-memory emission cursor; the durable cursor file is
+    # checkpointed per package after remote consume-ack.
     CURRENT_CURSOR="$NEXT_CURSOR"
-    printf "%s\n" "$CURRENT_CURSOR" > "$CURSOR_FILE"
   fi
   if [[ "$EMITTED_COUNT" -lt "$LIMIT" ]]; then
     break
@@ -179,7 +239,8 @@ if [[ "$CATCHUP_COUNT" -eq 0 ]]; then
       --poll-interval-seconds "$POLL_INTERVAL_SECONDS" \
       --debounce-seconds "$DEBOUNCE_SECONDS" \
       --emit-cursor-script "$EMITTER" \
-      --consume-packages false 2>&1
+      --consume-packages false \
+      --checkpoint-cursor false 2>&1
   )"
   WATCH_STATUS=$?
   set -e
@@ -221,39 +282,91 @@ if [[ "$CATCHUP_COUNT" -eq 0 ]]; then
     done
 fi
 
-ssh -i "$SSH_KEY" "$EURISKO_TARGET" "mkdir -p '$EURISKO_HANDOFF_ROOT' '$EURISKO_RUN_ROOT'"
+set +e
+PREPARE_OUTPUT="$(ssh "${SSH_OPTS[@]}" -n -i "$SSH_KEY" "$EURISKO_TARGET" "mkdir -p '$EURISKO_HANDOFF_ROOT' '$EURISKO_RUN_ROOT'" 2>&1)"
+PREPARE_STATUS=$?
+set -e
+if [[ "$PREPARE_STATUS" -ne 0 ]]; then
+  package_failure_report "remote_prepare_failed" "remote_prepare" "ssh mkdir" \
+    "$PREPARE_STATUS" "$PREPARE_OUTPUT" "" "" "" ""
+  exit "$PREPARE_STATUS"
+fi
 
-PACKAGE_LIST="$STATE_ROOT/$RUN_ID-packages.txt"
+PACKAGE_LIST="$STATE_ROOT/$RUN_ID-packages.jsonl"
 jq -r '.manifest_path' "$MANIFESTS_JSONL" |
   while IFS= read -r manifest; do
     [[ -z "$manifest" || "$manifest" == "null" ]] && continue
-    jq -r '.packages[].package_dir' "$manifest"
+    jq -c '.packages[] | {package_dir, cursor, event_id}' "$manifest"
   done > "$PACKAGE_LIST"
 
 CONSUMED_JSONL="$STATE_ROOT/$RUN_ID-consumed.jsonl"
 : > "$CONSUMED_JSONL"
 
-while IFS= read -r package_dir; do
-  [[ -z "$package_dir" ]] && continue
+while IFS= read -r package_entry; do
+  [[ -z "$package_entry" ]] && continue
+  package_dir="$(jq -r '.package_dir' <<<"$package_entry")"
+  package_cursor="$(jq -r '.cursor' <<<"$package_entry")"
+  package_event_id="$(jq -r '.event_id' <<<"$package_entry")"
   package_name="$(basename "$package_dir")"
   remote_package="$EURISKO_HANDOFF_ROOT/$package_name"
 
-  tar -C "$package_dir" -cf - . |
-    ssh -i "$SSH_KEY" "$EURISKO_TARGET" "mkdir -p '$remote_package' && tar -C '$remote_package' -xf -"
+  if [[ -z "$package_cursor" || "$package_cursor" == "null" ]]; then
+    package_failure_report "package_cursor_missing" "package_cursor" "manifest packages[].cursor" \
+      1 "package entry has no cursor; cannot checkpoint after ack" \
+      "$package_dir" "$remote_package" "$package_event_id" ""
+    exit 1
+  fi
 
-  remote_out="$(
-    if [[ "$STORY_AGENTS" == "true" ]]; then
-      ssh -n -i "$SSH_KEY" "$EURISKO_TARGET" "cd '$EURISKO_REPO/storage-harness' && PATH='$(dirname "$EURISKO_MIX")':'$EURISKO_ERLANG_BIN':'$EURISKO_SQLITE_BIN':\$PATH scripts/r1/consume_event_package.sh --package-dir '$remote_package' --run-root '$EURISKO_RUN_ROOT' --tenant '$TENANT' --actor '$ACTOR' --story-agents --soup-db '$EURISKO_SOUP_DB'"
-    else
-      ssh -n -i "$SSH_KEY" "$EURISKO_TARGET" "cd '$EURISKO_REPO/storage-harness' && PATH='$(dirname "$EURISKO_MIX")':'$EURISKO_ERLANG_BIN':'$EURISKO_SQLITE_BIN':\$PATH scripts/r1/consume_event_package.sh --package-dir '$remote_package' --run-root '$EURISKO_RUN_ROOT' --tenant '$TENANT' --actor '$ACTOR' --soup-db '$EURISKO_SOUP_DB'"
-    fi
-  )"
-  remote_out="$(printf "%s" "$remote_out" | tail -n 1)"
+  set +e
+  SHIP_OUTPUT="$(tar -C "$package_dir" -cf - . 2>&1 |
+    ssh "${SSH_OPTS[@]}" -i "$SSH_KEY" "$EURISKO_TARGET" "mkdir -p '$remote_package' && tar -C '$remote_package' -xf -" 2>&1)"
+  SHIP_STATUS=$?
+  set -e
+  if [[ "$SHIP_STATUS" -ne 0 ]]; then
+    package_failure_report "package_ship_failed" "package_ship" "tar | ssh tar" \
+      "$SHIP_STATUS" "$SHIP_OUTPUT" \
+      "$package_dir" "$remote_package" "$package_event_id" "$package_cursor"
+    exit "$SHIP_STATUS"
+  fi
+
+  STORY_AGENTS_ARG=""
+  if [[ "$STORY_AGENTS" == "true" ]]; then
+    STORY_AGENTS_ARG=" --story-agents"
+  fi
+
+  CONSUME_CMD="cd '$EURISKO_REPO/storage-harness' && PATH='$(dirname "$EURISKO_MIX")':'$EURISKO_ERLANG_BIN':'$EURISKO_SQLITE_BIN':\$PATH timeout -k 30 $CONSUME_TIMEOUT_SECONDS scripts/r1/consume_event_package.sh --package-dir '$remote_package' --run-root '$EURISKO_RUN_ROOT' --tenant '$TENANT' --actor '$ACTOR'$STORY_AGENTS_ARG --soup-db '$EURISKO_SOUP_DB' && cat '$EURISKO_RUN_ROOT/$package_event_id/consume-ack.json'"
+
+  set +e
+  CONSUME_OUTPUT="$(ssh "${SSH_OPTS[@]}" -n -i "$SSH_KEY" "$EURISKO_TARGET" "$CONSUME_CMD" 2>&1)"
+  CONSUME_STATUS=$?
+  set -e
+  if [[ "$CONSUME_STATUS" -ne 0 ]]; then
+    package_failure_report "package_consume_failed" "package_consume" "ssh timeout consume_event_package.sh" \
+      "$CONSUME_STATUS" "$CONSUME_OUTPUT" \
+      "$package_dir" "$remote_package" "$package_event_id" "$package_cursor"
+    exit "$CONSUME_STATUS"
+  fi
+
+  ack_line="$(printf "%s" "$CONSUME_OUTPUT" | tail -n 1)"
+
+  if ! jq -e --arg event_id "$package_event_id" \
+    'select(.status == "consumed" and .event_id == $event_id)' >/dev/null 2>&1 <<<"$ack_line"; then
+    package_failure_report "package_ack_invalid" "package_ack" "consume-ack.json" \
+      1 "remote consume ack missing or mismatched: $ack_line" \
+      "$package_dir" "$remote_package" "$package_event_id" "$package_cursor"
+    exit 1
+  fi
+
+  printf "%s\n" "$package_cursor" > "$CURSOR_FILE"
+  LAST_ACKED_CURSOR="$package_cursor"
+
   jq -n \
     --arg package_dir "$package_dir" \
     --arg remote_package "$remote_package" \
-    --arg remote_out "$remote_out" \
-    '{package_dir: $package_dir, remote_package: $remote_package, remote_out: $remote_out}' \
+    --arg event_id "$package_event_id" \
+    --arg cursor "$package_cursor" \
+    --argjson ack "$ack_line" \
+    '{package_dir: $package_dir, remote_package: $remote_package, event_id: $event_id, cursor: $cursor, ack: $ack}' \
     >> "$CONSUMED_JSONL"
 done < "$PACKAGE_LIST"
 
@@ -268,6 +381,8 @@ jq -s \
   --arg eurisko_handoff_root "$EURISKO_HANDOFF_ROOT" \
   --arg eurisko_run_root "$EURISKO_RUN_ROOT" \
   --arg eurisko_soup_db "$EURISKO_SOUP_DB" \
+  --arg last_acked_cursor "$LAST_ACKED_CURSOR" \
+  --argjson consume_timeout_seconds "$CONSUME_TIMEOUT_SECONDS" \
   '{
     run_id: $run_id,
     source_db_path: $source_db,
@@ -283,6 +398,9 @@ jq -s \
     eurisko_run_root: $eurisko_run_root,
     eurisko_soup_db: $eurisko_soup_db,
     cursor_catchup_before_wait_count: $catchup_count,
+    cursor_checkpointing: "durable_remote_ack_per_package",
+    checkpointed_cursor: $last_acked_cursor,
+    consume_timeout_seconds: $consume_timeout_seconds,
     local_watch_report: $watch_report,
     consumed: .
   }' "$CONSUMED_JSONL" > "$REPORT"
