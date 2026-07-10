@@ -112,18 +112,19 @@ acquire_watcher_lock() {
     printf "%s\n" "$$" > "$LOCK_DIR/pid"
     return 0
   fi
-  local holder recheck
+  local holder
   holder="$(cat "$LOCK_DIR/pid" 2>/dev/null || true)"
-  if [[ -n "$holder" ]] && kill -0 "$holder" 2>/dev/null; then
+  # An empty or unreadable pid is treated as live so a holder between mkdir
+  # and pid publication is never reclaimed; that direction fails safe.
+  if [[ -z "$holder" ]] || kill -0 "$holder" 2>/dev/null; then
     return 1
   fi
-  # The recorded holder is gone (e.g. SIGKILL); reclaim the stale lock only if
-  # it still names the same dead holder.
-  recheck="$(cat "$LOCK_DIR/pid" 2>/dev/null || true)"
-  if [[ "$recheck" != "$holder" ]]; then
+  # The recorded holder is dead (e.g. SIGKILL). Quarantine the stale lock via
+  # rename: exactly one contender's rename can succeed.
+  if ! mv "$LOCK_DIR" "$LOCK_DIR.stale.$$" 2>/dev/null; then
     return 1
   fi
-  rm -rf "$LOCK_DIR"
+  rm -rf "$LOCK_DIR.stale.$$"
   if mkdir "$LOCK_DIR" 2>/dev/null; then
     printf "%s\n" "$$" > "$LOCK_DIR/pid"
     return 0
@@ -135,7 +136,9 @@ if ! acquire_watcher_lock; then
   exit 4
 fi
 cleanup_lock() {
-  rm -rf "$LOCK_DIR" 2>/dev/null || true
+  if [[ "$(cat "$LOCK_DIR/pid" 2>/dev/null || true)" == "$$" ]]; then
+    rm -rf "$LOCK_DIR" 2>/dev/null || true
+  fi
 }
 trap cleanup_lock EXIT
 

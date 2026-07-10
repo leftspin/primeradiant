@@ -4196,11 +4196,11 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     refute File.exists?(Path.join(state_root, "cursor.txt"))
   end
 
-  test "live watcher records typed failure for shell-unsafe package names" do
+  test "hostile source message ids stay data-only and never shape package paths" do
     tmp =
       Path.join(
         System.tmp_dir!(),
-        "primeradiant-live-watch-unsafe-name-#{System.unique_integer([:positive])}"
+        "primeradiant-live-watch-hostile-id-#{System.unique_integer([:positive])}"
       )
 
     File.mkdir_p!(tmp)
@@ -4211,15 +4211,18 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     stub_state = Path.join(tmp, "stub-state")
     bin_dir = Path.join(tmp, "bin")
     ssh_key = Path.join(tmp, "ssh-key")
+    escape_probe = Path.join(tmp, "escape-probe")
 
     File.mkdir_p!(state_root)
     File.write!(ssh_key, "stub-key")
 
+    hostile_id = "x/../../../../escape-probe/evil$(touch pwned)"
+
     create_subspace_daemon_db!(
       source_db,
       [
-        {"evil$(touch /tmp/pwned)", "2026-06-03 05:00:00",
-         envelope("Unsafe name", "Unsafe name service is open venue is north speaker is desk.")}
+        {hostile_id, "2026-06-03 05:00:00",
+         envelope("Hostile id", "Hostile id service is open venue is north speaker is desk.")}
       ]
     )
 
@@ -4243,7 +4246,7 @@ defmodule Primeradiant.DaemonNewsReplayTest do
           "--ssh-key",
           ssh_key,
           "--run-id",
-          "unsafe-name-test",
+          "hostile-id-test",
           "--limit",
           "10"
         ],
@@ -4251,18 +4254,24 @@ defmodule Primeradiant.DaemonNewsReplayTest do
         env: [{"PATH", bin_dir <> ":" <> System.get_env("PATH")}]
       )
 
-    assert status == 1
-    assert output =~ "live watcher package consumption failed"
-    refute File.exists?(Path.join(state_root, "cursor.txt"))
+    assert status == 0, output
+    assert File.read!(Path.join(state_root, "cursor.txt")) == "2026-06-03 05:00:00|1\n"
+    refute File.exists?(escape_probe)
 
-    failed_report =
-      Path.join(state_root, "unsafe-name-test-failed-report.json")
+    report_path = output |> String.split("\n", trim: true) |> List.last()
+    report = report_path |> File.read!() |> Jason.decode!()
+
+    [consumed] = report["consumed"]
+    assert Path.basename(consumed["package_dir"]) == "0001-1"
+    assert String.starts_with?(consumed["package_dir"], state_root)
+
+    event =
+      consumed["package_dir"]
+      |> Path.join("event.json")
       |> File.read!()
       |> Jason.decode!()
 
-    assert failed_report["status"] == "package_name_unsafe"
-    assert failed_report["failed_stage"] == "package_name"
-    assert failed_report["unconsumed_range_retained"] == true
+    assert get_in(event, ["source", "item_id"]) == hostile_id
   end
 
   test "live watcher records typed ack failure and holds cursor when remote ack is lost" do
