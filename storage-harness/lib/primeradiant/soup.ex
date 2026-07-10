@@ -456,7 +456,8 @@ defmodule Primeradiant.Soup do
   end
 
   defp current_story_card_version(state, story_id) do
-    state.story_card_versions
+    state
+    |> active_repair_rows(state.story_card_versions)
     |> Enum.filter(&(&1.story_id == story_id))
     |> Enum.sort_by(& &1.card_version, :desc)
     |> List.first()
@@ -583,6 +584,7 @@ defmodule Primeradiant.Soup do
   defp feed_visible_stories(state) do
     state.stories
     |> Enum.reject(&t1421_quarantined?/1)
+    |> Enum.reject(&graph_admission_quarantined?(state, &1))
     |> Enum.sort_by(
       &{story_card_serving_rank(state, &1), &1.updated_at_story},
       fn {left_rank, left_updated_at}, {right_rank, right_updated_at} ->
@@ -595,6 +597,7 @@ defmodule Primeradiant.Soup do
   defp visible_stories(state) do
     state.stories
     |> Enum.reject(&t1421_quarantined?/1)
+    |> Enum.reject(&graph_admission_quarantined?(state, &1))
     |> Enum.sort_by(& &1.updated_at_story, {:desc, DateTime})
   end
 
@@ -613,9 +616,17 @@ defmodule Primeradiant.Soup do
     end
   end
 
+  defp graph_admission_quarantined?(state, story),
+    do:
+      Enum.any?(
+        state.story_quarantines,
+        &(&1.story_id == story.id and &1.rollback_status != "restored")
+      )
+
   defp story_inputs(state, story_id) do
     input_ids =
-      state.story_events
+      state
+      |> active_repair_rows(state.story_events)
       |> Enum.filter(&(&1.story_id == story_id))
       |> Enum.map(& &1.input_id)
       |> MapSet.new()
@@ -625,12 +636,13 @@ defmodule Primeradiant.Soup do
 
   defp evidence_refs(state, story_id) do
     subject_ids =
-      (state.story_events ++ state.story_fact_versions)
+      active_repair_rows(state, state.story_events ++ state.story_fact_versions)
       |> Enum.filter(&(&1.story_id == story_id))
       |> Enum.map(& &1.id)
       |> MapSet.new()
 
-    state.evidence_refs
+    state
+    |> active_repair_rows(state.evidence_refs)
     |> Enum.filter(&MapSet.member?(subject_ids, &1.subject_id))
     |> Enum.map(& &1.evidence_label)
     |> Enum.uniq()
@@ -771,7 +783,8 @@ defmodule Primeradiant.Soup do
   end
 
   defp story_claim_refs(state, story_id) do
-    state.story_fact_versions
+    state
+    |> active_repair_rows(state.story_fact_versions)
     |> Enum.filter(&(&1.story_id == story_id))
     |> Enum.map(& &1.claim_node_id)
     |> Enum.reject(&is_nil/1)
@@ -790,7 +803,8 @@ defmodule Primeradiant.Soup do
       |> Enum.map(& &1.id)
       |> MapSet.new()
 
-    state.edges
+    state
+    |> active_repair_rows(state.edges)
     |> Enum.filter(fn edge ->
       edge.status == "committed" and
         edge.attrs["edge_contract"] == "article_story_contribution" and
@@ -798,6 +812,16 @@ defmodule Primeradiant.Soup do
         MapSet.member?(story_node_ids, edge.to_node_id)
     end)
     |> List.first()
+  end
+
+  defp active_repair_rows(state, rows) do
+    rolled_back_ids =
+      state.repair_runs
+      |> Enum.filter(&(&1.status == "rolled_back"))
+      |> Enum.flat_map(& &1.mutation_ids)
+      |> MapSet.new()
+
+    Enum.reject(rows, &MapSet.member?(rolled_back_ids, &1.id))
   end
 
   defp contribution_contract(nil) do

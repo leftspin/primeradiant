@@ -447,7 +447,8 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
           meaning_run.agent_type,
           synthesis_run.agent_type
         ],
-        evidence_refs: evidence_refs
+        evidence_refs: evidence_refs,
+        refusal_reason: meaning.output["refusal_reason"]
       })
 
     state =
@@ -1484,8 +1485,7 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
     title = story_title(meaning.output, input)
     existing_story? = Enum.any?(state.stories, &(&1.story_key == story_key))
 
-    event_classification =
-      event_classification(meaning.output, not existing_story?, soup_candidate_hint)
+    event_classification = event_classification(meaning.output, not existing_story?)
 
     changed_facts =
       if material_event_classification?(event_classification), do: raw_changed_facts, else: %{}
@@ -1574,20 +1574,26 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
         confidence: ChangesetStore.decimal(confidence)
       })
 
-    input_node =
-      ChangesetStore.insert!(SoupNode, %{
-        tenant_id: state.tenant_id,
-        node_key: source_ref,
-        node_type: "input",
-        title: scalar_title(input.title) || source_ref,
-        state: "active",
-        input_id: input.id,
-        proposal_id: proposal.id,
-        proposal_op_id: proposal_op.id,
-        graph_commit_id: commit.id,
-        confidence: ChangesetStore.decimal(confidence),
-        attrs: %{"acl" => input.acl, "correlation_id" => correlation_id}
-      })
+    {input_node, input_node_inserted?} =
+      case Enum.find(state.soup_nodes, &(&1.input_id == input.id and &1.node_type == "input")) do
+        nil ->
+          {ChangesetStore.insert!(SoupNode, %{
+             tenant_id: state.tenant_id,
+             node_key: source_ref,
+             node_type: "input",
+             title: scalar_title(input.title) || source_ref,
+             state: "active",
+             input_id: input.id,
+             proposal_id: proposal.id,
+             proposal_op_id: proposal_op.id,
+             graph_commit_id: commit.id,
+             confidence: ChangesetStore.decimal(confidence),
+             attrs: %{"acl" => input.acl, "correlation_id" => correlation_id}
+           }), true}
+
+        existing ->
+          {existing, false}
+      end
 
     {state, story_node} =
       upsert_story_node(state, story, proposal, proposal_op, commit, confidence, correlation_id)
@@ -1635,8 +1641,7 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
       |> State.append(:proposal_ops, proposal_op)
       |> State.append(:proposal_decisions, decision)
       |> State.append(:graph_commits, commit)
-      |> State.append(:soup_nodes, input_node)
-      |> State.put_source_id(:node, source_ref, input_node.id)
+      |> append_input_node(input_node, input_node_inserted?, source_ref)
       |> append_new_story_node(story_node, story_inserted?)
       |> State.append(:edges, edge)
       |> State.append(:story_events, event)
@@ -1668,7 +1673,8 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
         proposal_op.id,
         nil
       )
-      |> evidence(
+      |> maybe_evidence_node(
+        input_node_inserted?,
         "soup_node",
         input_node.id,
         input,
@@ -1677,7 +1683,8 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
         proposal_op.id,
         input_node.id
       )
-      |> evidence(
+      |> maybe_evidence_node(
+        true,
         "soup_node",
         story_node.id,
         input,
@@ -1711,6 +1718,58 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
        operation_family: operation_family(meaning.output),
        meaning_agent_run_id: meaning.run.id
      }}
+  end
+
+  defp append_input_node(state, node, true, source_ref) do
+    state
+    |> State.append(:soup_nodes, node)
+    |> State.put_source_id(:node, source_ref, node.id)
+  end
+
+  defp append_input_node(state, _node, false, _source_ref), do: state
+
+  defp maybe_evidence_node(
+         state,
+         false,
+         _subject_type,
+         _subject_id,
+         _input,
+         _refs,
+         _proposal_id,
+         _proposal_op_id,
+         _soup_node_id
+       ),
+       do: state
+
+  defp maybe_evidence_node(
+         state,
+         true,
+         subject_type,
+         subject_id,
+         input,
+         refs,
+         proposal_id,
+         proposal_op_id,
+         soup_node_id
+       ) do
+    if Enum.any?(state.evidence_refs, fn existing ->
+         existing.subject_type == subject_type and existing.subject_id == subject_id and
+           existing.input_id == input.id and existing.span_start == 0 and
+           existing.span_end == byte_size(input.body_text || "")
+       end) do
+      state
+    else
+      evidence(
+        state,
+        subject_type,
+        subject_id,
+        input,
+        refs,
+        proposal_id,
+        proposal_op_id,
+        soup_node_id
+      )
+    end
   end
 
   defp write_story_card(
@@ -1881,14 +1940,14 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
             updated_at_story: input.observed_at,
             last_material_at:
               if(
-                material_event_classification?(event_classification(meaning.output, false, nil)) and
+                material_event_classification?(event_classification(meaning.output, false)) and
                   changed_facts != %{},
                 do: input.observed_at,
                 else: existing.last_material_at
               ),
             structural_facts:
               if(
-                material_event_classification?(event_classification(meaning.output, false, nil)) and
+                material_event_classification?(event_classification(meaning.output, false)) and
                   changed_facts != %{},
                 do: Map.merge(existing.structural_facts || %{}, changed_facts),
                 else: existing.structural_facts || %{}
@@ -2075,6 +2134,7 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
     input_tokens = content_tokens([input.title, input.body_text])
 
     state.stories
+    |> Enum.reject(&graph_admission_quarantined?(state, &1))
     |> Enum.map(fn story ->
       story_inputs = visible_story_inputs(state, story, actor_id)
       story_tokens = content_tokens(Enum.flat_map(story_inputs, &[&1.title, &1.body_text]))
@@ -2107,6 +2167,7 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
 
   defp visible_story_refs(state, actor_id) do
     state.stories
+    |> Enum.reject(&graph_admission_quarantined?(state, &1))
     |> Enum.map(fn story ->
       %{
         story_key: story.story_key,
@@ -2123,13 +2184,21 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
   end
 
   defp visible_story_inputs(state, story, actor_id) do
-    state.story_events
+    state
+    |> active_repair_rows(state.story_events)
     |> Enum.filter(&(&1.story_id == story.id))
     |> Enum.map(fn event -> Enum.find(state.inputs, &(&1.id == event.input_id)) end)
     |> Enum.reject(&is_nil/1)
     |> Enum.filter(&input_visible_to_actor?(&1, actor_id))
     |> Enum.uniq_by(& &1.id)
   end
+
+  defp graph_admission_quarantined?(state, story),
+    do:
+      Enum.any?(
+        state.story_quarantines,
+        &(&1.story_id == story.id and &1.rollback_status != "restored")
+      )
 
   defp input_visible_to_actor?(input, actor_id) do
     acl = input.acl || %{"privacy" => "public"}
@@ -2149,7 +2218,8 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
   defp append_rows(state, field, rows), do: Enum.reduce(rows, state, &State.append(&2, field, &1))
 
   defp current_story_card_version(state, story_id) do
-    state.story_card_versions
+    state
+    |> active_repair_rows(state.story_card_versions)
     |> Enum.filter(&(&1.story_id == story_id))
     |> Enum.sort_by(& &1.card_version, :desc)
     |> List.first()
@@ -2166,10 +2236,21 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
   end
 
   defp latest_story_event(state, story_id, input_id) do
-    state.story_events
+    state
+    |> active_repair_rows(state.story_events)
     |> Enum.filter(&(&1.story_id == story_id and &1.input_id == input_id))
     |> Enum.sort_by(&(&1.observed_at || DateTime.from_unix!(0)), {:desc, DateTime})
     |> List.first()
+  end
+
+  defp active_repair_rows(state, rows) do
+    rolled_back_ids =
+      state.repair_runs
+      |> Enum.filter(&(&1.status == "rolled_back"))
+      |> Enum.flat_map(& &1.mutation_ids)
+      |> MapSet.new()
+
+    Enum.reject(rows, &MapSet.member?(rolled_back_ids, &1.id))
   end
 
   defp card_version_for(state, story_id) do
@@ -2895,24 +2976,18 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
     end
   end
 
-  defp event_classification(_output, true, _hint), do: "split"
+  defp event_classification(_output, true), do: "split"
 
-  defp event_classification(output, false, hint) do
+  defp event_classification(output, false) do
     case classification(output, "substantive_update") do
       "duplicate" -> "duplicate"
       "no_op" -> "no_op"
       "repeated_noop_input" -> "no_op"
       "adds_color" -> "color"
       "stale" -> "stale"
-      _ -> hinted_event_classification(hint)
+      _ -> "attach"
     end
   end
-
-  defp hinted_event_classification(%{suggested_classification: "no_op"}), do: "no_op"
-
-  defp hinted_event_classification(%{"suggested_classification" => "no_op"}), do: "no_op"
-
-  defp hinted_event_classification(_hint), do: "attach"
 
   defp edge_type_for_event("duplicate"), do: "duplicates"
   defp edge_type_for_event("no_op"), do: "duplicates"

@@ -156,7 +156,7 @@ defmodule Primeradiant.RealIngestionTest do
     assert second_edge.attrs["source_ref"] == "news_article:forgotlings-ps5"
 
     assert third_chain.story_key == "forgotlings-ps5-launch"
-    assert third_chain.classification == "no_op"
+    assert third_chain.classification == "attach"
 
     third_op =
       Enum.find(state.proposal_ops, &(&1.id == third_chain.proposal_op_id))

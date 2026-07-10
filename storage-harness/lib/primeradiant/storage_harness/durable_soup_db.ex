@@ -2,6 +2,8 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
   @moduledoc false
 
   @tables [
+    :story_quarantines,
+    :repair_runs,
     :story_card_projection_audits,
     :story_reader_deltas,
     :story_card_change_sets,
@@ -62,6 +64,8 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
         rows_sql(:story_card_change_sets, state.story_card_change_sets),
         rows_sql(:story_reader_deltas, state.story_reader_deltas),
         rows_sql(:story_card_projection_audits, state.story_card_projection_audits),
+        rows_sql(:repair_runs, state.repair_runs),
+        rows_sql(:story_quarantines, state.story_quarantines),
         rows_sql(:conflicts, state.conflicts),
         rows_sql(:evidence_refs, state.evidence_refs),
         "COMMIT;"
@@ -127,6 +131,15 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
       |> put_rows(
         :stories,
         load_rows(db_path, "stories", tenant_id, Primeradiant.StorageHarness.Story)
+      )
+      |> put_rows(
+        :story_quarantines,
+        load_rows(
+          db_path,
+          "story_quarantines",
+          tenant_id,
+          Primeradiant.StorageHarness.StoryQuarantine
+        )
       )
       |> put_rows(
         :proposals,
@@ -251,6 +264,19 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
         )
       )
       |> put_rows(
+        :repair_runs,
+        load_rows(db_path, "repair_runs", tenant_id, Primeradiant.StorageHarness.RepairRun)
+      )
+      |> put_rows(
+        :story_quarantines,
+        load_rows(
+          db_path,
+          "story_quarantines",
+          tenant_id,
+          Primeradiant.StorageHarness.StoryQuarantine
+        )
+      )
+      |> put_rows(
         :conflicts,
         load_rows(db_path, "conflicts", tenant_id, Primeradiant.StorageHarness.Conflict)
       )
@@ -356,7 +382,13 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
   def load_soup_feed_projection(db_path, tenant_id, params \\ %{}) do
     if File.regular?(db_path) do
       limit = parse_projection_limit(params["limit"] || params[:limit], 50)
-      state = Primeradiant.StorageHarness.State.new(tenant_id: tenant_id, user_id: "flynn")
+
+      state =
+        Primeradiant.StorageHarness.State.new(tenant_id: tenant_id, user_id: "flynn")
+        |> put_rows(
+          :repair_runs,
+          load_rows(db_path, "repair_runs", tenant_id, Primeradiant.StorageHarness.RepairRun)
+        )
 
       stories =
         load_feed_stories(db_path, tenant_id, limit)
@@ -564,6 +596,34 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
     else
       ""
     end
+  end
+
+  def tenant_revision_after_replay!(db_path, tenant_id, replay_run_id, prior_revision) do
+    [latest_id, revision] =
+      db_path
+      |> sqlite!("""
+      SELECT
+        COALESCE((
+          SELECT id FROM replay_runs
+          WHERE tenant_id = #{sql_quote(tenant_id)}
+          ORDER BY inserted_at DESC, id DESC
+          LIMIT 1
+        ), '') || '|' ||
+        COUNT(*) || ':' || COALESCE(MAX(inserted_at || ':' || id), '')
+      FROM replay_runs
+      WHERE tenant_id = #{sql_quote(tenant_id)};
+      """)
+      |> String.trim()
+      |> String.split("|", parts: 2)
+
+    prior_count = prior_revision |> String.split(":", parts: 2) |> hd() |> String.to_integer()
+    current_count = revision |> String.split(":", parts: 2) |> hd() |> String.to_integer()
+
+    if latest_id != replay_run_id or current_count != prior_count + 1 do
+      raise ArgumentError, "tenant revision changed after repair write"
+    end
+
+    revision
   end
 
   def merge_state(%Primeradiant.StorageHarness.State{} = prior, current) do
@@ -859,7 +919,7 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
 
   defp replay_run_sql(state, attrs) do
     insert_sql(:replay_runs, %{
-      id: Ecto.UUID.generate(),
+      id: Map.get(attrs, :replay_run_id, Ecto.UUID.generate()),
       tenant_id: state.tenant_id,
       source_kind: Map.fetch!(attrs, :source_kind),
       source_db_path: Map.fetch!(attrs, :source_db_path),
@@ -1016,6 +1076,20 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
     )
   end
 
+  defp row_map(:repair_runs, row) do
+    take(
+      row,
+      ~w(id tenant_id plan_hash snapshot_hash snapshot_path source_db_path source_commit approval_evidence actor status started_at finished_at mutation_ids rollback_proof validation inserted_at updated_at)a
+    )
+  end
+
+  defp row_map(:story_quarantines, row) do
+    take(
+      row,
+      ~w(id tenant_id repair_run_id story_id reason original_story_key original_story_state preserved_ids source_refs quarantined_at rollback_status inserted_at updated_at)a
+    )
+  end
+
   defp row_map(:conflicts, row) do
     take(
       row,
@@ -1124,8 +1198,22 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
   end
 
   defp load_rows(db_path, table, tenant_id, module) do
-    query_table_json(db_path, "SELECT * FROM #{table} WHERE tenant_id = #{sql_quote(tenant_id)};")
-    |> Enum.map(&row_struct(module, &1))
+    if table_exists?(db_path, table) do
+      query_table_json(
+        db_path,
+        "SELECT * FROM #{table} WHERE tenant_id = #{sql_quote(tenant_id)};"
+      )
+      |> Enum.map(&row_struct(module, &1))
+    else
+      []
+    end
+  end
+
+  defp table_exists?(db_path, table) do
+    query_table_json(
+      db_path,
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = #{sql_quote(table)} LIMIT 1;"
+    ) != []
   end
 
   defp load_rows_where(db_path, table, tenant_id, where_sql, module) do
@@ -1137,6 +1225,13 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
   end
 
   defp load_feed_stories(db_path, tenant_id, limit) do
+    quarantine_filter =
+      if table_exists?(db_path, "story_quarantines") do
+        "AND NOT EXISTS (SELECT 1 FROM story_quarantines q WHERE q.tenant_id = stories.tenant_id AND q.story_id = stories.id AND q.rollback_status != 'restored')"
+      else
+        ""
+      end
+
     query_table_json(
       db_path,
       """
@@ -1152,6 +1247,12 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
             ) AS row_number
           FROM story_card_versions
           WHERE tenant_id = #{sql_quote(tenant_id)}
+            AND id NOT IN (
+              SELECT json_each.value
+              FROM repair_runs, json_each(repair_runs.mutation_ids)
+              WHERE repair_runs.tenant_id = #{sql_quote(tenant_id)}
+                AND repair_runs.status = 'rolled_back'
+            )
         )
         WHERE row_number = 1
       )
@@ -1159,6 +1260,7 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
       FROM stories
       LEFT JOIN latest_story_cards ON latest_story_cards.story_id = stories.id
       WHERE stories.tenant_id = #{sql_quote(tenant_id)}
+        #{quarantine_filter}
       ORDER BY
         CASE WHEN latest_story_cards.status = 'complete' THEN 0 ELSE 1 END ASC,
         stories.updated_at_story DESC
@@ -1228,12 +1330,12 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
   defp load_value("appears_in_current_card", value), do: value in [1, true, "1"]
 
   defp load_value(key, value)
-       when key in ~w(acl scope normalized facts background questions colors topic_tokens attrs payload evidence_refs changed_facts structural_facts background_facts evidence_packet claim_refs title deck summary freshness field_completeness topic_salience provenance canonical_public_url source_domain source_label publication source_posture contribution_reason source_weight provenance_refs conflict_refs uncertainty changed_field_keys added_claim_refs removed_claim_refs changed_claim_refs changed_source_coverage_refs change_summary material_unseen_deltas nonmaterial_exclusions story_card_version_ids omitted_story_reasons visibility_scope) and
+       when key in ~w(acl scope normalized facts background questions colors topic_tokens attrs payload evidence_refs changed_facts structural_facts background_facts evidence_packet claim_refs title deck summary freshness field_completeness topic_salience provenance canonical_public_url source_domain source_label publication source_posture contribution_reason source_weight provenance_refs conflict_refs uncertainty changed_field_keys added_claim_refs removed_claim_refs changed_claim_refs changed_source_coverage_refs change_summary material_unseen_deltas nonmaterial_exclusions story_card_version_ids omitted_story_reasons visibility_scope mutation_ids rollback_proof validation preserved_ids source_refs) and
               is_binary(value),
        do: decode_json(value, %{})
 
   defp load_value(key, value)
-       when key in ~w(inserted_at updated_at started_at ended_at committed_at observed_at first_observed_at updated_at_story last_material_at seen_at first_observed_at last_observed_at query_time) and
+       when key in ~w(inserted_at updated_at started_at ended_at finished_at committed_at observed_at first_observed_at updated_at_story last_material_at seen_at first_observed_at last_observed_at query_time quarantined_at) and
               is_binary(value),
        do: Primeradiant.StorageHarness.ChangesetStore.iso!(value)
 
@@ -1270,6 +1372,44 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
       source_row_count INTEGER NOT NULL,
       source_mode TEXT NOT NULL CHECK (source_mode = 'read_only'),
       inserted_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS repair_runs (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      plan_hash TEXT NOT NULL,
+      snapshot_hash TEXT NOT NULL,
+      snapshot_path TEXT NOT NULL,
+      source_db_path TEXT NOT NULL,
+      source_commit TEXT NOT NULL,
+      approval_evidence TEXT NOT NULL,
+      actor TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('running', 'succeeded', 'failed', 'rolled_back')),
+      started_at TEXT NOT NULL,
+      finished_at TEXT,
+      mutation_ids TEXT NOT NULL,
+      rollback_proof TEXT NOT NULL,
+      validation TEXT NOT NULL,
+      inserted_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE (tenant_id, plan_hash)
+    );
+
+    CREATE TABLE IF NOT EXISTS story_quarantines (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      repair_run_id TEXT NOT NULL REFERENCES repair_runs(id),
+      story_id TEXT NOT NULL REFERENCES stories(id),
+      reason TEXT NOT NULL,
+      original_story_key TEXT NOT NULL,
+      original_story_state TEXT NOT NULL,
+      preserved_ids TEXT NOT NULL,
+      source_refs TEXT NOT NULL,
+      quarantined_at TEXT NOT NULL,
+      rollback_status TEXT NOT NULL CHECK (rollback_status IN ('snapshot_available', 'restored', 'not_required')),
+      inserted_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE (tenant_id, story_id)
     );
 
     CREATE TABLE IF NOT EXISTS inputs (
