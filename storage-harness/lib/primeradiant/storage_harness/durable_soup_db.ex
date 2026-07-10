@@ -886,6 +886,88 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
     |> then(&row_struct(Map.fetch!(@dedupe_modules, table), &1))
   end
 
+  def put_source_registration!(db_path, row) do
+    put_source_evidence_row!(db_path, :source_registrations, row)
+
+    source_registration(db_path, row.tenant_id, row.source_key)
+  end
+
+  def source_registration(db_path, tenant_id, source_key) do
+    db_path
+    |> query_table_json("""
+    SELECT * FROM source_registrations
+    WHERE tenant_id = #{sql_quote(tenant_id)}
+      AND source_key = #{sql_quote(source_key)}
+    LIMIT 1;
+    """)
+    |> List.first()
+    |> case do
+      nil -> nil
+      record -> row_struct(Primeradiant.StorageHarness.SourceRegistration, record)
+    end
+  end
+
+  def put_source_gap_record!(db_path, row) do
+    put_source_evidence_row!(db_path, :source_gap_records, row)
+
+    db_path
+    |> query_table_json(
+      "SELECT * FROM source_gap_records WHERE id = #{sql_quote(row.id)} LIMIT 1;"
+    )
+    |> List.first()
+    |> then(&row_struct(Primeradiant.StorageHarness.SourceGapRecord, &1))
+  end
+
+  def source_gap_records(db_path, tenant_id, source_key) do
+    db_path
+    |> query_table_json("""
+    SELECT * FROM source_gap_records
+    WHERE tenant_id = #{sql_quote(tenant_id)}
+      AND source_key = #{sql_quote(source_key)};
+    """)
+    |> Enum.map(&row_struct(Primeradiant.StorageHarness.SourceGapRecord, &1))
+  end
+
+  def raw_envelopes_for_source(db_path, tenant_id, source_key) do
+    db_path
+    |> query_table_json("""
+    SELECT * FROM raw_envelopes
+    WHERE tenant_id = #{sql_quote(tenant_id)}
+      AND source_key = #{sql_quote(source_key)};
+    """)
+    |> Enum.map(&row_struct(Primeradiant.StorageHarness.RawEnvelope, &1))
+  end
+
+  def insert_resolution_outcome!(db_path, row) do
+    put_source_evidence_row!(db_path, :resolution_outcomes, row)
+
+    db_path
+    |> query_table_json(
+      "SELECT * FROM resolution_outcomes WHERE id = #{sql_quote(row.id)} LIMIT 1;"
+    )
+    |> List.first()
+    |> then(&row_struct(Primeradiant.StorageHarness.ResolutionOutcome, &1))
+  end
+
+  defp put_source_evidence_row!(db_path, table, row) when table in @source_evidence_tables do
+    db_path |> Path.dirname() |> File.mkdir_p!()
+    validate_existing_foreign_keys!(db_path)
+
+    sql =
+      [
+        ".bail on",
+        "PRAGMA foreign_keys = ON;",
+        "BEGIN IMMEDIATE;",
+        schema_sql(),
+        insert_sql(table, row_map(table, row)),
+        "COMMIT;"
+      ]
+      |> Enum.join("\n")
+
+    sqlite!(db_path, sql)
+    :ok
+  end
+
   defp seen_state_delta_report(db_path, tenant_id) do
     %{
       authored_outputs: count(db_path, "authored_outputs", tenant_id),
