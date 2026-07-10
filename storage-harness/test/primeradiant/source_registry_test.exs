@@ -37,8 +37,8 @@ defmodule Primeradiant.SourceRegistryTest do
                adapter_version: "adapter-v1",
                resolution_policy: policy,
                policy_version: "policy-v1",
-               budgets: %{"total_case_ms" => 1_000},
-               config: %{"resolver_routes" => []},
+               budgets: valid_budgets(1_000),
+               config: %{"resolvers" => []},
                initial_cursor: 7
              })
 
@@ -72,8 +72,8 @@ defmodule Primeradiant.SourceRegistryTest do
                mode: "shadow",
                resolution_policy: updated_policy,
                policy_version: "policy-v2",
-               budgets: %{"total_case_ms" => 2_000},
-               config: %{"resolver_routes" => []}
+               budgets: valid_budgets(2_000),
+               config: %{"resolvers" => []}
              })
 
     assert updated_registration.id == registration.id
@@ -225,6 +225,7 @@ defmodule Primeradiant.SourceRegistryTest do
     assert health.resolution_backlog == 1
     assert health.retry_depth == 0
     assert health.circuit_state == "closed"
+    assert health.circuit_states == %{"adapter" => "closed", "normalizer" => "closed"}
     assert health.gap_counts == %{open: 0, closed: 0}
 
     resolution_at = DateTime.add(@received_at, 10, :second)
@@ -263,8 +264,8 @@ defmodule Primeradiant.SourceRegistryTest do
                  "source_class" => "public_article"
                },
                policy_version: "policy-v1",
-               budgets: %{},
-               config: %{},
+               budgets: valid_budgets(1_000),
+               config: %{"resolvers" => []},
                initial_cursor: 0
              })
 
@@ -287,4 +288,16 @@ defmodule Primeradiant.SourceRegistryTest do
   end
 
   defp source_scope, do: %{tenant_id: @tenant, source_key: @source}
+
+  defp valid_budgets(total_case_ms) do
+    %{
+      "max_attempts" => 2,
+      "total_case_ms" => total_case_ms,
+      "retry_backoff_ms" => 1,
+      "per_source_concurrency" => 1,
+      "adapter" => %{"time_ms" => 100},
+      "normalizer" => %{"time_ms" => 100},
+      "resolvers" => %{}
+    }
+  end
 end

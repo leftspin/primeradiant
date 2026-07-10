@@ -1501,7 +1501,7 @@ defmodule Primeradiant.StorageHarness.SourceRegistration do
     field(:refusal_count, :integer, default: 0)
     field(:unresolved_count, :integer, default: 0)
     field(:quarantine_count, :integer, default: 0)
-    field(:circuit_state, :string)
+    field(:circuit_state, :map, default: %{})
     timestamps(type: :utc_datetime_usec)
   end
 

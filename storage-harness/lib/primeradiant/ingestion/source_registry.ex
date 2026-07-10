@@ -13,42 +13,44 @@ defmodule Primeradiant.Ingestion.SourceRegistry do
 
   @digest_conflict "quarantined:source_identity_digest_conflict"
   @registry_version "source_registry_v1"
+  @resolver_budget_keys ~w(time_ms requests bytes redirects result_count)
 
   def register_source(db_path, attrs) do
-    tenant_id = Map.fetch!(attrs, :tenant_id)
-    source_key = Map.fetch!(attrs, :source_key)
-    policy = Map.fetch!(attrs, :resolution_policy)
-    existing = DurableSoupDb.source_registration(db_path, tenant_id, source_key)
-    now = now()
+    with :ok <- validate_registration(attrs) do
+      tenant_id = Map.fetch!(attrs, :tenant_id)
+      source_key = Map.fetch!(attrs, :source_key)
+      policy = Map.fetch!(attrs, :resolution_policy)
+      existing = DurableSoupDb.source_registration(db_path, tenant_id, source_key)
+      now = now()
 
-    registration =
-      ChangesetStore.insert!(SourceRegistration, %{
-        id: existing && existing.id,
-        tenant_id: tenant_id,
-        source_key: source_key,
-        adapter_module: attrs |> Map.fetch!(:adapter_module) |> to_string(),
-        adapter_version: Map.fetch!(attrs, :adapter_version),
-        mode: Map.get(attrs, :mode, "disabled") |> to_string(),
-        resolution_policy: policy,
-        policy_version: Map.fetch!(attrs, :policy_version),
-        policy_hash: policy_hash(policy),
-        budgets: Map.get(attrs, :budgets, %{}),
-        config: Map.get(attrs, :config, %{}),
-        cursor: registration_cursor(attrs, existing),
-        last_received_at: existing && existing.last_received_at,
-        last_resolution_terminal_at: existing && existing.last_resolution_terminal_at,
-        last_admission_at: existing && existing.last_admission_at,
-        gap_count: (existing && existing.gap_count) || 0,
-        refusal_count: (existing && existing.refusal_count) || 0,
-        unresolved_count: (existing && existing.unresolved_count) || 0,
-        quarantine_count: (existing && existing.quarantine_count) || 0,
-        circuit_state:
-          Map.get(attrs, :circuit_state, (existing && existing.circuit_state) || "closed"),
-        inserted_at: (existing && existing.inserted_at) || now,
-        updated_at: now
-      })
+      registration =
+        ChangesetStore.insert!(SourceRegistration, %{
+          id: existing && existing.id,
+          tenant_id: tenant_id,
+          source_key: source_key,
+          adapter_module: attrs |> Map.fetch!(:adapter_module) |> to_string(),
+          adapter_version: Map.fetch!(attrs, :adapter_version),
+          mode: Map.get(attrs, :mode, "disabled") |> to_string(),
+          resolution_policy: policy,
+          policy_version: Map.fetch!(attrs, :policy_version),
+          policy_hash: policy_hash(policy),
+          budgets: Map.get(attrs, :budgets, %{}),
+          config: Map.get(attrs, :config, %{}),
+          cursor: registration_cursor(attrs, existing),
+          last_received_at: existing && existing.last_received_at,
+          last_resolution_terminal_at: existing && existing.last_resolution_terminal_at,
+          last_admission_at: existing && existing.last_admission_at,
+          gap_count: (existing && existing.gap_count) || 0,
+          refusal_count: (existing && existing.refusal_count) || 0,
+          unresolved_count: (existing && existing.unresolved_count) || 0,
+          quarantine_count: (existing && existing.quarantine_count) || 0,
+          circuit_state: circuit_states(attrs, existing),
+          inserted_at: (existing && existing.inserted_at) || now,
+          updated_at: now
+        })
 
-    {:ok, DurableSoupDb.put_source_registration!(db_path, registration)}
+      {:ok, DurableSoupDb.put_source_registration!(db_path, registration)}
+    end
   end
 
   def policy_for(db_path, attrs) do
@@ -117,6 +119,20 @@ defmodule Primeradiant.Ingestion.SourceRegistry do
     record_timestamp(db_path, attrs, :last_admission_at)
   end
 
+  def record_resolution_signal(db_path, attrs) do
+    case registration(db_path, attrs) do
+      nil ->
+        {:error, :policy_not_registered}
+
+      registration ->
+        route = attrs |> Map.fetch!(:route) |> to_string()
+        states = Map.put(registration.circuit_state, route, Map.fetch!(attrs, :circuit_state))
+        updated = update_registration(registration, %{circuit_state: states})
+
+        {:ok, DurableSoupDb.put_source_registration!(db_path, updated)}
+    end
+  end
+
   def health(db_path, attrs) do
     case registration(db_path, attrs) do
       nil ->
@@ -149,7 +165,8 @@ defmodule Primeradiant.Ingestion.SourceRegistry do
            unresolved_count: outcome_count(outcomes, "unresolved"),
            quarantine_count: outcome_count(outcomes, "quarantined"),
            refusal_count: outcome_count(outcomes, "refused"),
-           circuit_state: registration.circuit_state,
+           circuit_states: registration.circuit_state,
+           circuit_state: aggregate_circuit_state(registration.circuit_state),
            gap_counts: %{
              open: Enum.count(gaps, &(&1.status == "open")),
              closed: Enum.count(gaps, &(&1.status == "closed"))
@@ -163,6 +180,80 @@ defmodule Primeradiant.Ingestion.SourceRegistry do
     |> canonicalize()
     |> Jason.encode!()
     |> ChangesetStore.hash()
+  end
+
+  defp validate_registration(attrs) do
+    budgets = Map.get(attrs, :budgets)
+    config = Map.get(attrs, :config)
+
+    with true <- is_map(budgets),
+         true <- positive(budgets, "total_case_ms"),
+         true <- positive(budgets, "max_attempts"),
+         true <- nonnegative(budgets, "retry_backoff_ms"),
+         true <- positive(budgets, "per_source_concurrency"),
+         true <- stage_budget?(budgets, "adapter"),
+         true <- stage_budget?(budgets, "normalizer"),
+         true <- is_map(config),
+         routes when is_list(routes) <- value(config, "resolvers"),
+         true <- Enum.all?(routes, &valid_route?(&1, budgets)),
+         true <- valid_inference?(value(config, "inference"), budgets) do
+      :ok
+    else
+      _ -> {:error, :invalid_resolution_registration}
+    end
+  end
+
+  defp valid_route?(route, budgets) when is_map(route) do
+    resolver_budgets = value(budgets, "resolvers")
+    id = value(route, "id")
+
+    is_binary(id) and id != "" and valid_module?(value(route, "module")) and
+      is_binary(value(route, "version")) and is_list(value(route, "evidence_types")) and
+      is_map(resolver_budgets) and
+      Enum.all?(@resolver_budget_keys, &nonnegative(value(resolver_budgets, id), &1))
+  end
+
+  defp valid_route?(_, _), do: false
+
+  defp valid_inference?(nil, _budgets), do: true
+
+  defp valid_inference?(config, budgets) when is_map(config) do
+    is_binary(value(config, "id")) and valid_module?(value(config, "module")) and
+      is_binary(value(config, "version")) and stage_budget?(budgets, "inference") and
+      nonnegative(value(budgets, "inference"), "tokens")
+  end
+
+  defp valid_inference?(_, _), do: false
+
+  defp valid_module?(module), do: is_atom(module) or (is_binary(module) and module != "")
+  defp stage_budget?(budgets, stage), do: positive(value(budgets, stage), "time_ms")
+
+  defp positive(map, key), do: is_integer(value(map, key)) and value(map, key) > 0
+  defp nonnegative(map, key), do: is_integer(value(map, key)) and value(map, key) >= 0
+
+  defp circuit_states(attrs, existing) do
+    case Map.get(attrs, :circuit_state, existing && existing.circuit_state) do
+      states when is_map(states) and map_size(states) > 0 -> states
+      _ -> configured_circuit_states(Map.get(attrs, :config, %{}))
+    end
+  end
+
+  defp configured_circuit_states(config) do
+    resolver_ids = Enum.map(value(config, "resolvers") || [], &value(&1, "id"))
+
+    inference_ids =
+      if value(config, "inference"), do: [value(value(config, "inference"), "id")], else: []
+
+    ["adapter", "normalizer" | resolver_ids ++ inference_ids]
+    |> Map.new(&{&1, "closed"})
+  end
+
+  defp aggregate_circuit_state(states) do
+    priority = %{"closed" => 0, "degraded" => 1, "resolution_stalled" => 2, "disabled" => 3}
+
+    states
+    |> Map.values()
+    |> Enum.max_by(&Map.get(priority, &1, 0), fn -> "closed" end)
   end
 
   defp receive_registered_envelope(db_path, registration, attrs) do
@@ -496,6 +587,12 @@ defmodule Primeradiant.Ingestion.SourceRegistry do
 
   defp canonicalize(value) when is_list(value), do: Enum.map(value, &canonicalize/1)
   defp canonicalize(value), do: value
+
+  defp value(nil, _key), do: nil
+
+  defp value(map, key) do
+    Map.get(map, key) || Map.get(map, to_string(key))
+  end
 
   defp now, do: DateTime.utc_now() |> DateTime.truncate(:microsecond)
 end

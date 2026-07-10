@@ -938,6 +938,105 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
     |> Enum.map(&row_struct(Primeradiant.StorageHarness.RawEnvelope, &1))
   end
 
+  def raw_envelope(db_path, tenant_id, id) do
+    source_evidence_row(
+      db_path,
+      "raw_envelopes",
+      tenant_id,
+      id,
+      Primeradiant.StorageHarness.RawEnvelope
+    )
+  end
+
+  def resolution_case(db_path, tenant_id, id) do
+    source_evidence_row(
+      db_path,
+      "resolution_cases",
+      tenant_id,
+      id,
+      Primeradiant.StorageHarness.ResolutionCase
+    )
+  end
+
+  def put_resolution_case!(db_path, row) do
+    put_source_evidence_row!(db_path, :resolution_cases, row)
+    resolution_case(db_path, row.tenant_id, row.id)
+  end
+
+  def insert_resolution_evidence!(db_path, row),
+    do: insert_deduped!(db_path, :resolution_evidence, row)
+
+  def put_resolved_source_field!(db_path, row) do
+    put_source_evidence_row!(db_path, :resolved_source_fields, row)
+
+    source_evidence_row(
+      db_path,
+      "resolved_source_fields",
+      row.tenant_id,
+      row.id,
+      Primeradiant.StorageHarness.ResolvedSourceField
+    )
+  end
+
+  def insert_resolution_attempt!(db_path, row),
+    do: insert_deduped!(db_path, :resolution_attempts, row)
+
+  def put_resolution_attempt!(db_path, row) do
+    put_source_evidence_row!(db_path, :resolution_attempts, row)
+
+    source_evidence_row(
+      db_path,
+      "resolution_attempts",
+      row.tenant_id,
+      row.id,
+      Primeradiant.StorageHarness.ResolutionAttempt
+    )
+  end
+
+  def resolution_evidence_for_case(db_path, tenant_id, case_id),
+    do:
+      source_evidence_rows(
+        db_path,
+        "resolution_evidence",
+        tenant_id,
+        "resolution_case_id",
+        case_id,
+        Primeradiant.StorageHarness.ResolutionEvidence
+      )
+
+  def resolved_source_fields_for_case(db_path, tenant_id, case_id),
+    do:
+      source_evidence_rows(
+        db_path,
+        "resolved_source_fields",
+        tenant_id,
+        "resolution_case_id",
+        case_id,
+        Primeradiant.StorageHarness.ResolvedSourceField
+      )
+
+  def resolution_attempts_for_case(db_path, tenant_id, case_id),
+    do:
+      source_evidence_rows(
+        db_path,
+        "resolution_attempts",
+        tenant_id,
+        "resolution_case_id",
+        case_id,
+        Primeradiant.StorageHarness.ResolutionAttempt
+      )
+
+  def resolution_outcomes_for_case(db_path, tenant_id, case_id),
+    do:
+      source_evidence_rows(
+        db_path,
+        "resolution_outcomes",
+        tenant_id,
+        "resolution_case_id",
+        case_id,
+        Primeradiant.StorageHarness.ResolutionOutcome
+      )
+
   def insert_resolution_outcome!(db_path, row) do
     put_source_evidence_row!(db_path, :resolution_outcomes, row)
 
@@ -947,6 +1046,26 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
     )
     |> List.first()
     |> then(&row_struct(Primeradiant.StorageHarness.ResolutionOutcome, &1))
+  end
+
+  defp source_evidence_row(db_path, table, tenant_id, id, module) do
+    db_path
+    |> query_table_json(
+      "SELECT * FROM #{table} WHERE tenant_id = #{sql_quote(tenant_id)} AND id = #{sql_quote(id)} LIMIT 1;"
+    )
+    |> List.first()
+    |> case do
+      nil -> nil
+      record -> row_struct(module, record)
+    end
+  end
+
+  defp source_evidence_rows(db_path, table, tenant_id, column, value, module) do
+    db_path
+    |> query_table_json(
+      "SELECT * FROM #{table} WHERE tenant_id = #{sql_quote(tenant_id)} AND #{column} = #{sql_quote(value)};"
+    )
+    |> Enum.map(&row_struct(module, &1))
   end
 
   defp put_source_evidence_row!(db_path, table, row) when table in @source_evidence_tables do
@@ -1426,7 +1545,7 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
     values = Enum.map(columns, &sql_value(Map.fetch!(attrs, &1)))
 
     cond do
-      table in @insert_only_tables ->
+      table in @insert_only_tables and table != :resolution_attempts ->
         "INSERT OR IGNORE INTO #{table} (#{Enum.join(columns, ", ")}) VALUES (#{Enum.join(values, ", ")});"
 
       table in @source_evidence_tables ->
@@ -1664,6 +1783,7 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
   defp load_value("appears_in_current_card", value), do: value in [1, true, "1"]
   defp load_value("selected", value), do: value in [1, true, "1"]
   defp load_value("retryable", value), do: value in [1, true, "1"]
+  defp load_value("circuit_state", value) when is_binary(value), do: decode_json(value, %{})
 
   defp load_value(key, value)
        when key in ~w(acl scope normalized facts background questions colors topic_tokens attrs payload evidence_refs changed_facts structural_facts background_facts evidence_packet claim_refs title deck summary freshness field_completeness topic_salience provenance canonical_public_url source_domain source_label publication source_posture contribution_reason source_weight provenance_refs conflict_refs uncertainty changed_field_keys added_claim_refs removed_claim_refs changed_claim_refs changed_source_coverage_refs change_summary material_unseen_deltas nonmaterial_exclusions story_card_version_ids omitted_story_reasons visibility_scope mutation_ids rollback_proof validation preserved_ids source_refs resolution_policy budgets config cursor integrity_metadata locator transformation_chain resolver_provenance budgets_consumed response_evidence_refs source_position_range envelope_disposition_refs) and
