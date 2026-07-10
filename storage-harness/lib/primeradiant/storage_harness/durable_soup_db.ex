@@ -1324,7 +1324,7 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
   defp row_map(:resolution_cases, row) do
     take(
       row,
-      ~w(id tenant_id raw_envelope_id policy_version state attempt_count next_retry_at outcome_code config_policy_hash trace_id inserted_at updated_at)a
+      ~w(id tenant_id raw_envelope_id policy_version state attempt_count next_retry_at outcome_code config_policy_hash policy_snapshot trace_id inserted_at updated_at)a
     )
   end
 
@@ -1338,7 +1338,7 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
   defp row_map(:resolved_source_fields, row) do
     take(
       row,
-      ~w(id tenant_id resolution_case_id field_name normalized_value confidence evidence_refs resolver_provenance transform contradiction_status selected inserted_at updated_at)a
+      ~w(id tenant_id resolution_case_id field_name normalized_value confidence evidence_refs derivation_evidence_ref resolver_provenance transform contradiction_status selected inserted_at updated_at)a
     )
   end
 
@@ -1786,7 +1786,7 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
   defp load_value("circuit_state", value) when is_binary(value), do: decode_json(value, %{})
 
   defp load_value(key, value)
-       when key in ~w(acl scope normalized facts background questions colors topic_tokens attrs payload evidence_refs changed_facts structural_facts background_facts evidence_packet claim_refs title deck summary freshness field_completeness topic_salience provenance canonical_public_url source_domain source_label publication source_posture contribution_reason source_weight provenance_refs conflict_refs uncertainty changed_field_keys added_claim_refs removed_claim_refs changed_claim_refs changed_source_coverage_refs change_summary material_unseen_deltas nonmaterial_exclusions story_card_version_ids omitted_story_reasons visibility_scope mutation_ids rollback_proof validation preserved_ids source_refs resolution_policy budgets config cursor integrity_metadata locator transformation_chain resolver_provenance budgets_consumed response_evidence_refs source_position_range envelope_disposition_refs) and
+       when key in ~w(acl scope normalized facts background questions colors topic_tokens attrs payload evidence_refs changed_facts structural_facts background_facts evidence_packet claim_refs title deck summary freshness field_completeness topic_salience provenance canonical_public_url source_domain source_label publication source_posture contribution_reason source_weight provenance_refs conflict_refs uncertainty changed_field_keys added_claim_refs removed_claim_refs changed_claim_refs changed_source_coverage_refs change_summary material_unseen_deltas nonmaterial_exclusions story_card_version_ids omitted_story_reasons visibility_scope mutation_ids rollback_proof validation preserved_ids source_refs resolution_policy policy_snapshot budgets config cursor integrity_metadata locator transformation_chain resolver_provenance budgets_consumed response_evidence_refs source_position_range envelope_disposition_refs) and
               is_binary(value),
        do: decode_json(value, %{})
 
@@ -1896,6 +1896,7 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
       next_retry_at TEXT,
       outcome_code TEXT,
       config_policy_hash TEXT NOT NULL,
+      policy_snapshot TEXT,
       trace_id TEXT NOT NULL,
       inserted_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
@@ -1929,6 +1930,7 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
       normalized_value TEXT NOT NULL,
       confidence TEXT NOT NULL,
       evidence_refs TEXT NOT NULL,
+      derivation_evidence_ref TEXT,
       resolver_provenance TEXT NOT NULL,
       transform TEXT NOT NULL,
       contradiction_status TEXT NOT NULL,

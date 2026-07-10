@@ -1640,6 +1640,7 @@ defmodule Primeradiant.StorageHarness.ResolutionCase do
     field(:next_retry_at, :utc_datetime_usec)
     field(:outcome_code, :string)
     field(:config_policy_hash, :string)
+    field(:policy_snapshot, :map)
     field(:trace_id, :string)
     timestamps(type: :utc_datetime_usec)
   end
@@ -1656,6 +1657,7 @@ defmodule Primeradiant.StorageHarness.ResolutionCase do
       :next_retry_at,
       :outcome_code,
       :config_policy_hash,
+      :policy_snapshot,
       :trace_id
     ])
     |> put_id()
@@ -1746,6 +1748,7 @@ defmodule Primeradiant.StorageHarness.ResolvedSourceField do
     field(:normalized_value, :string)
     field(:confidence, :decimal)
     field(:evidence_refs, {:array, :string}, default: [])
+    field(:derivation_evidence_ref, :string)
     field(:resolver_provenance, {:array, :map}, default: [])
     field(:transform, :string)
     field(:contradiction_status, :string)
@@ -1763,6 +1766,7 @@ defmodule Primeradiant.StorageHarness.ResolvedSourceField do
       :normalized_value,
       :confidence,
       :evidence_refs,
+      :derivation_evidence_ref,
       :resolver_provenance,
       :transform,
       :contradiction_status,
@@ -1776,6 +1780,7 @@ defmodule Primeradiant.StorageHarness.ResolvedSourceField do
       :normalized_value,
       :confidence,
       :evidence_refs,
+      :derivation_evidence_ref,
       :resolver_provenance,
       :transform,
       :contradiction_status,

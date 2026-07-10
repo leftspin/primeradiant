@@ -2,7 +2,7 @@ defmodule Primeradiant.Ingestion.Resolution.Case do
   @moduledoc false
 
   alias Primeradiant.Ingestion.SourceRegistry
-  alias Primeradiant.Ingestion.Resolution.{Inference, Normalizer, ResolverPlanner}
+  alias Primeradiant.Ingestion.Resolution.{Eligibility, Inference, Normalizer, ResolverPlanner}
 
   alias Primeradiant.StorageHarness.{
     ChangesetStore,
@@ -13,7 +13,7 @@ defmodule Primeradiant.Ingestion.Resolution.Case do
     ResolvedSourceField
   }
 
-  @terminal_states ~w(unresolved quarantined refused failed_terminal)
+  @terminal_states ~w(eligible unresolved quarantined refused failed_terminal)
   @field_kinds ~w(publisher_label publisher_domain public_url explanation)
   @pipeline_version "resolution_pipeline_v1"
 
@@ -53,8 +53,8 @@ defmodule Primeradiant.Ingestion.Resolution.Case do
       )
   end
 
-  defp run_loaded(_db_path, %{state: "validating"} = resolution_case, _now),
-    do: {:ok, resolution_case}
+  defp run_loaded(db_path, %{state: "validating"} = resolution_case, now),
+    do: run_validator(db_path, resolution_case, now)
 
   defp run_loaded(db_path, %{state: state} = resolution_case, _now)
        when state in @terminal_states do
@@ -774,8 +774,120 @@ defmodule Primeradiant.Ingestion.Resolution.Case do
       source_scope(registration, "pipeline", "closed")
     )
 
-    {:ok, resolution_case}
+    run_validator(db_path, resolution_case, now())
   end
+
+  defp run_validator(db_path, resolution_case, started_at) do
+    raw_envelope =
+      DurableSoupDb.raw_envelope(
+        db_path,
+        resolution_case.tenant_id,
+        resolution_case.raw_envelope_id
+      )
+
+    registration =
+      DurableSoupDb.source_registration(
+        db_path,
+        resolution_case.tenant_id,
+        raw_envelope.source_key
+      )
+
+    begin_attempt(
+      db_path,
+      resolution_case,
+      raw_envelope,
+      max(resolution_case.attempt_count, 1),
+      "validator",
+      nil,
+      Eligibility.validator_version(),
+      started_at
+    )
+
+    snapshot = resolution_case.policy_snapshot
+
+    policy_registration =
+      cond do
+        is_map(snapshot) and
+          SourceRegistry.policy_hash(value(snapshot, "resolution_policy")) ==
+            value(snapshot, "policy_hash") and
+          value(snapshot, "policy_hash") == resolution_case.config_policy_hash and
+            value(snapshot, "policy_version") == resolution_case.policy_version ->
+          %{
+            resolution_policy: value(snapshot, "resolution_policy"),
+            policy_hash: value(snapshot, "policy_hash")
+          }
+
+        is_nil(snapshot) and registration.policy_hash == resolution_case.config_policy_hash ->
+          registration
+
+        true ->
+          nil
+      end
+
+    result =
+      try do
+        if policy_registration,
+          do: Eligibility.evaluate(db_path, resolution_case, policy_registration),
+          else: {:non_eligible, "unresolved:policy_not_registered", []}
+      rescue
+        _ -> {:validator_crash, []}
+      catch
+        _, _ -> {:validator_crash, []}
+      end
+
+    record_attempt(
+      db_path,
+      resolution_case,
+      raw_envelope,
+      max(resolution_case.attempt_count, 1),
+      "validator",
+      nil,
+      Eligibility.validator_version(),
+      %{
+        policy_hash: resolution_case.config_policy_hash,
+        validator_version: Eligibility.validator_version()
+      },
+      %{},
+      validator_attempt_outcome(result),
+      nil,
+      validator_refs(result),
+      started_at,
+      started_at
+    )
+
+    case result do
+      {:eligible, winners} ->
+        Eligibility.select!(db_path, winners)
+        finish(db_path, registration, resolution_case, "eligible", "eligible", started_at)
+
+      {:non_eligible, code, _winners} ->
+        clear_selection(db_path, resolution_case)
+        finish(db_path, registration, resolution_case, code, reason_code(code), started_at)
+
+      {:validator_crash, _} ->
+        clear_selection(db_path, resolution_case)
+
+        finish(
+          db_path,
+          registration,
+          resolution_case,
+          "failed_terminal:validator_crash",
+          "validator_crash",
+          started_at,
+          "validator"
+        )
+    end
+  end
+
+  defp validator_attempt_outcome({:eligible, _}), do: "eligible"
+  defp validator_attempt_outcome({:non_eligible, code, _}), do: code
+  defp validator_attempt_outcome({:validator_crash, _}), do: "failed_terminal:validator_crash"
+
+  defp validator_refs({_, winners}) when is_list(winners),
+    do: Enum.flat_map(winners, & &1.evidence_refs) |> Enum.uniq()
+
+  defp validator_refs({_, _, winners}) when is_list(winners),
+    do: Enum.flat_map(winners, & &1.evidence_refs) |> Enum.uniq()
 
   defp handle_typed_outcome(
          db_path,
@@ -854,6 +966,10 @@ defmodule Primeradiant.Ingestion.Resolution.Case do
 
   defp finish(db_path, registration, resolution_case, code, reason, now, route) do
     state = code |> String.split(":", parts: 2) |> hd()
+
+    if state != "eligible" do
+      clear_selection(db_path, resolution_case)
+    end
 
     resolution_case =
       update_case(db_path, resolution_case, %{
@@ -974,6 +1090,7 @@ defmodule Primeradiant.Ingestion.Resolution.Case do
             normalized_value: normalized_value,
             confidence: value(attrs, :confidence),
             evidence_refs: [evidence.id],
+            derivation_evidence_ref: evidence.id,
             resolver_provenance: [%{"resolver" => plan.id, "version" => plan.version}],
             transform: value(attrs, :transform),
             contradiction_status: value(attrs, :contradiction_status, "none"),
@@ -1013,7 +1130,7 @@ defmodule Primeradiant.Ingestion.Resolution.Case do
                       resolution_case.id,
                       attrs.field_name,
                       attrs.normalized_value,
-                      Enum.join(attrs.evidence_refs, ",")
+                      attrs.evidence_refs |> Enum.sort() |> Enum.join(",")
                     ]),
                   tenant_id: resolution_case.tenant_id,
                   resolution_case_id: resolution_case.id
@@ -1123,13 +1240,17 @@ defmodule Primeradiant.Ingestion.Resolution.Case do
         outcome_code: code,
         reason: reason_code(reason),
         retryable: retryable,
-        validator_version: @pipeline_version
+        validator_version: outcome_validator_version(code)
       })
 
     DurableSoupDb.insert_resolution_outcome!(db_path, outcome)
   end
 
   defp ensure_terminal_outcome(db_path, resolution_case) do
+    if resolution_case.state != "eligible" do
+      clear_selection(db_path, resolution_case)
+    end
+
     exists? =
       db_path
       |> DurableSoupDb.resolution_outcomes_for_case(
@@ -1148,6 +1269,20 @@ defmodule Primeradiant.Ingestion.Resolution.Case do
         resolution_case.attempt_count
       )
     end
+  end
+
+  defp clear_selection(db_path, resolution_case) do
+    db_path
+    |> DurableSoupDb.resolved_source_fields_for_case(
+      resolution_case.tenant_id,
+      resolution_case.id
+    )
+    |> Enum.filter(& &1.selected)
+    |> Enum.each(fn field ->
+      field
+      |> ChangesetStore.update!(%{selected: false})
+      |> then(&DurableSoupDb.put_resolved_source_field!(db_path, &1))
+    end)
   end
 
   defp execute(fun, budget, started_at) do
@@ -1484,6 +1619,19 @@ defmodule Primeradiant.Ingestion.Resolution.Case do
 
   defp outcome_vocab,
     do: ~w(eligible unresolved retry_scheduled quarantined refused failed_terminal)
+
+  defp outcome_validator_version("eligible"), do: Eligibility.validator_version()
+
+  defp outcome_validator_version(code)
+       when code in [
+              "unresolved:insufficient_evidence",
+              "unresolved:field_conflict",
+              "unresolved:policy_not_registered",
+              "refused:no_public_article"
+            ],
+       do: Eligibility.validator_version()
+
+  defp outcome_validator_version(_code), do: @pipeline_version
 
   defp source_scope(registration, route, circuit_state),
     do: %{

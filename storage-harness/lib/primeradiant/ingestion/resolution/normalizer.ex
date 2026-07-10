@@ -113,6 +113,7 @@ defmodule Primeradiant.Ingestion.Resolution.Normalizer do
         normalized_value: normalized,
         confidence: 1.0,
         evidence_refs: [evidence_id],
+        derivation_evidence_ref: evidence_id,
         resolver_provenance: [provenance],
         transform: transform,
         contradiction_status: "none",

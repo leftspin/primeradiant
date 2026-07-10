@@ -175,7 +175,7 @@ defmodule Primeradiant.Ingestion.SourceRegistry do
     end
   end
 
-  defp policy_hash(policy) do
+  def policy_hash(policy) do
     policy
     |> canonicalize()
     |> Jason.encode!()
@@ -379,6 +379,11 @@ defmodule Primeradiant.Ingestion.SourceRegistry do
         attempt_count: 0,
         outcome_code: outcome_code,
         config_policy_hash: registration.policy_hash,
+        policy_snapshot: %{
+          "resolution_policy" => registration.resolution_policy,
+          "policy_version" => registration.policy_version,
+          "policy_hash" => registration.policy_hash
+        },
         trace_id: Map.get(attrs, :trace_id, Map.fetch!(attrs, :correlation_id))
       })
       |> then(&DurableSoupDb.insert_deduped!(db_path, :resolution_cases, &1))

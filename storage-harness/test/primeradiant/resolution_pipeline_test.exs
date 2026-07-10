@@ -38,6 +38,121 @@ defmodule Primeradiant.ResolutionPipelineTest do
     def resolve(_packet, _budget), do: {:ok, [], %{requests: 1, bytes: 0, redirects: 0}}
   end
 
+  defmodule CanonicalResolver do
+    @behaviour Primeradiant.Ingestion.Resolution.EvidenceResolver
+
+    def resolve(_packet, _budget) do
+      {:ok,
+       [
+         %{
+           kind: "fetched_response_canonical_url",
+           value: "https://publisher.example/canonical",
+           normalized_value: "https://publisher.example/canonical",
+           field_name: "public_url",
+           confidence: 0.9,
+           transform: "copy",
+           locator: %{"response_url" => "https://publisher.example/final"},
+           provenance: %{"adapter" => "untrusted-claim"}
+         }
+       ], %{requests: 1, bytes: 20, redirects: 1}}
+    end
+  end
+
+  defmodule MalformedCanonicalResolver do
+    @behaviour Primeradiant.Ingestion.Resolution.EvidenceResolver
+
+    def resolve(_packet, _budget) do
+      {:ok,
+       [
+         %{
+           kind: "fetched_response_canonical_url",
+           value: "https://publisher.example/canonical",
+           normalized_value: "https://publisher.example/canonical",
+           field_name: "public_url",
+           confidence: 0.9,
+           transform: "copy",
+           locator: %{}
+         }
+       ], %{requests: 1, bytes: 20, redirects: 0}}
+    end
+  end
+
+  defmodule ViolatingAcceptedFinalResolver do
+    @behaviour Primeradiant.Ingestion.Resolution.EvidenceResolver
+
+    def resolve(_packet, _budget) do
+      {:ok,
+       [
+         %{
+           kind: "fetched_response_accepted_final_url",
+           value: "https://publisher.example/not-final",
+           normalized_value: "https://publisher.example/not-final",
+           field_name: "public_url",
+           confidence: 0.9,
+           transform: "copy",
+           locator: %{"response_url" => "https://publisher.example/final"}
+         }
+       ], %{requests: 1, bytes: 20, redirects: 1}}
+    end
+  end
+
+  defmodule AcceptedFinalResolver do
+    @behaviour Primeradiant.Ingestion.Resolution.EvidenceResolver
+
+    def resolve(_packet, _budget) do
+      {:ok,
+       [
+         %{
+           kind: "fetched_response_accepted_final_url",
+           value: "https://publisher.example/final",
+           normalized_value: "https://publisher.example/final",
+           field_name: "public_url",
+           confidence: 0.9,
+           transform: "copy",
+           locator: %{"response_url" => "https://publisher.example/final"}
+         }
+       ], %{requests: 1, bytes: 20, redirects: 1}}
+    end
+  end
+
+  defmodule OgSiteNameResolver do
+    @behaviour Primeradiant.Ingestion.Resolution.EvidenceResolver
+
+    def resolve(_packet, _budget) do
+      {:ok,
+       [
+         %{
+           kind: "fetched_response_og_site_name",
+           value: "Fetched Publisher",
+           normalized_value: "Fetched Publisher",
+           field_name: "publisher_label",
+           confidence: 1.0,
+           transform: "copy",
+           locator: %{"response_url" => "https://publisher.example/article"}
+         }
+       ], %{requests: 1, bytes: 20, redirects: 0}}
+    end
+  end
+
+  defmodule ResolverNonPublicAccess do
+    @behaviour Primeradiant.Ingestion.Resolution.EvidenceResolver
+
+    def resolve(_packet, _budget) do
+      {:ok,
+       [
+         %{
+           kind: "non_public_access",
+           value: "declared_non_public",
+           normalized_value: "no_public_url",
+           field_name: "public_url",
+           confidence: 1.0,
+           transform: "explicit_no_public_url",
+           locator: %{"non_public_reason" => "source_declared"}
+         }
+       ], %{requests: 1, bytes: 0, redirects: 0}}
+    end
+  end
+
   defmodule SlowResolver do
     @behaviour Primeradiant.Ingestion.Resolution.EvidenceResolver
 
@@ -181,6 +296,142 @@ defmodule Primeradiant.ResolutionPipelineTest do
     %{db_path: Path.join(root, "soup.sqlite3")}
   end
 
+  test "resolver persistence stamps privileged canonical provenance and selects same-domain canonical",
+       %{db_path: db_path} do
+    register(db_path, "canonical-trust", CanonicalResolver)
+    receipt = receive(db_path, "canonical-trust", supplied_fields())
+
+    assert {:outcome, "eligible", resolution_case} =
+             Case.run(db_path, receipt.resolution_case_id, tenant_id: @tenant)
+
+    evidence =
+      DurableSoupDb.resolution_evidence_for_case(db_path, @tenant, resolution_case.id)
+      |> Enum.find(&(&1.kind == "fetched_response_canonical_url"))
+
+    assert evidence.source == "resolver_response"
+    assert evidence.provenance["resolver"] == "canonical-trust-resolver"
+
+    selected = DurableSoupDb.resolved_source_fields_for_case(db_path, @tenant, resolution_case.id)
+    assert Enum.any?(selected, &(&1.selected and &1.normalized_value == evidence.value))
+  end
+
+  test "malformed privileged resolver artifact is absent and raw URL wins", %{db_path: db_path} do
+    register(db_path, "malformed-canonical", MalformedCanonicalResolver)
+    receipt = receive(db_path, "malformed-canonical", supplied_fields())
+
+    assert {:outcome, "eligible", resolution_case} =
+             Case.run(db_path, receipt.resolution_case_id, tenant_id: @tenant)
+
+    selected = DurableSoupDb.resolved_source_fields_for_case(db_path, @tenant, resolution_case.id)
+
+    assert Enum.any?(selected, fn field ->
+             field.selected and field.field_name == "public_url" and
+               field.normalized_value == "https://publisher.example/article"
+           end)
+  end
+
+  test "accepted-final resolver relation violation is a field conflict", %{db_path: db_path} do
+    register(db_path, "accepted-final-violation", ViolatingAcceptedFinalResolver)
+    receipt = receive(db_path, "accepted-final-violation", supplied_fields())
+
+    assert {:outcome, "unresolved:field_conflict", _} =
+             Case.run(db_path, receipt.resolution_case_id, tenant_id: @tenant)
+  end
+
+  test "accepted-final resolver evidence selects the rank-two URL at exact confidence",
+       %{db_path: db_path} do
+    register(db_path, "accepted-final", AcceptedFinalResolver)
+    receipt = receive(db_path, "accepted-final", supplied_fields())
+
+    assert {:outcome, "eligible", resolution_case} =
+             Case.run(db_path, receipt.resolution_case_id, tenant_id: @tenant)
+
+    evidence =
+      DurableSoupDb.resolution_evidence_for_case(db_path, @tenant, resolution_case.id)
+      |> Enum.find(&(&1.kind == "fetched_response_accepted_final_url"))
+
+    fields = DurableSoupDb.resolved_source_fields_for_case(db_path, @tenant, resolution_case.id)
+    selected_url = Enum.find(fields, &(&1.field_name == "public_url" and &1.selected))
+
+    assert evidence.source == "resolver_response"
+    assert evidence.value == evidence.locator["response_url"]
+    assert selected_url.normalized_value == "https://publisher.example/final"
+    assert Decimal.equal?(selected_url.confidence, Decimal.new("0.90"))
+    assert selected_url.derivation_evidence_ref == evidence.id
+
+    assert Enum.all?(fields, fn field ->
+             field.field_name != "public_url" or field.id == selected_url.id or not field.selected
+           end)
+
+    assert resolution_case.state == "eligible"
+    assert resolution_case.outcome_code == "eligible"
+  end
+
+  test "OG site-name resolver evidence selects the label on the selected URL domain",
+       %{db_path: db_path} do
+    register(db_path, "og-site-name", OgSiteNameResolver)
+    receipt = receive(db_path, "og-site-name", supplied_fields())
+
+    assert {:outcome, "eligible", resolution_case} =
+             Case.run(db_path, receipt.resolution_case_id, tenant_id: @tenant)
+
+    evidence =
+      DurableSoupDb.resolution_evidence_for_case(db_path, @tenant, resolution_case.id)
+      |> Enum.find(&(&1.kind == "fetched_response_og_site_name"))
+
+    fields = DurableSoupDb.resolved_source_fields_for_case(db_path, @tenant, resolution_case.id)
+    selected_label = Enum.find(fields, &(&1.field_name == "publisher_label" and &1.selected))
+    selected_url = Enum.find(fields, &(&1.field_name == "public_url" and &1.selected))
+
+    assert evidence.source == "resolver_response"
+    assert evidence.locator["response_url"] == selected_url.normalized_value
+    assert selected_label.normalized_value == "Fetched Publisher"
+    assert selected_label.derivation_evidence_ref == evidence.id
+
+    assert Enum.all?(fields, fn field ->
+             field.field_name != "publisher_label" or field.id == selected_label.id or
+               not field.selected
+           end)
+
+    assert resolution_case.state == "eligible"
+    assert resolution_case.outcome_code == "eligible"
+  end
+
+  test "resolver-authored source-declared non-public access is refused", %{db_path: db_path} do
+    register(db_path, "resolver-non-public", ResolverNonPublicAccess,
+      policy: %{
+        "version" => "policy-v1",
+        "source_class" => "source_record_no_public_url",
+        "allow_no_public_url" => true
+      }
+    )
+
+    receipt =
+      receive(db_path, "resolver-non-public", %{
+        "publisher_label" => "Fixture Publisher",
+        "publisher_domain" => "Publisher.Example"
+      })
+
+    assert {:outcome, "refused:no_public_article", resolution_case} =
+             Case.run(db_path, receipt.resolution_case_id, tenant_id: @tenant)
+
+    evidence =
+      DurableSoupDb.resolution_evidence_for_case(db_path, @tenant, resolution_case.id)
+      |> Enum.find(&(&1.kind == "non_public_access"))
+
+    fields = DurableSoupDb.resolved_source_fields_for_case(db_path, @tenant, resolution_case.id)
+    no_public_url = Enum.find(fields, &(&1.normalized_value == "no_public_url"))
+
+    assert evidence.source == "resolver_response"
+    assert evidence.value == "declared_non_public"
+    assert evidence.locator["non_public_reason"] == "source_declared"
+    assert no_public_url.derivation_evidence_ref == evidence.id
+    refute no_public_url.selected
+    refute Enum.any?(fields, & &1.selected)
+    assert resolution_case.state == "refused"
+    assert resolution_case.outcome_code == "refused:no_public_article"
+  end
+
   test "SER-V4 contains malformed, slow, byte, redirect, and rate-limit failures while another source proceeds",
        %{db_path: db_path} do
     cases = [
@@ -235,11 +486,11 @@ defmodule Primeradiant.ResolutionPipelineTest do
     register(db_path, "healthy", HealthyResolver)
     healthy = receive(db_path, "healthy", supplied_fields())
 
-    assert {:ok, validating} =
+    assert {:outcome, "eligible", validating} =
              Case.run(db_path, healthy.resolution_case_id, tenant_id: @tenant)
 
-    assert validating.state == "validating"
-    assert validating.outcome_code == nil
+    assert validating.state == "eligible"
+    assert validating.outcome_code == "eligible"
 
     Process.exit(slow_pid, :kill)
     assert_receive {:DOWN, ^worker_ref, :process, ^worker_pid, :killed}, 1_000
@@ -252,7 +503,7 @@ defmodule Primeradiant.ResolutionPipelineTest do
 
     assert health.circuit_state == "closed"
     assert health.circuit_states["healthy-resolver"] == "closed"
-    assert health.resolution_backlog == 1
+    assert health.resolution_backlog == 0
 
     assert {:ok, slow_health} =
              SourceRegistry.health(db_path, %{tenant_id: @tenant, source_key: "slow"})
@@ -360,7 +611,9 @@ defmodule Primeradiant.ResolutionPipelineTest do
        } do
     register(db_path, "finalized-window", nil)
     receipt = receive(db_path, "finalized-window", supplied_fields())
-    assert {:ok, validating} = Case.run(db_path, receipt.resolution_case_id, tenant_id: @tenant)
+
+    assert {:outcome, "eligible", validating} =
+             Case.run(db_path, receipt.resolution_case_id, tenant_id: @tenant)
 
     validating
     |> ChangesetStore.update!(%{state: "resolving"})
@@ -384,7 +637,9 @@ defmodule Primeradiant.ResolutionPipelineTest do
   } do
     register(db_path, "pipeline-crash-window", nil)
     receipt = receive(db_path, "pipeline-crash-window", supplied_fields())
-    assert {:ok, validating} = Case.run(db_path, receipt.resolution_case_id, tenant_id: @tenant)
+
+    assert {:outcome, "eligible", validating} =
+             Case.run(db_path, receipt.resolution_case_id, tenant_id: @tenant)
 
     [attempt | _] = DurableSoupDb.resolution_attempts_for_case(db_path, @tenant, validating.id)
 
@@ -411,7 +666,10 @@ defmodule Primeradiant.ResolutionPipelineTest do
   test "receive envelope replay creates zero rows in every resolution table", %{db_path: db_path} do
     register(db_path, "receipt-replay", nil)
     receipt = receive(db_path, "receipt-replay", supplied_fields())
-    assert {:ok, _} = Case.run(db_path, receipt.resolution_case_id, tenant_id: @tenant)
+
+    assert {:outcome, "eligible", _} =
+             Case.run(db_path, receipt.resolution_case_id, tenant_id: @tenant)
+
     counts = resolution_counts(db_path)
 
     replay = receive(db_path, "receipt-replay", supplied_fields())
@@ -426,7 +684,7 @@ defmodule Primeradiant.ResolutionPipelineTest do
     register(db_path, "normalized", nil)
     receipt = receive(db_path, "normalized", supplied_fields())
 
-    assert {:ok, validating} =
+    assert {:outcome, "eligible", validating} =
              Case.run(db_path, receipt.resolution_case_id, tenant_id: @tenant)
 
     evidence = DurableSoupDb.resolution_evidence_for_case(db_path, @tenant, validating.id)
@@ -440,12 +698,12 @@ defmodule Primeradiant.ResolutionPipelineTest do
     assert Enum.all?(evidence, &(&1.source == "raw_envelope"))
     assert Enum.all?(evidence, &(&1.digest == ChangesetStore.hash(&1.value)))
     assert Enum.all?(fields, &Decimal.equal?(&1.confidence, Decimal.new("1.0")))
-    assert Enum.all?(fields, &(&1.evidence_refs != [] and &1.selected == false))
+    assert Enum.all?(fields, &(&1.evidence_refs != [] and &1.selected == true))
 
     attempt_count = DurableSoupDb.table_count(db_path, "resolution_attempts", @tenant)
     evidence_count = DurableSoupDb.table_count(db_path, "resolution_evidence", @tenant)
 
-    assert {:ok, replay} = Case.run(db_path, validating.id, tenant_id: @tenant)
+    assert {:outcome, "eligible", replay} = Case.run(db_path, validating.id, tenant_id: @tenant)
     assert replay.id == validating.id
     assert DurableSoupDb.table_count(db_path, "resolution_attempts", @tenant) == attempt_count
     assert DurableSoupDb.table_count(db_path, "resolution_evidence", @tenant) == evidence_count
@@ -589,7 +847,7 @@ defmodule Primeradiant.ResolutionPipelineTest do
     register(db_path, "within-token", nil, WithinTokenInference)
     within = receive(db_path, "within-token", supplied_fields())
 
-    assert {:ok, %{state: "validating"}} =
+    assert {:outcome, "eligible", %{state: "eligible"}} =
              Case.run(db_path, within.resolution_case_id, tenant_id: @tenant)
 
     register(db_path, "over-token", nil, OverTokenInference)
@@ -599,7 +857,12 @@ defmodule Primeradiant.ResolutionPipelineTest do
              Case.run(db_path, over.resolution_case_id, tenant_id: @tenant)
   end
 
-  defp register(db_path, source, resolver, inference \\ nil) do
+  defp register(db_path, source, resolver, inference_or_options \\ nil) do
+    {inference, options} =
+      if is_list(inference_or_options),
+        do: {nil, inference_or_options},
+        else: {inference_or_options, []}
+
     time_ms =
       case resolver do
         SlowResolver -> 5
@@ -632,7 +895,11 @@ defmodule Primeradiant.ResolutionPipelineTest do
                adapter_module: FixtureAdapter,
                adapter_version: "adapter-v1",
                mode: "shadow",
-               resolution_policy: %{"version" => "policy-v1", "source_class" => "public_article"},
+               resolution_policy:
+                 Keyword.get(options, :policy, %{
+                   "version" => "policy-v1",
+                   "source_class" => "public_article"
+                 }),
                policy_version: "policy-v1",
                budgets: %{
                  "max_attempts" => 2,
