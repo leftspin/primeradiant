@@ -117,12 +117,7 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
 
   def load_tenant(db_path, tenant_id) do
     if File.regular?(db_path) do
-      state =
-        Primeradiant.StorageHarness.State.new(tenant_id: tenant_id, user_id: "flynn")
-        |> put_rows(
-          :repair_runs,
-          load_rows(db_path, "repair_runs", tenant_id, Primeradiant.StorageHarness.RepairRun)
-        )
+      state = Primeradiant.StorageHarness.State.new(tenant_id: tenant_id, user_id: "flynn")
 
       state
       |> put_rows(
@@ -387,7 +382,13 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
   def load_soup_feed_projection(db_path, tenant_id, params \\ %{}) do
     if File.regular?(db_path) do
       limit = parse_projection_limit(params["limit"] || params[:limit], 50)
-      state = Primeradiant.StorageHarness.State.new(tenant_id: tenant_id, user_id: "flynn")
+
+      state =
+        Primeradiant.StorageHarness.State.new(tenant_id: tenant_id, user_id: "flynn")
+        |> put_rows(
+          :repair_runs,
+          load_rows(db_path, "repair_runs", tenant_id, Primeradiant.StorageHarness.RepairRun)
+        )
 
       stories =
         load_feed_stories(db_path, tenant_id, limit)

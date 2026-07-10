@@ -198,10 +198,20 @@ defmodule Primeradiant.GraphAdmissionRepairTest do
 
     assert hd(plan["stories"])["story_id"] not in report["validation"]["feed_story_ids"]
 
+    durable_projection =
+      DurableSoupDb.load_soup_feed_projection(db_path, @tenant, %{"limit" => 20})
+
+    assert Enum.any?(
+             durable_projection.repair_runs,
+             &(&1.id == report["repair_run_id"] and &1.status == "succeeded")
+           )
+
     durable_feed =
-      db_path
-      |> DurableSoupDb.load_soup_feed_projection(@tenant, %{"limit" => 20})
-      |> Soup.feed(%{"consumer" => "reporter", "projection" => "story_cards", "limit" => 20})
+      Soup.feed(durable_projection, %{
+        "consumer" => "reporter",
+        "projection" => "story_cards",
+        "limit" => 20
+      })
 
     assert hd(plan["stories"])["story_id"] not in Enum.map(durable_feed.items, & &1.story_id)
 
@@ -337,10 +347,20 @@ defmodule Primeradiant.GraphAdmissionRepairTest do
     assert Enum.any?(state.story_quarantines, &(&1.rollback_status == "restored"))
     assert Enum.any?(state.story_quarantines, &(&1.reason == "rollback_replacement_story"))
 
+    durable_projection =
+      DurableSoupDb.load_soup_feed_projection(db_path, @tenant, %{"limit" => 20})
+
+    assert Enum.any?(
+             durable_projection.repair_runs,
+             &(&1.id == apply_report["repair_run_id"] and &1.status == "rolled_back")
+           )
+
     durable_feed =
-      db_path
-      |> DurableSoupDb.load_soup_feed_projection(@tenant, %{"limit" => 20})
-      |> Soup.feed(%{"consumer" => "reporter", "projection" => "story_cards", "limit" => 20})
+      Soup.feed(durable_projection, %{
+        "consumer" => "reporter",
+        "projection" => "story_cards",
+        "limit" => 20
+      })
 
     durable_story_ids = Enum.map(durable_feed.items, & &1.story_id)
     assert hd(plan["stories"])["story_id"] in durable_story_ids
