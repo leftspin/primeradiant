@@ -3076,6 +3076,15 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert File.regular?(soup_db)
     assert File.regular?(report_path)
 
+    ack_content = File.read!(Path.join(out_dir, "consume-ack.json"))
+    assert [ack_line] = ack_content |> String.split("\n", trim: true)
+    ack = Jason.decode!(ack_line)
+    assert ack["schema"] == "primeradiant.consume_ack.v1"
+    assert ack["status"] == "consumed"
+    assert ack["event_id"] == "evt-package-news-1"
+    assert ack["soup_db_path"] == soup_db
+    assert ack["report_path"] == report_path
+
     report = report_path |> File.read!() |> Jason.decode!()
     assert get_in(report, ["source", "mode"]) == "event_envelope"
     assert get_in(report, ["source", "event_id"]) == "evt-package-news-1"
@@ -4386,7 +4395,9 @@ defmodule Primeradiant.DaemonNewsReplayTest do
         exit 17
       fi
       event_id="$(printf '%s' "$cmd" | sed -n "s|.*/\\([^/']*\\)/consume-ack.json.*|\\1|p")"
+      echo "remote consume output noise before ack"
       printf '{"schema":"primeradiant.consume_ack.v1","status":"consumed","event_id":"%s"}\\n' "$event_id"
+      echo "remote output noise after ack"
       exit 0
     fi
     exit 0

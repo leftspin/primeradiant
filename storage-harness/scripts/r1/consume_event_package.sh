@@ -83,7 +83,7 @@ if ! jq -e . "$REPORT" >/dev/null 2>&1; then
   exit 1
 fi
 
-jq -n \
+jq -cn \
   --arg event_id "$EVENT_ID" \
   --arg package_dir "$PACKAGE_DIR" \
   --arg out_dir "$OUT_DIR" \

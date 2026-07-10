@@ -347,7 +347,7 @@ while IFS= read -r package_entry; do
     exit "$CONSUME_STATUS"
   fi
 
-  ack_line="$(printf "%s" "$CONSUME_OUTPUT" | tail -n 1)"
+  ack_line="$(printf "%s" "$CONSUME_OUTPUT" | grep -F '"primeradiant.consume_ack.v1"' | tail -n 1 || true)"
 
   if ! jq -e --arg event_id "$package_event_id" \
     'select(.status == "consumed" and .event_id == $event_id)' >/dev/null 2>&1 <<<"$ack_line"; then
@@ -357,7 +357,8 @@ while IFS= read -r package_entry; do
     exit 1
   fi
 
-  printf "%s\n" "$package_cursor" > "$CURSOR_FILE"
+  printf "%s\n" "$package_cursor" > "$CURSOR_FILE.tmp.$$"
+  mv "$CURSOR_FILE.tmp.$$" "$CURSOR_FILE"
   LAST_ACKED_CURSOR="$package_cursor"
 
   jq -n \
