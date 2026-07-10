@@ -318,6 +318,72 @@ defmodule Primeradiant.GraphAdmissionRepairTest do
     assert run.id in run.mutation_ids
   end
 
+  test "post-first-write concurrency refusal durably terminates the repair run", %{
+    root: root,
+    snapshot_path: snapshot_path,
+    db_path: db_path
+  } do
+    plan = plan(snapshot_path)
+    plan_path = write_plan!(root, plan)
+    before = DurableSoupDb.load_tenant(db_path, @tenant)
+
+    assert_raise ArgumentError, ~r/tenant revision changed after repair write/, fn ->
+      apply_plan!(db_path, plan_path, plan["plan_hash"],
+        after_first_persist: fn -> append_concurrent_replay!(db_path, "post-first") end
+      )
+    end
+
+    failed = DurableSoupDb.load_tenant(db_path, @tenant)
+    assert [run] = failed.repair_runs
+    assert run.status == "failed"
+    assert run.validation["failure_stage"] == "post_first_write"
+    assert run.validation["terminal_refusal"] == true
+    refute Enum.any?(failed.repair_runs, &(&1.status == "running"))
+    assert history_ids(failed) == history_ids(before)
+  end
+
+  test "second-phase concurrency refusal durably terminates without graph mutation", %{
+    root: root,
+    snapshot_path: snapshot_path,
+    db_path: db_path
+  } do
+    plan = plan(snapshot_path)
+    plan_path = write_plan!(root, plan)
+    before = DurableSoupDb.load_tenant(db_path, @tenant)
+
+    assert_raise RuntimeError, ~r/sqlite durable soup operation failed/, fn ->
+      apply_plan!(db_path, plan_path, plan["plan_hash"],
+        before_final_persist: fn -> append_concurrent_replay!(db_path, "second-phase") end
+      )
+    end
+
+    failed = DurableSoupDb.load_tenant(db_path, @tenant)
+    assert [run] = failed.repair_runs
+    assert run.status == "failed"
+    assert run.validation["failure_stage"] == "second_phase"
+    assert run.validation["terminal_refusal"] == true
+    refute Enum.any?(failed.repair_runs, &(&1.status == "running"))
+    assert history_ids(failed) == history_ids(before)
+  end
+
+  test "same approved plan replay refuses without creating another repair run", %{
+    root: root,
+    snapshot_path: snapshot_path,
+    db_path: db_path
+  } do
+    plan = plan(snapshot_path)
+    plan_path = write_plan!(root, plan)
+    apply_plan!(db_path, plan_path, plan["plan_hash"])
+
+    assert_raise ArgumentError, ~r/snapshot hash mismatch/, fn ->
+      apply_plan!(db_path, plan_path, plan["plan_hash"])
+    end
+
+    state = DurableSoupDb.load_tenant(db_path, @tenant)
+    assert [run] = state.repair_runs
+    assert run.status == "succeeded"
+  end
+
   test "rollback restores original feed visibility and quarantines replacement material", %{
     root: root,
     snapshot_path: snapshot_path,
@@ -369,6 +435,28 @@ defmodule Primeradiant.GraphAdmissionRepairTest do
              apply_report["validation"]["replacement_story_ids"],
              &(&1 not in durable_story_ids)
            )
+
+    input = hd(state.inputs)
+    capture_key = {__MODULE__, make_ref()}
+
+    capture_adapter = fn config, packet, ctx ->
+      if config.role == :story_identity do
+        Process.put(capture_key, packet.visible_story_refs)
+        raise "story-agent packet captured"
+      end
+
+      adapter(config, packet, ctx)
+    end
+
+    assert_raise RuntimeError, "story-agent packet captured", fn ->
+      LiveStoryAgentLoop.run(state, [admission_for(input)], "fixture-actor",
+        adapter: capture_adapter
+      )
+    end
+
+    visible_story_keys = capture_key |> Process.get() |> Enum.map(& &1.story_key)
+    assert "new-story" in visible_story_keys
+    refute "repaired-clinic-event" in visible_story_keys
   end
 
   defp seed_polluted_snapshot!(db_path) do
@@ -398,18 +486,7 @@ defmodule Primeradiant.GraphAdmissionRepairTest do
       |> State.append(:inputs, input)
       |> State.put_source_id(:input, "#{input.source_type}:#{input.external_id}", input.id)
 
-    admission = %{
-      source_ref: Admission.input_ref(input),
-      source_type: input.source_type,
-      external_id: input.external_id,
-      observed_at: input.observed_at,
-      content_sha256: input.content_sha256,
-      content_span_refs: [],
-      evidence_refs: ["evidence:article-1649"],
-      source_provenance: %{"source_ref" => Admission.input_ref(input)},
-      visibility: input.acl,
-      normalized_evidence: %{title: input.title}
-    }
+    admission = admission_for(input)
 
     {state, _report} =
       LiveStoryAgentLoop.run(state, [admission], "fixture-actor", adapter: &adapter/3)
@@ -446,14 +523,43 @@ defmodule Primeradiant.GraphAdmissionRepairTest do
     path
   end
 
-  defp apply_plan!(db_path, plan_path, plan_hash) do
-    GraphAdmissionRepair.apply!(
+  defp apply_plan!(db_path, plan_path, plan_hash, extra_opts \\ []) do
+    base_opts = [
       soup_db: db_path,
       plan: plan_path,
       approved_plan_hash: plan_hash,
       approval_evidence: "approval:T1649:test",
       actor: "operator"
-    )
+    ]
+
+    GraphAdmissionRepair.apply!(Keyword.merge(base_opts, extra_opts))
+  end
+
+  defp admission_for(input) do
+    %{
+      source_ref: Admission.input_ref(input),
+      source_type: input.source_type,
+      external_id: input.external_id,
+      observed_at: input.observed_at,
+      content_sha256: input.content_sha256,
+      content_span_refs: [],
+      evidence_refs: ["evidence:article-1649"],
+      source_provenance: %{"source_ref" => Admission.input_ref(input)},
+      visibility: input.acl,
+      normalized_evidence: %{title: input.title}
+    }
+  end
+
+  defp append_concurrent_replay!(db_path, label) do
+    state = DurableSoupDb.load_tenant(db_path, @tenant)
+
+    DurableSoupDb.persist_delta!(db_path, state, state, %{
+      source_kind: "t1649_concurrency_fixture",
+      source_db_path: "fixture://#{label}",
+      source_row_count: 0,
+      replay_run_id: Ecto.UUID.generate(),
+      expected_tenant_revision: DurableSoupDb.tenant_revision(db_path, @tenant)
+    })
   end
 
   defp adapter(%{role: :story_identity}, _packet, _ctx),

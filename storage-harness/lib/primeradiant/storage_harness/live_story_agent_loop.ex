@@ -2194,7 +2194,11 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
   end
 
   defp graph_admission_quarantined?(state, story),
-    do: Enum.any?(state.story_quarantines, &(&1.story_id == story.id))
+    do:
+      Enum.any?(
+        state.story_quarantines,
+        &(&1.story_id == story.id and &1.rollback_status != "restored")
+      )
 
   defp input_visible_to_actor?(input, actor_id) do
     acl = input.acl || %{"privacy" => "public"}

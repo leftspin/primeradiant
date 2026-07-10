@@ -173,12 +173,20 @@ defmodule Primeradiant.StorageHarness.GraphAdmissionRepair do
     })
 
     running_revision =
-      DurableSoupDb.tenant_revision_after_replay!(
-        db_path,
-        tenant_id,
-        first_replay_run_id,
-        approved_revision
-      )
+      try do
+        invoke_hook(opts, :after_first_persist)
+
+        DurableSoupDb.tenant_revision_after_replay!(
+          db_path,
+          tenant_id,
+          first_replay_run_id,
+          approved_revision
+        )
+      rescue
+        error ->
+          record_failed_run!(db_path, plan, run, first_replay_run_id, error, "post_first_write")
+          reraise error, __STACKTRACE__
+      end
 
     try do
       quarantined = quarantine(running, plan, run, now)
@@ -207,6 +215,8 @@ defmodule Primeradiant.StorageHarness.GraphAdmissionRepair do
 
       final = State.replace(replayed, :repair_runs, run.id, finished_run)
 
+      invoke_hook(opts, :before_final_persist)
+
       DurableSoupDb.persist_delta!(db_path, running, final, %{
         source_kind: "graph_admission_repair",
         source_db_path: get_in(plan, ["source", "db_path"]),
@@ -226,26 +236,7 @@ defmodule Primeradiant.StorageHarness.GraphAdmissionRepair do
       }
     rescue
       error ->
-        failed_replay_run_id = Ecto.UUID.generate()
-
-        failed_run =
-          ChangesetStore.update!(run, %{
-            status: "failed",
-            finished_at: DateTime.utc_now() |> DateTime.truncate(:microsecond),
-            mutation_ids: clean_ids([run.id, first_replay_run_id, failed_replay_run_id]),
-            validation: %{"failure" => Exception.message(error)}
-          })
-
-        failed = State.replace(running, :repair_runs, run.id, failed_run)
-
-        DurableSoupDb.persist_delta!(db_path, running, failed, %{
-          source_kind: "graph_admission_repair_failed",
-          source_db_path: get_in(plan, ["source", "db_path"]),
-          source_row_count: 0,
-          replay_run_id: failed_replay_run_id,
-          expected_tenant_revision: running_revision
-        })
-
+        record_failed_run!(db_path, plan, run, first_replay_run_id, error, "second_phase")
         reraise error, __STACKTRACE__
     end
   end
@@ -865,6 +856,43 @@ defmodule Primeradiant.StorageHarness.GraphAdmissionRepair do
     end
 
     :ok
+  end
+
+  defp record_failed_run!(db_path, plan, run, first_replay_run_id, error, stage) do
+    tenant_id = get_in(plan, ["source", "tenant_id"])
+    current_revision = DurableSoupDb.tenant_revision(db_path, tenant_id)
+    current = DurableSoupDb.load_tenant(db_path, tenant_id)
+    durable_run = Enum.find(current.repair_runs, &(&1.id == run.id)) || run
+    failed_replay_run_id = Ecto.UUID.generate()
+
+    failed_run =
+      ChangesetStore.update!(durable_run, %{
+        status: "failed",
+        finished_at: DateTime.utc_now() |> DateTime.truncate(:microsecond),
+        mutation_ids:
+          clean_ids(
+            durable_run.mutation_ids ++ [run.id, first_replay_run_id, failed_replay_run_id]
+          ),
+        validation: %{
+          "failure" => Exception.message(error),
+          "failure_stage" => stage,
+          "terminal_refusal" => true
+        }
+      })
+
+    failed = State.replace(current, :repair_runs, run.id, failed_run)
+
+    DurableSoupDb.persist_delta!(db_path, current, failed, %{
+      source_kind: "graph_admission_repair_failed",
+      source_db_path: get_in(plan, ["source", "db_path"]),
+      source_row_count: 0,
+      replay_run_id: failed_replay_run_id,
+      expected_tenant_revision: current_revision
+    })
+  end
+
+  defp invoke_hook(opts, key) do
+    opts |> Keyword.get(key, fn -> :ok end) |> then(& &1.())
   end
 
   defp source_refs(state, input_ids) do
