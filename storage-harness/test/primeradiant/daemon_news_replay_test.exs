@@ -3741,7 +3741,8 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert source =~ "--consume-timeout-seconds N"
     assert source =~ "timeout -k 30 $CONSUME_TIMEOUT_SECONDS scripts/r1/consume_event_package.sh"
     assert source =~ "timeout -k 30 $CONSUME_TIMEOUT_SECONDS mkdir -p"
-    assert source =~ "timeout -k 30 $CONSUME_TIMEOUT_SECONDS sh -c"
+    assert source =~ "timeout -k 30 $CONSUME_TIMEOUT_SECONDS tar -C '$remote_package' -xf -"
+    refute source =~ "sh -c"
     assert source =~ "consume-ack.json"
     assert source =~ "-o BatchMode=yes"
     assert source =~ "-o ServerAliveInterval=15"
@@ -3905,6 +3906,12 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     write_stub_ssh!(bin_dir, stub_state)
     watcher_script = Path.expand("scripts/r1/live_subspace_daemon_watcher_once.sh")
 
+    # A previous SIGKILLed run left a stale single-flight lock behind; the
+    # watcher must reclaim it when the recorded holder is dead.
+    stale_lock = Path.join(state_root, "live-watcher.lock")
+    File.mkdir_p!(stale_lock)
+    File.write!(Path.join(stale_lock, "pid"), "999999999\n")
+
     {output, status} =
       System.cmd(
         watcher_script,
@@ -3931,6 +3938,7 @@ defmodule Primeradiant.DaemonNewsReplayTest do
       )
 
     assert status == 0, output
+    refute File.exists?(stale_lock)
 
     report_path = output |> String.split("\n", trim: true) |> List.last()
     report = report_path |> File.read!() |> Jason.decode!()
@@ -4125,6 +4133,136 @@ defmodule Primeradiant.DaemonNewsReplayTest do
       assert DurableSoupDb.table_count(soup_db_path, table, @tenant) == count,
              "replay mutated #{table}"
     end
+  end
+
+  test "live watcher refuses to run while a live holder owns the single-flight lock" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-live-watch-lock-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    source_db = Path.join(tmp, "daemon.sqlite3")
+    state_root = Path.join(tmp, "state")
+    ssh_key = Path.join(tmp, "ssh-key")
+
+    File.mkdir_p!(state_root)
+    File.write!(ssh_key, "stub-key")
+
+    create_subspace_daemon_db!(
+      source_db,
+      [
+        {"lock-news-1", "2026-06-03 05:00:00",
+         envelope("Lock first", "Lock first service is open venue is north speaker is desk.")}
+      ]
+    )
+
+    lock_dir = Path.join(state_root, "live-watcher.lock")
+    File.mkdir_p!(lock_dir)
+    File.write!(Path.join(lock_dir, "pid"), System.pid() <> "\n")
+
+    watcher_script = Path.expand("scripts/r1/live_subspace_daemon_watcher_once.sh")
+
+    {output, status} =
+      System.cmd(
+        watcher_script,
+        [
+          "--source-db",
+          source_db,
+          "--tenant",
+          @tenant,
+          "--state-root",
+          state_root,
+          "--eurisko-target",
+          "clu@eurisko-test",
+          "--eurisko-repo",
+          "/home/clu/src/primeradiant",
+          "--ssh-key",
+          ssh_key,
+          "--run-id",
+          "lock-held-test",
+          "--limit",
+          "10"
+        ],
+        stderr_to_stdout: true
+      )
+
+    assert status == 4
+    assert output =~ "already running"
+    assert File.exists?(lock_dir)
+    refute File.exists?(Path.join(state_root, "cursor.txt"))
+  end
+
+  test "live watcher records typed failure for shell-unsafe package names" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-live-watch-unsafe-name-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    source_db = Path.join(tmp, "daemon.sqlite3")
+    state_root = Path.join(tmp, "state")
+    stub_state = Path.join(tmp, "stub-state")
+    bin_dir = Path.join(tmp, "bin")
+    ssh_key = Path.join(tmp, "ssh-key")
+
+    File.mkdir_p!(state_root)
+    File.write!(ssh_key, "stub-key")
+
+    create_subspace_daemon_db!(
+      source_db,
+      [
+        {"evil$(touch /tmp/pwned)", "2026-06-03 05:00:00",
+         envelope("Unsafe name", "Unsafe name service is open venue is north speaker is desk.")}
+      ]
+    )
+
+    write_stub_ssh!(bin_dir, stub_state)
+    watcher_script = Path.expand("scripts/r1/live_subspace_daemon_watcher_once.sh")
+
+    {output, status} =
+      System.cmd(
+        watcher_script,
+        [
+          "--source-db",
+          source_db,
+          "--tenant",
+          @tenant,
+          "--state-root",
+          state_root,
+          "--eurisko-target",
+          "clu@eurisko-test",
+          "--eurisko-repo",
+          "/home/clu/src/primeradiant",
+          "--ssh-key",
+          ssh_key,
+          "--run-id",
+          "unsafe-name-test",
+          "--limit",
+          "10"
+        ],
+        stderr_to_stdout: true,
+        env: [{"PATH", bin_dir <> ":" <> System.get_env("PATH")}]
+      )
+
+    assert status == 1
+    assert output =~ "live watcher package consumption failed"
+    refute File.exists?(Path.join(state_root, "cursor.txt"))
+
+    failed_report =
+      Path.join(state_root, "unsafe-name-test-failed-report.json")
+      |> File.read!()
+      |> Jason.decode!()
+
+    assert failed_report["status"] == "package_name_unsafe"
+    assert failed_report["failed_stage"] == "package_name"
+    assert failed_report["unconsumed_range_retained"] == true
   end
 
   test "live watcher records typed ack failure and holds cursor when remote ack is lost" do

@@ -107,12 +107,35 @@ fi
 mkdir -p "$STATE_ROOT" "$PACKAGE_ROOT" "$LOCAL_RUN_ROOT"
 
 LOCK_DIR="$STATE_ROOT/live-watcher.lock"
-if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+acquire_watcher_lock() {
+  if mkdir "$LOCK_DIR" 2>/dev/null; then
+    printf "%s\n" "$$" > "$LOCK_DIR/pid"
+    return 0
+  fi
+  local holder recheck
+  holder="$(cat "$LOCK_DIR/pid" 2>/dev/null || true)"
+  if [[ -n "$holder" ]] && kill -0 "$holder" 2>/dev/null; then
+    return 1
+  fi
+  # The recorded holder is gone (e.g. SIGKILL); reclaim the stale lock only if
+  # it still names the same dead holder.
+  recheck="$(cat "$LOCK_DIR/pid" 2>/dev/null || true)"
+  if [[ "$recheck" != "$holder" ]]; then
+    return 1
+  fi
+  rm -rf "$LOCK_DIR"
+  if mkdir "$LOCK_DIR" 2>/dev/null; then
+    printf "%s\n" "$$" > "$LOCK_DIR/pid"
+    return 0
+  fi
+  return 1
+}
+if ! acquire_watcher_lock; then
   echo "Primeradiant live watcher already running for state root: $STATE_ROOT" >&2
   exit 4
 fi
 cleanup_lock() {
-  rmdir "$LOCK_DIR" 2>/dev/null || true
+  rm -rf "$LOCK_DIR" 2>/dev/null || true
 }
 trap cleanup_lock EXIT
 
@@ -327,11 +350,26 @@ while IFS= read -r package_entry; do
     exit 1
   fi
 
+  # The package name embeds the source-controlled message_id; it is
+  # interpolated into remote commands and must stay shell-inert.
+  if [[ ! "$package_name" =~ ^[A-Za-z0-9._-]+$ ]]; then
+    package_failure_report "package_name_unsafe" "package_name" "basename package_dir" \
+      1 "package name contains shell-unsafe characters: $package_name" \
+      "$package_dir" "$remote_package" "$package_event_id" "$package_cursor"
+    exit 1
+  fi
+
+  SHIP_STDERR="$STATE_ROOT/$RUN_ID-ship-stderr.txt"
   set +e
-  SHIP_OUTPUT="$(tar -C "$package_dir" -cf - . 2>&1 |
-    ssh "${SSH_OPTS[@]}" -i "$SSH_KEY" "$EURISKO_TARGET" "timeout -k 30 $CONSUME_TIMEOUT_SECONDS sh -c \"mkdir -p '$remote_package' && tar -C '$remote_package' -xf -\"" 2>&1)"
+  SHIP_OUTPUT="$(tar -C "$package_dir" -cf - . 2>"$SHIP_STDERR" |
+    ssh "${SSH_OPTS[@]}" -i "$SSH_KEY" "$EURISKO_TARGET" "timeout -k 30 $CONSUME_TIMEOUT_SECONDS mkdir -p '$remote_package' && timeout -k 30 $CONSUME_TIMEOUT_SECONDS tar -C '$remote_package' -xf -" 2>&1)"
   SHIP_STATUS=$?
   set -e
+  if [[ -s "$SHIP_STDERR" ]]; then
+    SHIP_OUTPUT="$SHIP_OUTPUT
+local tar stderr: $(cat "$SHIP_STDERR")"
+  fi
+  rm -f "$SHIP_STDERR"
   if [[ "$SHIP_STATUS" -ne 0 ]]; then
     package_failure_report "package_ship_failed" "package_ship" "tar | ssh tar" \
       "$SHIP_STATUS" "$SHIP_OUTPUT" \
