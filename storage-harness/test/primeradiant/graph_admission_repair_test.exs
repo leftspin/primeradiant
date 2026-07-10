@@ -227,7 +227,7 @@ defmodule Primeradiant.GraphAdmissionRepairTest do
     assert Enum.sort(run.mutation_ids) == Enum.sort(report["mutation_ids"])
 
     replay_run_ids = sqlite_ids(db_path, "replay_runs")
-    assert length(replay_run_ids) == 3
+    assert length(replay_run_ids) == 4
     assert Enum.all?(replay_run_ids -- [hd(replay_run_ids)], &(&1 in report["mutation_ids"]))
 
     assert [quarantine] = after_state.story_quarantines
@@ -279,6 +279,33 @@ defmodule Primeradiant.GraphAdmissionRepairTest do
     assert report["validation"]["replay_refusal_count"] == 1
     assert report["validation"]["history_ids_preserved"] == true
     assert report["rollback"]["strategy"] == "restore_snapshot_or_mark_repair_run_failed"
+  end
+
+  test "post-repair validation is returned and persisted from the durable reload", %{
+    root: root,
+    snapshot_path: snapshot_path,
+    db_path: db_path
+  } do
+    plan = plan(snapshot_path)
+    plan_path = write_plan!(root, plan)
+
+    report =
+      apply_plan!(db_path, plan_path, plan["plan_hash"],
+        after_repair_persist: fn ->
+          {_, 0} =
+            System.cmd(
+              "sqlite3",
+              [db_path, "UPDATE story_quarantines SET rollback_status = 'restored';"],
+              stderr_to_stdout: true
+            )
+        end
+      )
+
+    [run] = DurableSoupDb.load_tenant(db_path, @tenant).repair_runs
+
+    assert report["validation"]["active_quarantined_exposure_count"] == 1
+    assert run.validation == report["validation"]
+    assert run.status == "succeeded"
   end
 
   test "failed replay durably records failure and snapshot rollback proof without graph mutation",

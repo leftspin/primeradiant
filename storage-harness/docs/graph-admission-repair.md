@@ -33,10 +33,13 @@ for artifact readiness and presentation policy.
 3. Run `--apply` only with the reviewed plan, matching approved hash, approval
    evidence, actor, and a separate database copy whose bytes and tenant revision
    match the plan snapshot. The preserved snapshot path itself is refused.
-4. Preserve the snapshot until post-validation is accepted. A failed apply retains
-   a failed repair run without graph mutation. `--rollback` verifies the preserved
-   snapshot, restores original story visibility, quarantines replacement stories,
-   and marks the run rolled back without deleting or rewriting graph history.
+4. Preserve the snapshot until post-validation is accepted. Replay and quarantine
+   are persisted while the repair run remains nonterminal; validation then reloads
+   that durable state through read-only queries before a guarded write finalizes the
+   run. A failed apply retains its repair run, mutation IDs, original provenance, and
+   snapshot restore strategy. `--rollback` verifies the preserved snapshot, restores
+   original story visibility, quarantines replacement stories, and marks the run
+   rolled back without deleting or rewriting graph history.
 
 The task prints one JSON object on success. Live model replay requires the normal
 Prime Radiant agent configuration. Tests inject bounded fixture adapters and must
@@ -77,7 +80,9 @@ mix primeradiant.graph_admission_repair --rollback \
 
 `--apply` checks both the canonical plan hash and the database byte hash before
 opening the durable write transaction, then uses the tenant revision guard in each
-write transaction. Its T1325-shaped `validation` object
+write transaction. After replay/quarantine persistence, it reloads the durable tenant
+and computes its T1325-shaped `validation` object through read-only queries before the
+guarded terminal repair-run write. That object
 reports placeholder replacement failures, quarantine exposure, edge metadata
 failures, historical-ID preservation, approved-versus-applied membership equality,
 typed replacement story/edge IDs, feed membership, and replay refusals. Durable

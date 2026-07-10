@@ -144,6 +144,7 @@ defmodule Primeradiant.StorageHarness.GraphAdmissionRepair do
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
     first_replay_run_id = Ecto.UUID.generate()
     second_replay_run_id = Ecto.UUID.generate()
+    final_replay_run_id = Ecto.UUID.generate()
 
     run =
       ChangesetStore.insert!(RepairRun, %{
@@ -200,29 +201,58 @@ defmodule Primeradiant.StorageHarness.GraphAdmissionRepair do
       assert_outputs_consumed.()
       validate_no_node_key_replacement!(before, replayed)
 
-      mutation_ids =
+      pending_mutation_ids =
         clean_ids([first_replay_run_id, second_replay_run_id] ++ mutation_ids(before, replayed))
 
-      validation = validation(replayed, plan, history_before, replay_report)
+      pending_run =
+        ChangesetStore.update!(run, %{
+          mutation_ids: pending_mutation_ids
+        })
+
+      pending = State.replace(replayed, :repair_runs, run.id, pending_run)
+
+      invoke_hook(opts, :before_final_persist)
+
+      DurableSoupDb.persist_delta!(db_path, running, pending, %{
+        source_kind: "graph_admission_repair",
+        source_db_path: get_in(plan, ["source", "db_path"]),
+        source_row_count: length(admissions),
+        replay_run_id: second_replay_run_id,
+        expected_tenant_revision: running_revision
+      })
+
+      post_repair_revision =
+        DurableSoupDb.tenant_revision_after_replay!(
+          db_path,
+          tenant_id,
+          second_replay_run_id,
+          running_revision
+        )
+
+      invoke_hook(opts, :after_repair_persist)
+
+      durable_post_repair = DurableSoupDb.load_tenant(db_path, tenant_id)
+      validation = validation(durable_post_repair, plan, history_before, replay_report)
+      mutation_ids = clean_ids(pending_mutation_ids ++ [final_replay_run_id])
+
+      durable_run = Enum.find(durable_post_repair.repair_runs, &(&1.id == run.id))
 
       finished_run =
-        ChangesetStore.update!(run, %{
+        ChangesetStore.update!(durable_run, %{
           status: "succeeded",
           finished_at: DateTime.utc_now() |> DateTime.truncate(:microsecond),
           mutation_ids: mutation_ids,
           validation: validation
         })
 
-      final = State.replace(replayed, :repair_runs, run.id, finished_run)
+      final = State.replace(durable_post_repair, :repair_runs, run.id, finished_run)
 
-      invoke_hook(opts, :before_final_persist)
-
-      DurableSoupDb.persist_delta!(db_path, running, final, %{
-        source_kind: "graph_admission_repair",
+      DurableSoupDb.persist_delta!(db_path, durable_post_repair, final, %{
+        source_kind: "graph_admission_repair_validation",
         source_db_path: get_in(plan, ["source", "db_path"]),
-        source_row_count: length(admissions),
-        replay_run_id: second_replay_run_id,
-        expected_tenant_revision: running_revision
+        source_row_count: 0,
+        replay_run_id: final_replay_run_id,
+        expected_tenant_revision: post_repair_revision
       })
 
       %{
