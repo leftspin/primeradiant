@@ -459,6 +459,65 @@ defmodule Primeradiant.GraphAdmissionRepairTest do
     refute "repaired-clinic-event" in visible_story_keys
   end
 
+  test "rollback removes repair material from normal packets for an existing replacement story",
+       %{
+         root: root,
+         snapshot_path: snapshot_path,
+         db_path: db_path
+       } do
+    seed_existing_replacement!(snapshot_path)
+    File.cp!(snapshot_path, db_path)
+
+    before = DurableSoupDb.load_tenant(snapshot_path, @tenant)
+    replacement = Enum.find(before.stories, &(&1.story_key == "repaired-clinic-event"))
+    prior_event = Enum.find(before.story_events, &(&1.story_id == replacement.id))
+
+    prior_card =
+      before.story_card_versions
+      |> Enum.filter(&(&1.story_id == replacement.id))
+      |> Enum.max_by(& &1.card_version)
+
+    plan = plan(snapshot_path)
+    assert [%{"created_by_repair" => false}] = plan["proposed_replay"]["replacement_memberships"]
+
+    plan_path = write_plan!(root, plan)
+    apply_report = apply_plan!(db_path, plan_path, plan["plan_hash"])
+
+    GraphAdmissionRepair.rollback!(
+      soup_db: db_path,
+      plan: plan_path,
+      approved_plan_hash: plan["plan_hash"],
+      repair_run_id: apply_report["repair_run_id"],
+      actor: "rollback-operator"
+    )
+
+    rolled_back = DurableSoupDb.load_tenant(db_path, @tenant)
+    capture_key = {__MODULE__, make_ref()}
+
+    capture_adapter = fn config, packet, ctx ->
+      if config.role == :story_synthesis and packet.story_key == replacement.story_key do
+        Process.put(capture_key, packet)
+      end
+
+      adapter(config, packet, ctx)
+    end
+
+    LiveStoryAgentLoop.refresh_story_cards(rolled_back, "fixture-actor",
+      adapter: capture_adapter,
+      limit: length(rolled_back.stories)
+    )
+
+    packet = Process.get(capture_key)
+    linked_refs = Enum.map(packet.committed_story_state.linked_sources, & &1.source_ref)
+
+    assert packet.story_event_id == prior_event.id
+    assert packet.prior_story_card_version.id == prior_card.id
+
+    assert Admission.input_ref(Enum.find(before.inputs, &(&1.external_id == "article-1650"))) in linked_refs
+
+    refute Admission.input_ref(Enum.find(before.inputs, &(&1.external_id == "article-1649"))) in linked_refs
+  end
+
   defp seed_polluted_snapshot!(db_path) do
     observed_at = ~U[2026-07-10 00:00:00.000000Z]
 
@@ -505,6 +564,45 @@ defmodule Primeradiant.GraphAdmissionRepairTest do
     """
 
     {_, 0} = System.cmd("sqlite3", [db_path, sql], stderr_to_stdout: true)
+  end
+
+  defp seed_existing_replacement!(db_path) do
+    before = DurableSoupDb.load_tenant(db_path, @tenant)
+
+    input =
+      ChangesetStore.insert!(Input, %{
+        tenant_id: @tenant,
+        source_type: "fixture_article",
+        external_id: "article-1650",
+        observed_at: ~U[2026-07-10 00:01:00.000000Z],
+        title: "Legitimate clinic event",
+        body_text: "Independent evidence for the legitimate clinic event.",
+        object_uri: "fixture://article-1650",
+        content_sha256: ChangesetStore.hash("article-1650"),
+        acl: %{"privacy" => "public"},
+        normalized: %{"source_ref" => "source:article-1650"},
+        facts: %{},
+        background: %{},
+        questions: %{},
+        colors: [],
+        topic_tokens: []
+      })
+
+    seeded =
+      before
+      |> State.append(:inputs, input)
+      |> State.put_source_id(:input, "#{input.source_type}:#{input.external_id}", input.id)
+
+    {after_state, _report} =
+      LiveStoryAgentLoop.run(seeded, [admission_for(input)], "fixture-actor", adapter: &adapter/3)
+
+    DurableSoupDb.persist_delta!(db_path, before, after_state, %{
+      source_kind: "t1649_existing_replacement_fixture",
+      source_db_path: "fixture://t1649-existing-replacement",
+      source_row_count: 1,
+      replay_run_id: Ecto.UUID.generate(),
+      expected_tenant_revision: DurableSoupDb.tenant_revision(db_path, @tenant)
+    })
   end
 
   defp plan(db_path, replay_adapter \\ &adapter/3) do

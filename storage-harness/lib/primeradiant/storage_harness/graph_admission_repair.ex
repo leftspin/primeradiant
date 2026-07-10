@@ -316,7 +316,11 @@ defmodule Primeradiant.StorageHarness.GraphAdmissionRepair do
 
           State.append(state, :story_quarantines, quarantine)
         else
-          prior_story = ChangesetStore.update!(story, membership["prior_story"])
+          prior_story =
+            membership["prior_story"]
+            |> Map.new(fn {key, value} -> {String.to_existing_atom(key), value} end)
+            |> then(&ChangesetStore.update!(story, &1))
+
           State.replace(state, :stories, story.id, prior_story)
         end
       end)
@@ -907,7 +911,8 @@ defmodule Primeradiant.StorageHarness.GraphAdmissionRepair do
   defp scalar_title(_title), do: nil
 
   defp story_rollback_snapshot(story) do
-    Map.take(story, [
+    story
+    |> Map.take([
       :story_key,
       :title,
       :state,
@@ -922,6 +927,7 @@ defmodule Primeradiant.StorageHarness.GraphAdmissionRepair do
       :topic_tokens,
       :attrs
     ])
+    |> Map.update!(:title, &scalar_title/1)
   end
 
   defp ids(rows), do: rows |> Enum.map(& &1.id) |> clean_ids()

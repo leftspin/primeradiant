@@ -2184,7 +2184,8 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
   end
 
   defp visible_story_inputs(state, story, actor_id) do
-    state.story_events
+    state
+    |> active_repair_rows(state.story_events)
     |> Enum.filter(&(&1.story_id == story.id))
     |> Enum.map(fn event -> Enum.find(state.inputs, &(&1.id == event.input_id)) end)
     |> Enum.reject(&is_nil/1)
@@ -2217,7 +2218,8 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
   defp append_rows(state, field, rows), do: Enum.reduce(rows, state, &State.append(&2, field, &1))
 
   defp current_story_card_version(state, story_id) do
-    state.story_card_versions
+    state
+    |> active_repair_rows(state.story_card_versions)
     |> Enum.filter(&(&1.story_id == story_id))
     |> Enum.sort_by(& &1.card_version, :desc)
     |> List.first()
@@ -2234,10 +2236,21 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
   end
 
   defp latest_story_event(state, story_id, input_id) do
-    state.story_events
+    state
+    |> active_repair_rows(state.story_events)
     |> Enum.filter(&(&1.story_id == story_id and &1.input_id == input_id))
     |> Enum.sort_by(&(&1.observed_at || DateTime.from_unix!(0)), {:desc, DateTime})
     |> List.first()
+  end
+
+  defp active_repair_rows(state, rows) do
+    rolled_back_ids =
+      state.repair_runs
+      |> Enum.filter(&(&1.status == "rolled_back"))
+      |> Enum.flat_map(& &1.mutation_ids)
+      |> MapSet.new()
+
+    Enum.reject(rows, &MapSet.member?(rolled_back_ids, &1.id))
   end
 
   defp card_version_for(state, story_id) do
