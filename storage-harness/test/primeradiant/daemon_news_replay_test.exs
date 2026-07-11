@@ -4038,7 +4038,9 @@ defmodule Primeradiant.DaemonNewsReplayTest do
       stub_story_agent(config, packet, ctx)
     end
 
-    assert {:error, {:tenant_revision_conflict, %{event_id: _, attempts: 3}}} =
+    expected_event_id = second_event["event_id"]
+
+    assert {:error, {:tenant_revision_conflict, %{event_id: ^expected_event_id, attempts: 3}}} =
              DaemonNewsEvent.consume_event(second_event,
                soup_db_path: soup_db_path,
                tenant_id: @tenant,
