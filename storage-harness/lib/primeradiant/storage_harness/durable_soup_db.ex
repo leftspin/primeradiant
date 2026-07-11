@@ -137,6 +137,20 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
     :ok
   end
 
+  def persist_delta(db_path, previous_state, state, attrs \\ %{}) do
+    persist_delta!(db_path, previous_state, state, attrs)
+  rescue
+    error in RuntimeError ->
+      if String.contains?(
+           error.message,
+           "CHECK constraint failed: tenant_revision_unchanged"
+         ) do
+        {:error, :tenant_revision_conflict}
+      else
+        reraise error, __STACKTRACE__
+      end
+  end
+
   defp changed_rows(previous_state, state, table) do
     previous_by_id =
       previous_state
@@ -784,10 +798,10 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
   defp tenant_revision_guard_sql(tenant_id, expected_revision) do
     """
     CREATE TEMP TABLE IF NOT EXISTS primeradiant_revision_guard (
-      ok INTEGER NOT NULL CHECK (ok = 1)
+      tenant_revision_unchanged INTEGER NOT NULL CHECK (tenant_revision_unchanged = 1)
     );
     DELETE FROM primeradiant_revision_guard;
-    INSERT INTO primeradiant_revision_guard(ok)
+    INSERT INTO primeradiant_revision_guard(tenant_revision_unchanged)
     SELECT CASE
       WHEN (
         SELECT COUNT(*) || ':' || COALESCE(MAX(inserted_at || ':' || id), '')

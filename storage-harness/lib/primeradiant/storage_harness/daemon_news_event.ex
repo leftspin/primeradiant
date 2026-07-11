@@ -28,26 +28,48 @@ defmodule Primeradiant.StorageHarness.DaemonNewsEvent do
     story_agent_loop? = Keyword.get(opts, :story_agent_loop?, false)
     story_agent_opts = Keyword.get(opts, :story_agent_opts, [])
 
-    expected_tenant_revision =
-      if File.regular?(soup_db_path), do: DurableSoupDb.tenant_revision(soup_db_path, tenant_id)
-
-    prior_state = DurableSoupDb.load_event_admission_state(soup_db_path, tenant_id)
-
     with {:ok, item, summary} <- event_to_item(event, tenant_id, raw_root) do
+      consume_attempt(item, summary, 1, %{
+        tenant_id: tenant_id,
+        actor_id: actor_id,
+        soup_db_path: soup_db_path,
+        story_agent_loop?: story_agent_loop?,
+        story_agent_opts: story_agent_opts
+      })
+    end
+  end
+
+  defp consume_attempt(item, summary, attempt, ctx) do
+    expected_tenant_revision =
+      if File.regular?(ctx.soup_db_path) do
+        DurableSoupDb.tenant_revision(ctx.soup_db_path, ctx.tenant_id)
+      end
+
+    prior_state = DurableSoupDb.load_event_admission_state(ctx.soup_db_path, ctx.tenant_id)
+
+    result =
       case existing_admitted_input(prior_state, item) do
         nil ->
-          admit_new_event(prior_state, item, summary, %{
-            tenant_id: tenant_id,
-            actor_id: actor_id,
-            soup_db_path: soup_db_path,
-            expected_tenant_revision: expected_tenant_revision,
-            story_agent_loop?: story_agent_loop?,
-            story_agent_opts: story_agent_opts
-          })
+          admit_new_event(
+            prior_state,
+            item,
+            summary,
+            Map.put(ctx, :expected_tenant_revision, expected_tenant_revision)
+          )
 
         input ->
-          {:ok, prior_state, already_admitted_report(soup_db_path, summary, input)}
+          {:ok, prior_state, already_admitted_report(ctx.soup_db_path, summary, input)}
       end
+
+    case result do
+      {:error, :tenant_revision_conflict} when attempt < 3 ->
+        consume_attempt(item, summary, attempt + 1, ctx)
+
+      {:error, :tenant_revision_conflict} ->
+        {:error, {:tenant_revision_conflict, %{event_id: summary.event_id, attempts: 3}}}
+
+      result ->
+        result
     end
   end
 
@@ -87,23 +109,24 @@ defmodule Primeradiant.StorageHarness.DaemonNewsEvent do
           {state, source_admission_report(state, summary, ingestion_report)}
         end
 
-      DurableSoupDb.persist_delta!(ctx.soup_db_path, prior_state, state, %{
-        source_kind: DaemonNewsAdapter.source_adapter(),
-        source_db_path: "event:#{summary.event_id}",
-        source_row_count: 1,
-        expected_tenant_revision: ctx.expected_tenant_revision
-      })
+      with :ok <-
+             DurableSoupDb.persist_delta(ctx.soup_db_path, prior_state, state, %{
+               source_kind: DaemonNewsAdapter.source_adapter(),
+               source_db_path: "event:#{summary.event_id}",
+               source_row_count: 1,
+               expected_tenant_revision: ctx.expected_tenant_revision
+             }) do
+        report =
+          report.(ctx.soup_db_path, ctx.tenant_id)
+          |> Map.put(:event_driven_r1, %{
+            event_type: DaemonNewsAdapter.event_type(),
+            adapter: DaemonNewsAdapter.source_adapter(),
+            production_source_event_emitter_present: false,
+            persistent_service_installed: false
+          })
 
-      report =
-        report.(ctx.soup_db_path, ctx.tenant_id)
-        |> Map.put(:event_driven_r1, %{
-          event_type: DaemonNewsAdapter.event_type(),
-          adapter: DaemonNewsAdapter.source_adapter(),
-          production_source_event_emitter_present: false,
-          persistent_service_installed: false
-        })
-
-      {:ok, state, report}
+        {:ok, state, report}
+      end
     end
   end
 

@@ -3872,6 +3872,238 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert second_report.primeradiant_writes.stories == 1
   end
 
+  test "event admission retries once when cadence advances the tenant revision mid-consume" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-event-cadence-retry-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    soup_db_path = Path.join(tmp, "primeradiant-event-soup.sqlite3")
+    raw_path = Path.join(tmp, "archive.jsonl")
+
+    rows = [
+      envelope(
+        "Agent Civic Clinic triage open",
+        "Agent Civic Clinic triage is open venue is north speaker is desk."
+      ),
+      envelope(
+        "Agent Civic Clinic triage adds west desk",
+        "Agent Civic Clinic triage remains open and now adds west desk coverage."
+      )
+    ]
+
+    [{first_offset, first_length}, {second_offset, second_length}] =
+      write_archive!(raw_path, rows)
+
+    first_event =
+      committed_source_item_event(
+        "event-cadence-retry-1",
+        raw_path,
+        first_offset,
+        first_length,
+        Enum.at(rows, 0)
+      )
+
+    second_event =
+      committed_source_item_event(
+        "event-cadence-retry-2",
+        raw_path,
+        second_offset,
+        second_length,
+        Enum.at(rows, 1)
+      )
+
+    {:ok, _first_state, _first_report} =
+      DaemonNewsEvent.consume_event(first_event,
+        soup_db_path: soup_db_path,
+        tenant_id: @tenant,
+        actor_id: "flynn",
+        story_agent_loop?: true,
+        story_agent_opts: [adapter: &stub_story_agent/3]
+      )
+
+    invocation_key = make_ref()
+
+    cadence_adapter = fn config, packet, ctx ->
+      if config.role == :story_identity and Process.get(invocation_key, 0) == 0 do
+        state = DurableSoupDb.load_event_admission_state(soup_db_path, @tenant)
+
+        DurableSoupDb.persist_delta!(soup_db_path, state, state, %{
+          source_kind: "recurring-soup-cadence",
+          source_db_path: soup_db_path,
+          source_row_count: 0
+        })
+      end
+
+      if config.role == :story_identity do
+        Process.put(invocation_key, Process.get(invocation_key, 0) + 1)
+      end
+
+      stub_story_agent(config, packet, ctx)
+    end
+
+    {:ok, _second_state, report} =
+      DaemonNewsEvent.consume_event(second_event,
+        soup_db_path: soup_db_path,
+        tenant_id: @tenant,
+        actor_id: "flynn",
+        story_agent_loop?: true,
+        story_agent_opts: [adapter: cadence_adapter]
+      )
+
+    assert report.source.event_id == second_event["event_id"]
+    assert report.primeradiant_writes.durable == true
+    assert report.ingestion.admissions != []
+
+    assert [%{"count" => 1}] =
+             sqlite_json_rows!(
+               soup_db_path,
+               "SELECT COUNT(*) AS count FROM inputs WHERE external_id = 'event-cadence-retry-2';"
+             )
+
+    assert DurableSoupDb.table_count(soup_db_path, "replay_runs", @tenant) == 3
+  end
+
+  test "event admission returns typed refusal when the tenant revision moves on every attempt" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-event-cadence-refusal-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    soup_db_path = Path.join(tmp, "primeradiant-event-soup.sqlite3")
+    raw_path = Path.join(tmp, "archive.jsonl")
+
+    rows = [
+      envelope(
+        "Agent Civic Clinic triage open",
+        "Agent Civic Clinic triage is open venue is north speaker is desk."
+      ),
+      envelope(
+        "Agent Civic Clinic triage adds west desk",
+        "Agent Civic Clinic triage remains open and now adds west desk coverage."
+      )
+    ]
+
+    [{first_offset, first_length}, {second_offset, second_length}] =
+      write_archive!(raw_path, rows)
+
+    first_event =
+      committed_source_item_event(
+        "event-cadence-refusal-1",
+        raw_path,
+        first_offset,
+        first_length,
+        Enum.at(rows, 0)
+      )
+
+    second_event =
+      committed_source_item_event(
+        "event-cadence-refusal-2",
+        raw_path,
+        second_offset,
+        second_length,
+        Enum.at(rows, 1)
+      )
+
+    {:ok, _first_state, _first_report} =
+      DaemonNewsEvent.consume_event(first_event,
+        soup_db_path: soup_db_path,
+        tenant_id: @tenant,
+        actor_id: "flynn",
+        story_agent_loop?: true,
+        story_agent_opts: [adapter: &stub_story_agent/3]
+      )
+
+    story_events_before = DurableSoupDb.table_count(soup_db_path, "story_events", @tenant)
+
+    cadence_adapter = fn config, packet, ctx ->
+      if config.role == :story_identity do
+        state = DurableSoupDb.load_event_admission_state(soup_db_path, @tenant)
+
+        DurableSoupDb.persist_delta!(soup_db_path, state, state, %{
+          source_kind: "recurring-soup-cadence",
+          source_db_path: soup_db_path,
+          source_row_count: 0
+        })
+      end
+
+      stub_story_agent(config, packet, ctx)
+    end
+
+    assert {:error, {:tenant_revision_conflict, %{event_id: _, attempts: 3}}} =
+             DaemonNewsEvent.consume_event(second_event,
+               soup_db_path: soup_db_path,
+               tenant_id: @tenant,
+               actor_id: "flynn",
+               story_agent_loop?: true,
+               story_agent_opts: [adapter: cadence_adapter]
+             )
+
+    assert [%{"count" => 0}] =
+             sqlite_json_rows!(
+               soup_db_path,
+               "SELECT COUNT(*) AS count FROM inputs WHERE external_id = 'event-cadence-refusal-2';"
+             )
+
+    assert DurableSoupDb.table_count(soup_db_path, "story_events", @tenant) ==
+             story_events_before
+  end
+
+  test "persist_delta returns typed conflict instead of raising on stale revision" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-stale-revision-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    soup_db_path = Path.join(tmp, "primeradiant-soup.sqlite3")
+    state = State.new(tenant_id: @tenant, user_id: "flynn")
+
+    DurableSoupDb.persist_delta!(soup_db_path, state, state, %{
+      source_kind: "test-seed",
+      source_db_path: soup_db_path,
+      source_row_count: 0
+    })
+
+    loaded = DurableSoupDb.load_event_admission_state(soup_db_path, @tenant)
+    stale_revision = DurableSoupDb.tenant_revision(soup_db_path, @tenant)
+
+    DurableSoupDb.persist_delta!(soup_db_path, loaded, loaded, %{
+      source_kind: "recurring-soup-cadence",
+      source_db_path: soup_db_path,
+      source_row_count: 0
+    })
+
+    assert {:error, :tenant_revision_conflict} =
+             DurableSoupDb.persist_delta(soup_db_path, loaded, loaded, %{
+               source_kind: "test-stale-revision",
+               source_db_path: soup_db_path,
+               source_row_count: 0,
+               expected_tenant_revision: stale_revision
+             })
+
+    fresh_revision = DurableSoupDb.tenant_revision(soup_db_path, @tenant)
+
+    assert :ok =
+             DurableSoupDb.persist_delta!(soup_db_path, loaded, loaded, %{
+               source_kind: "test-fresh-revision",
+               source_db_path: soup_db_path,
+               source_row_count: 0,
+               expected_tenant_revision: fresh_revision
+             })
+  end
+
   test "live watcher checkpoints cursor only after per-package durable remote ack" do
     tmp =
       Path.join(
