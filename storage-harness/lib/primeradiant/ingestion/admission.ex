@@ -3,7 +3,7 @@ defmodule Primeradiant.Ingestion.Admission do
 
   alias Primeradiant.StorageHarness.{ChangesetStore, Input, State}
 
-  @source_modes ~w(manual_real_ingest_v1 daemon_news_event_r1)
+  @source_modes ~w(manual_real_ingest_v1 daemon_news_event_r1 source_evidence_resolution_v1)
   @source_types ~w(news_article opinion_column email message document user_note web_page)
   @forbidden_keys ~w(fixture_id expected_role story_hint expected_story expected_classification edge_hints)
 
@@ -70,6 +70,18 @@ defmodule Primeradiant.Ingestion.Admission do
   end
 
   def input_ref(%Input{} = input), do: "#{input.source_type}:#{input.external_id}"
+
+  def valid_source_type?(source_type), do: source_type in @source_types
+
+  def valid_acl?(acl) when is_map(acl) do
+    privacy = acl["privacy"] || acl[:privacy]
+    participants = acl["participants"] || acl[:participants]
+
+    privacy in ["public", "private"] and is_list(participants) and
+      (privacy == "public" or participants != [])
+  end
+
+  def valid_acl?(_acl), do: false
 
   def validate_item!(item) do
     reject_forbidden_keys!(item)

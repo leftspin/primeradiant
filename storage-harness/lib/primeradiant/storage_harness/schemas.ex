@@ -1478,3 +1478,545 @@ defmodule Primeradiant.StorageHarness.StoryQuarantine do
     |> validate_inclusion(:rollback_status, ["snapshot_available", "restored", "not_required"])
   end
 end
+
+defmodule Primeradiant.StorageHarness.SourceRegistration do
+  use Primeradiant.StorageHarness.Schema
+
+  schema "source_registrations" do
+    field(:tenant_id, :binary_id)
+    field(:source_key, :string)
+    field(:adapter_module, :string)
+    field(:adapter_version, :string)
+    field(:mode, :string)
+    field(:resolution_policy, :map, default: %{})
+    field(:policy_version, :string)
+    field(:policy_hash, :string)
+    field(:budgets, :map, default: %{})
+    field(:config, :map, default: %{})
+    field(:cursor, :map, default: %{})
+    field(:last_received_at, :utc_datetime_usec)
+    field(:last_resolution_terminal_at, :utc_datetime_usec)
+    field(:last_admission_at, :utc_datetime_usec)
+    field(:gap_count, :integer, default: 0)
+    field(:refusal_count, :integer, default: 0)
+    field(:unresolved_count, :integer, default: 0)
+    field(:quarantine_count, :integer, default: 0)
+    field(:circuit_state, :map, default: %{})
+    timestamps(type: :utc_datetime_usec)
+  end
+
+  def changeset(struct \\ %__MODULE__{}, attrs) do
+    fields = [
+      :id,
+      :tenant_id,
+      :source_key,
+      :adapter_module,
+      :adapter_version,
+      :mode,
+      :resolution_policy,
+      :policy_version,
+      :policy_hash,
+      :budgets,
+      :config,
+      :cursor,
+      :last_received_at,
+      :last_resolution_terminal_at,
+      :last_admission_at,
+      :gap_count,
+      :refusal_count,
+      :unresolved_count,
+      :quarantine_count,
+      :circuit_state
+    ]
+
+    struct
+    |> cast(attrs, fields)
+    |> put_id()
+    |> validate_required(
+      fields -- [:id, :last_received_at, :last_resolution_terminal_at, :last_admission_at]
+    )
+  end
+end
+
+defmodule Primeradiant.StorageHarness.SourceGapRecord do
+  use Primeradiant.StorageHarness.Schema
+
+  schema "source_gap_records" do
+    field(:tenant_id, :binary_id)
+    field(:source_key, :string)
+    field(:source_position, :string)
+    field(:status, :string)
+    field(:opened_at, :utc_datetime_usec)
+    field(:closed_at, :utc_datetime_usec)
+    timestamps(type: :utc_datetime_usec)
+  end
+
+  def changeset(struct \\ %__MODULE__{}, attrs) do
+    struct
+    |> cast(attrs, [
+      :id,
+      :tenant_id,
+      :source_key,
+      :source_position,
+      :status,
+      :opened_at,
+      :closed_at
+    ])
+    |> put_id()
+    |> validate_required([:tenant_id, :source_key, :source_position, :status, :opened_at])
+  end
+end
+
+defmodule Primeradiant.StorageHarness.RawEnvelope do
+  use Primeradiant.StorageHarness.Schema
+
+  schema "raw_envelopes" do
+    field(:tenant_id, :binary_id)
+    field(:source_key, :string)
+    field(:adapter_version, :string)
+    field(:source_event_external_id, :string)
+    field(:received_at, :utc_datetime_usec)
+    field(:content_digest, :string)
+    field(:integrity_metadata, :map, default: %{})
+    field(:raw_object_ref, :string)
+    field(:retained_bytes, :string)
+    field(:visibility, :string)
+    field(:correlation_id, :string)
+    field(:idempotency_key, :string)
+    timestamps(updated_at: false, type: :utc_datetime_usec)
+  end
+
+  def changeset(struct \\ %__MODULE__{}, attrs) do
+    struct
+    |> cast(attrs, [
+      :id,
+      :tenant_id,
+      :source_key,
+      :adapter_version,
+      :source_event_external_id,
+      :received_at,
+      :content_digest,
+      :integrity_metadata,
+      :raw_object_ref,
+      :retained_bytes,
+      :visibility,
+      :correlation_id,
+      :idempotency_key
+    ])
+    |> put_id()
+    |> validate_required([
+      :tenant_id,
+      :source_key,
+      :adapter_version,
+      :source_event_external_id,
+      :received_at,
+      :content_digest,
+      :integrity_metadata,
+      :visibility,
+      :correlation_id,
+      :idempotency_key
+    ])
+    |> validate_raw_material()
+  end
+
+  defp validate_raw_material(changeset) do
+    if get_field(changeset, :raw_object_ref) || get_field(changeset, :retained_bytes) do
+      changeset
+    else
+      add_error(changeset, :raw_object_ref, "or retained_bytes must be present")
+    end
+  end
+end
+
+defmodule Primeradiant.StorageHarness.ResolutionCase do
+  use Primeradiant.StorageHarness.Schema
+
+  schema "resolution_cases" do
+    field(:tenant_id, :binary_id)
+    field(:raw_envelope_id, :binary_id)
+    field(:policy_version, :string)
+    field(:state, :string)
+    field(:attempt_count, :integer, default: 0)
+    field(:next_retry_at, :utc_datetime_usec)
+    field(:outcome_code, :string)
+    field(:config_policy_hash, :string)
+    field(:policy_snapshot, :map)
+    field(:trace_id, :string)
+    timestamps(type: :utc_datetime_usec)
+  end
+
+  def changeset(struct \\ %__MODULE__{}, attrs) do
+    struct
+    |> cast(attrs, [
+      :id,
+      :tenant_id,
+      :raw_envelope_id,
+      :policy_version,
+      :state,
+      :attempt_count,
+      :next_retry_at,
+      :outcome_code,
+      :config_policy_hash,
+      :policy_snapshot,
+      :trace_id
+    ])
+    |> put_id()
+    |> validate_required([
+      :tenant_id,
+      :raw_envelope_id,
+      :policy_version,
+      :state,
+      :attempt_count,
+      :config_policy_hash,
+      :trace_id
+    ])
+  end
+end
+
+defmodule Primeradiant.StorageHarness.ResolutionEvidence do
+  use Primeradiant.StorageHarness.Schema
+
+  schema "resolution_evidence" do
+    field(:tenant_id, :binary_id)
+    field(:resolution_case_id, :binary_id)
+    field(:kind, :string)
+    field(:value, :string)
+    field(:protected_ref, :string)
+    field(:source, :string)
+    field(:locator, :map, default: %{})
+    field(:span_start, :integer)
+    field(:span_end, :integer)
+    field(:digest, :string)
+    field(:retrieved_at, :utc_datetime_usec)
+    field(:visibility, :string)
+    field(:provenance, :map, default: %{})
+    field(:transformation_chain, {:array, :map}, default: [])
+    timestamps(updated_at: false, type: :utc_datetime_usec)
+  end
+
+  def changeset(struct \\ %__MODULE__{}, attrs) do
+    struct
+    |> cast(attrs, [
+      :id,
+      :tenant_id,
+      :resolution_case_id,
+      :kind,
+      :value,
+      :protected_ref,
+      :source,
+      :locator,
+      :span_start,
+      :span_end,
+      :digest,
+      :retrieved_at,
+      :visibility,
+      :provenance,
+      :transformation_chain
+    ])
+    |> put_id()
+    |> validate_required([
+      :tenant_id,
+      :resolution_case_id,
+      :kind,
+      :source,
+      :locator,
+      :digest,
+      :retrieved_at,
+      :visibility,
+      :provenance,
+      :transformation_chain
+    ])
+    |> validate_evidence_material()
+  end
+
+  defp validate_evidence_material(changeset) do
+    if get_field(changeset, :value) || get_field(changeset, :protected_ref) do
+      changeset
+    else
+      add_error(changeset, :value, "or protected_ref must be present")
+    end
+  end
+end
+
+defmodule Primeradiant.StorageHarness.ResolvedSourceField do
+  use Primeradiant.StorageHarness.Schema
+
+  schema "resolved_source_fields" do
+    field(:tenant_id, :binary_id)
+    field(:resolution_case_id, :binary_id)
+    field(:field_name, :string)
+    field(:normalized_value, :string)
+    field(:confidence, :decimal)
+    field(:evidence_refs, {:array, :string}, default: [])
+    field(:derivation_evidence_ref, :string)
+    field(:resolver_provenance, {:array, :map}, default: [])
+    field(:transform, :string)
+    field(:contradiction_status, :string)
+    field(:selected, :boolean, default: false)
+    timestamps(type: :utc_datetime_usec)
+  end
+
+  def changeset(struct \\ %__MODULE__{}, attrs) do
+    struct
+    |> cast(attrs, [
+      :id,
+      :tenant_id,
+      :resolution_case_id,
+      :field_name,
+      :normalized_value,
+      :confidence,
+      :evidence_refs,
+      :derivation_evidence_ref,
+      :resolver_provenance,
+      :transform,
+      :contradiction_status,
+      :selected
+    ])
+    |> put_id()
+    |> validate_required([
+      :tenant_id,
+      :resolution_case_id,
+      :field_name,
+      :normalized_value,
+      :confidence,
+      :evidence_refs,
+      :derivation_evidence_ref,
+      :resolver_provenance,
+      :transform,
+      :contradiction_status,
+      :selected
+    ])
+    |> validate_confidence()
+    |> validate_non_empty_list(:evidence_refs)
+    |> validate_non_empty_list(:resolver_provenance)
+  end
+end
+
+defmodule Primeradiant.StorageHarness.ResolutionAttempt do
+  use Primeradiant.StorageHarness.Schema
+
+  schema "resolution_attempts" do
+    field(:tenant_id, :binary_id)
+    field(:resolution_case_id, :binary_id)
+    field(:raw_envelope_id, :binary_id)
+    field(:raw_envelope_digest, :string)
+    field(:attempt_key, :string)
+    field(:stage, :string)
+    field(:resolver, :string)
+    field(:input_hash, :string)
+    field(:attempt_ordinal, :integer)
+    field(:budgets_consumed, :map, default: %{})
+    field(:outcome, :string)
+    field(:error_class, :string)
+    field(:response_evidence_refs, {:array, :string}, default: [])
+    field(:started_at, :utc_datetime_usec)
+    field(:ended_at, :utc_datetime_usec)
+    timestamps(updated_at: false, type: :utc_datetime_usec)
+  end
+
+  def changeset(struct \\ %__MODULE__{}, attrs) do
+    fields = [
+      :id,
+      :tenant_id,
+      :resolution_case_id,
+      :raw_envelope_id,
+      :raw_envelope_digest,
+      :attempt_key,
+      :stage,
+      :resolver,
+      :input_hash,
+      :attempt_ordinal,
+      :budgets_consumed,
+      :outcome,
+      :error_class,
+      :response_evidence_refs,
+      :started_at,
+      :ended_at
+    ]
+
+    struct
+    |> cast(attrs, fields)
+    |> put_id()
+    |> validate_required(fields -- [:id, :resolver, :error_class])
+  end
+end
+
+defmodule Primeradiant.StorageHarness.ResolutionOutcome do
+  use Primeradiant.StorageHarness.Schema
+
+  schema "resolution_outcomes" do
+    field(:tenant_id, :binary_id)
+    field(:resolution_case_id, :binary_id)
+    field(:outcome_code, :string)
+    field(:reason, :string)
+    field(:retryable, :boolean)
+    field(:quarantine_ref, :string)
+    field(:validator_version, :string)
+    field(:admission_material_ref, :string)
+    timestamps(type: :utc_datetime_usec)
+  end
+
+  def changeset(struct \\ %__MODULE__{}, attrs) do
+    struct
+    |> cast(attrs, [
+      :id,
+      :tenant_id,
+      :resolution_case_id,
+      :outcome_code,
+      :reason,
+      :retryable,
+      :quarantine_ref,
+      :validator_version,
+      :admission_material_ref
+    ])
+    |> put_id()
+    |> validate_required([
+      :tenant_id,
+      :resolution_case_id,
+      :outcome_code,
+      :reason,
+      :retryable,
+      :validator_version
+    ])
+  end
+end
+
+defmodule Primeradiant.StorageHarness.ResolutionBackfillPlan do
+  use Primeradiant.StorageHarness.Schema
+
+  schema "resolution_backfill_plans" do
+    field(:tenant_id, :binary_id)
+    field(:selection, :map)
+    field(:selection_version, :string)
+    field(:candidates, {:array, :map}, default: [])
+    field(:source_versions, :map)
+    field(:policy_snapshots, :map)
+    field(:estimated_budgets, :map)
+    field(:exclusion_rules, {:array, :string}, default: [])
+    field(:content_hash, :string)
+    timestamps(updated_at: false, type: :utc_datetime_usec)
+  end
+
+  def changeset(struct \\ %__MODULE__{}, attrs) do
+    fields =
+      ~w(id tenant_id selection selection_version candidates source_versions policy_snapshots estimated_budgets exclusion_rules content_hash inserted_at)a
+
+    struct |> cast(attrs, fields) |> put_id() |> validate_required(fields -- [:id, :inserted_at])
+  end
+end
+
+defmodule Primeradiant.StorageHarness.ResolutionBackfillApproval do
+  use Primeradiant.StorageHarness.Schema
+
+  schema "resolution_backfill_approvals" do
+    field(:tenant_id, :binary_id)
+    field(:plan_id, :binary_id)
+    field(:plan_hash, :string)
+    field(:actor_kind, :string)
+    field(:actor_id, :string)
+    field(:approved_at, :utc_datetime_usec)
+    timestamps(updated_at: false, type: :utc_datetime_usec)
+  end
+
+  def changeset(struct \\ %__MODULE__{}, attrs) do
+    fields = ~w(id tenant_id plan_id plan_hash actor_kind actor_id approved_at inserted_at)a
+    struct |> cast(attrs, fields) |> put_id() |> validate_required(fields -- [:id, :inserted_at])
+  end
+end
+
+defmodule Primeradiant.StorageHarness.ResolutionBackfillApplication do
+  use Primeradiant.StorageHarness.Schema
+
+  schema "resolution_backfill_applications" do
+    field(:tenant_id, :binary_id)
+    field(:run_id, :string)
+    field(:plan_id, :binary_id)
+    field(:raw_envelope_id, :binary_id)
+    field(:historical_case_id, :binary_id)
+    field(:resolution_case_id, :binary_id)
+    field(:policy_hash, :string)
+    field(:idempotency_key, :string)
+    timestamps(updated_at: false, type: :utc_datetime_usec)
+  end
+
+  def changeset(struct \\ %__MODULE__{}, attrs) do
+    fields =
+      ~w(id tenant_id run_id plan_id raw_envelope_id historical_case_id resolution_case_id policy_hash idempotency_key inserted_at)a
+
+    struct |> cast(attrs, fields) |> put_id() |> validate_required(fields -- [:id, :inserted_at])
+  end
+end
+
+defmodule Primeradiant.StorageHarness.ResolutionBackfillRun do
+  use Primeradiant.StorageHarness.Schema
+
+  schema "resolution_backfill_runs" do
+    field(:tenant_id, :binary_id)
+    field(:run_id, :string)
+    field(:plan_id, :binary_id)
+    field(:applied_plan_hash, :string)
+    field(:status, :string)
+    field(:counts, :map)
+    field(:dispositions, {:array, :map}, default: [])
+    field(:duplicate_count, :integer, default: 0)
+    field(:residual_proof, :map)
+    field(:completed_at, :utc_datetime_usec)
+    timestamps(updated_at: false, type: :utc_datetime_usec)
+  end
+
+  def changeset(struct \\ %__MODULE__{}, attrs) do
+    fields =
+      ~w(id tenant_id run_id plan_id applied_plan_hash status counts dispositions duplicate_count residual_proof completed_at inserted_at)a
+
+    struct
+    |> cast(attrs, fields)
+    |> put_id()
+    |> validate_required(fields -- [:id, :inserted_at, :completed_at])
+  end
+end
+
+defmodule Primeradiant.StorageHarness.PackageAcknowledgement do
+  use Primeradiant.StorageHarness.Schema
+
+  schema "package_acknowledgements" do
+    field(:tenant_id, :binary_id)
+    field(:package_id, :string)
+    field(:manifest_digest, :string)
+    field(:source_position_range, :map, default: %{})
+    field(:status, :string)
+    field(:envelope_disposition_refs, {:array, :map}, default: [])
+    field(:policy_hash, :string)
+    field(:completed_at, :utc_datetime_usec)
+    field(:trace_id, :string)
+    timestamps(updated_at: false, type: :utc_datetime_usec)
+  end
+
+  def changeset(struct \\ %__MODULE__{}, attrs) do
+    struct
+    |> cast(attrs, [
+      :id,
+      :tenant_id,
+      :package_id,
+      :manifest_digest,
+      :source_position_range,
+      :status,
+      :envelope_disposition_refs,
+      :policy_hash,
+      :completed_at,
+      :trace_id
+    ])
+    |> put_id()
+    |> validate_required([
+      :tenant_id,
+      :package_id,
+      :manifest_digest,
+      :source_position_range,
+      :status,
+      :envelope_disposition_refs,
+      :policy_hash,
+      :completed_at,
+      :trace_id
+    ])
+    |> validate_non_empty_list(:envelope_disposition_refs)
+  end
+end

@@ -7,6 +7,15 @@ defmodule Primeradiant.StorageHarness.RealIngestion do
   def ingest_items(items, actor_id \\ "flynn") when is_list(items) do
     tenant_id = tenant_id_for_items!(items)
 
+    ingest_items(State.new(user_id: actor_id, tenant_id: tenant_id), items, actor_id)
+  end
+
+  def ingest_items(%State{} = initial_state, items, actor_id) when is_list(items) do
+    tenant_id = tenant_id_for_items!(items)
+
+    if tenant_id != initial_state.tenant_id,
+      do: raise(ArgumentError, "real ingestion batch must match ingestion state tenant_id")
+
     {state, admissions} =
       items
       |> Enum.sort_by(
@@ -14,9 +23,7 @@ defmodule Primeradiant.StorageHarness.RealIngestion do
          to_string(&1[:retrieved_at] || &1["retrieved_at"]),
          to_string(&1[:external_id] || &1["external_id"])}
       )
-      |> Enum.reduce({State.new(user_id: actor_id, tenant_id: tenant_id), []}, fn item,
-                                                                                  {state,
-                                                                                   admissions} ->
+      |> Enum.reduce({initial_state, []}, fn item, {state, admissions} ->
         {state, admission} = ingest_item(state, item, actor_id)
         {state, admissions ++ [admission]}
       end)
