@@ -948,6 +948,22 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
     )
   end
 
+  def raw_envelope_for_identity(db_path, tenant_id, source_key, identity, source_position) do
+    db_path
+    |> query_table_json("""
+    SELECT * FROM raw_envelopes
+    WHERE tenant_id = #{sql_quote(tenant_id)}
+      AND source_key = #{sql_quote(source_key)}
+      AND source_event_external_id = #{sql_quote(identity)}
+      AND json_extract(integrity_metadata, '$.source_position') = #{sql_value(source_position)}
+    ORDER BY inserted_at ASC;
+    """)
+    |> case do
+      [record] -> row_struct(Primeradiant.StorageHarness.RawEnvelope, record)
+      _ -> nil
+    end
+  end
+
   def resolution_case(db_path, tenant_id, id) do
     source_evidence_row(
       db_path,
@@ -961,6 +977,22 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
   def put_resolution_case!(db_path, row) do
     put_source_evidence_row!(db_path, :resolution_cases, row)
     resolution_case(db_path, row.tenant_id, row.id)
+  end
+
+  def resolution_case_for_envelope(db_path, tenant_id, raw_envelope_id) do
+    db_path
+    |> query_table_json("""
+    SELECT * FROM resolution_cases
+    WHERE tenant_id = #{sql_quote(tenant_id)}
+      AND raw_envelope_id = #{sql_quote(raw_envelope_id)}
+    ORDER BY inserted_at ASC
+    LIMIT 1;
+    """)
+    |> List.first()
+    |> case do
+      nil -> nil
+      record -> row_struct(Primeradiant.StorageHarness.ResolutionCase, record)
+    end
   end
 
   def insert_resolution_evidence!(db_path, row),
@@ -1026,16 +1058,16 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
         Primeradiant.StorageHarness.ResolutionAttempt
       )
 
-  def resolution_outcomes_for_case(db_path, tenant_id, case_id),
-    do:
-      source_evidence_rows(
-        db_path,
-        "resolution_outcomes",
-        tenant_id,
-        "resolution_case_id",
-        case_id,
-        Primeradiant.StorageHarness.ResolutionOutcome
-      )
+  def resolution_outcomes_for_case(db_path, tenant_id, case_id) do
+    db_path
+    |> query_table_json("""
+    SELECT * FROM resolution_outcomes
+    WHERE tenant_id = #{sql_quote(tenant_id)}
+      AND resolution_case_id = #{sql_quote(case_id)}
+    ORDER BY updated_at DESC, inserted_at DESC, id DESC;
+    """)
+    |> Enum.map(&row_struct(Primeradiant.StorageHarness.ResolutionOutcome, &1))
+  end
 
   def insert_resolution_outcome!(db_path, row) do
     put_source_evidence_row!(db_path, :resolution_outcomes, row)
@@ -1046,6 +1078,64 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
     )
     |> List.first()
     |> then(&row_struct(Primeradiant.StorageHarness.ResolutionOutcome, &1))
+  end
+
+  def package_acknowledgements_for_package(db_path, tenant_id, package_id) do
+    source_evidence_rows(
+      db_path,
+      "package_acknowledgements",
+      tenant_id,
+      "package_id",
+      package_id,
+      Primeradiant.StorageHarness.PackageAcknowledgement
+    )
+  end
+
+  def claim_package_identity!(db_path, acknowledgement, refusal) do
+    db_path |> Path.dirname() |> File.mkdir_p!()
+    validate_existing_foreign_keys!(db_path)
+
+    ack_attrs = row_map(:package_acknowledgements, acknowledgement)
+    refusal_attrs = row_map(:package_acknowledgements, refusal)
+    tenant_id = acknowledgement.tenant_id
+    package_id = acknowledgement.package_id
+
+    absent_identity = """
+    NOT EXISTS (
+      SELECT 1 FROM package_acknowledgements
+      WHERE tenant_id = #{sql_quote(tenant_id)} AND package_id = #{sql_quote(package_id)}
+    )
+    """
+
+    conflicting_identity = """
+    EXISTS (
+      SELECT 1 FROM package_acknowledgements
+      WHERE tenant_id = #{sql_quote(tenant_id)} AND package_id = #{sql_quote(package_id)}
+        AND manifest_digest != #{sql_quote(refusal.manifest_digest)}
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM package_acknowledgements
+      WHERE tenant_id = #{sql_quote(tenant_id)} AND package_id = #{sql_quote(package_id)}
+        AND manifest_digest = #{sql_quote(refusal.manifest_digest)}
+    )
+    """
+
+    sql =
+      [
+        ".bail on",
+        "PRAGMA foreign_keys = ON;",
+        "BEGIN IMMEDIATE;",
+        schema_sql(),
+        conditional_insert_sql(:package_acknowledgements, ack_attrs, absent_identity),
+        conditional_insert_sql(:package_acknowledgements, refusal_attrs, conflicting_identity),
+        "COMMIT;"
+      ]
+      |> Enum.join("\n")
+
+    sqlite!(db_path, sql)
+
+    package_acknowledgements_for_package(db_path, tenant_id, package_id)
+    |> Enum.find(&(&1.manifest_digest == acknowledgement.manifest_digest))
   end
 
   defp source_evidence_row(db_path, table, tenant_id, id, module) do
@@ -1567,6 +1657,14 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
     values = Enum.map(columns, &sql_value(Map.fetch!(attrs, &1)))
 
     "INSERT OR IGNORE INTO #{table} (#{Enum.join(columns, ", ")}) VALUES (#{Enum.join(values, ", ")});"
+  end
+
+  defp conditional_insert_sql(table, attrs, condition) do
+    attrs = fill_storage_timestamps(attrs)
+    columns = Map.keys(attrs)
+    values = Enum.map(columns, &sql_value(Map.fetch!(attrs, &1)))
+
+    "INSERT OR IGNORE INTO #{table} (#{Enum.join(columns, ", ")}) SELECT #{Enum.join(values, ", ")} WHERE #{condition};"
   end
 
   defp fill_storage_timestamps(attrs) do
