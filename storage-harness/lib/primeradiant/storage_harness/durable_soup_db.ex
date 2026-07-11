@@ -2,6 +2,10 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
   @moduledoc false
 
   @tables [
+    :resolution_backfill_runs,
+    :resolution_backfill_applications,
+    :resolution_backfill_approvals,
+    :resolution_backfill_plans,
     :package_acknowledgements,
     :resolution_outcomes,
     :resolution_attempts,
@@ -47,14 +51,21 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
     :resolved_source_fields,
     :resolution_attempts,
     :resolution_outcomes,
-    :package_acknowledgements
+    :package_acknowledgements,
+    :resolution_backfill_plans,
+    :resolution_backfill_approvals,
+    :resolution_backfill_applications,
+    :resolution_backfill_runs
   ]
 
   @insert_only_tables [
     :raw_envelopes,
     :resolution_evidence,
     :resolution_attempts,
-    :package_acknowledgements
+    :package_acknowledgements,
+    :resolution_backfill_plans,
+    :resolution_backfill_approvals,
+    :resolution_backfill_applications
   ]
 
   @dedupe_keys %{
@@ -68,7 +79,11 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
     resolution_cases: [:tenant_id, :raw_envelope_id, :policy_version],
     resolution_evidence: [:id],
     resolution_attempts: [:tenant_id, :attempt_key],
-    package_acknowledgements: [:tenant_id, :package_id, :manifest_digest]
+    package_acknowledgements: [:tenant_id, :package_id, :manifest_digest],
+    resolution_backfill_plans: [:tenant_id, :content_hash],
+    resolution_backfill_approvals: [:tenant_id, :plan_id, :plan_hash],
+    resolution_backfill_applications: [:tenant_id, :idempotency_key],
+    resolution_backfill_runs: [:tenant_id, :run_id]
   }
 
   @dedupe_modules %{
@@ -76,7 +91,11 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
     resolution_cases: Primeradiant.StorageHarness.ResolutionCase,
     resolution_evidence: Primeradiant.StorageHarness.ResolutionEvidence,
     resolution_attempts: Primeradiant.StorageHarness.ResolutionAttempt,
-    package_acknowledgements: Primeradiant.StorageHarness.PackageAcknowledgement
+    package_acknowledgements: Primeradiant.StorageHarness.PackageAcknowledgement,
+    resolution_backfill_plans: Primeradiant.StorageHarness.ResolutionBackfillPlan,
+    resolution_backfill_approvals: Primeradiant.StorageHarness.ResolutionBackfillApproval,
+    resolution_backfill_applications: Primeradiant.StorageHarness.ResolutionBackfillApplication,
+    resolution_backfill_runs: Primeradiant.StorageHarness.ResolutionBackfillRun
   }
 
   def persist!(db_path, state, attrs \\ %{}) do
@@ -253,6 +272,42 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
           "package_acknowledgements",
           tenant_id,
           Primeradiant.StorageHarness.PackageAcknowledgement
+        )
+      )
+      |> put_rows(
+        :resolution_backfill_plans,
+        load_rows(
+          db_path,
+          "resolution_backfill_plans",
+          tenant_id,
+          Primeradiant.StorageHarness.ResolutionBackfillPlan
+        )
+      )
+      |> put_rows(
+        :resolution_backfill_approvals,
+        load_rows(
+          db_path,
+          "resolution_backfill_approvals",
+          tenant_id,
+          Primeradiant.StorageHarness.ResolutionBackfillApproval
+        )
+      )
+      |> put_rows(
+        :resolution_backfill_applications,
+        load_rows(
+          db_path,
+          "resolution_backfill_applications",
+          tenant_id,
+          Primeradiant.StorageHarness.ResolutionBackfillApplication
+        )
+      )
+      |> put_rows(
+        :resolution_backfill_runs,
+        load_rows(
+          db_path,
+          "resolution_backfill_runs",
+          tenant_id,
+          Primeradiant.StorageHarness.ResolutionBackfillRun
         )
       )
       |> put_rows(
@@ -1091,6 +1146,131 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
     )
   end
 
+  def insert_resolution_backfill_plan!(db_path, row),
+    do: insert_deduped!(db_path, :resolution_backfill_plans, row)
+
+  def insert_resolution_backfill_approval!(db_path, row),
+    do: insert_deduped!(db_path, :resolution_backfill_approvals, row)
+
+  def insert_resolution_backfill_application!(db_path, row),
+    do: insert_deduped!(db_path, :resolution_backfill_applications, row)
+
+  def claim_resolution_backfill_application!(db_path, row, candidate) do
+    db_path |> Path.dirname() |> File.mkdir_p!()
+    validate_existing_foreign_keys!(db_path)
+
+    attrs = row_map(:resolution_backfill_applications, row)
+
+    condition = """
+    EXISTS (
+      SELECT 1
+      FROM resolution_cases
+      WHERE tenant_id = #{sql_value(candidate["tenant_id"])}
+        AND id = #{sql_value(candidate["resolution_case_id"])}
+        AND raw_envelope_id = #{sql_value(candidate["raw_envelope_id"])}
+        AND outcome_code = #{sql_value(candidate["historical_outcome_code"])}
+        AND config_policy_hash = #{sql_value(candidate["historical_policy_hash"])}
+        AND state = #{sql_value(candidate["historical_state"])}
+        AND state IN ('unresolved', 'quarantined', 'refused', 'failed_terminal')
+    )
+    """
+
+    sql =
+      [
+        ".bail on",
+        "PRAGMA foreign_keys = ON;",
+        "BEGIN IMMEDIATE;",
+        schema_sql(),
+        conditional_insert_sql(:resolution_backfill_applications, attrs, condition),
+        "COMMIT;"
+      ]
+      |> Enum.join("\n")
+
+    sqlite!(db_path, sql)
+
+    claimed =
+      db_path
+      |> query_table_json(
+        "SELECT * FROM resolution_backfill_applications WHERE tenant_id = #{sql_value(row.tenant_id)} AND idempotency_key = #{sql_value(row.idempotency_key)} LIMIT 1;"
+      )
+      |> List.first()
+
+    case claimed do
+      nil ->
+        {:stale, nil}
+
+      record ->
+        application =
+          row_struct(Primeradiant.StorageHarness.ResolutionBackfillApplication, record)
+
+        if application.id == row.id, do: {:claimed, application}, else: {:existing, application}
+    end
+  end
+
+  def insert_resolution_backfill_run!(db_path, row),
+    do: insert_deduped!(db_path, :resolution_backfill_runs, row)
+
+  def put_resolution_backfill_run!(db_path, row) do
+    put_source_evidence_row!(db_path, :resolution_backfill_runs, row)
+    resolution_backfill_run(db_path, row.tenant_id, row.run_id)
+  end
+
+  def resolution_backfill_plan(db_path, tenant_id, plan_id),
+    do:
+      source_evidence_row(
+        db_path,
+        "resolution_backfill_plans",
+        tenant_id,
+        plan_id,
+        Primeradiant.StorageHarness.ResolutionBackfillPlan
+      )
+
+  def resolution_backfill_approvals_for_plan(db_path, tenant_id, plan_id),
+    do:
+      source_evidence_rows(
+        db_path,
+        "resolution_backfill_approvals",
+        tenant_id,
+        "plan_id",
+        plan_id,
+        Primeradiant.StorageHarness.ResolutionBackfillApproval
+      )
+
+  def resolution_backfill_applications_for_run(db_path, tenant_id, run_id),
+    do:
+      source_evidence_rows(
+        db_path,
+        "resolution_backfill_applications",
+        tenant_id,
+        "run_id",
+        run_id,
+        Primeradiant.StorageHarness.ResolutionBackfillApplication
+      )
+
+  def resolution_backfill_run(db_path, tenant_id, run_id) do
+    db_path
+    |> query_table_json(
+      "SELECT * FROM resolution_backfill_runs WHERE tenant_id = #{sql_quote(tenant_id)} AND run_id = #{sql_quote(run_id)} LIMIT 1;"
+    )
+    |> List.first()
+    |> case do
+      nil -> nil
+      record -> row_struct(Primeradiant.StorageHarness.ResolutionBackfillRun, record)
+    end
+  end
+
+  def backfill_plan_tenant(db_path, plan_id) do
+    db_path
+    |> query_table_json(
+      "SELECT tenant_id FROM resolution_backfill_plans WHERE id = #{sql_quote(plan_id)} LIMIT 1;"
+    )
+    |> List.first()
+    |> case do
+      nil -> nil
+      %{"tenant_id" => tenant_id} -> tenant_id
+    end
+  end
+
   def claim_package_identity!(db_path, acknowledgement, refusal) do
     db_path |> Path.dirname() |> File.mkdir_p!()
     validate_existing_foreign_keys!(db_path)
@@ -1450,6 +1630,31 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
     take(
       row,
       ~w(id tenant_id package_id manifest_digest source_position_range status envelope_disposition_refs policy_hash completed_at trace_id inserted_at)a
+    )
+  end
+
+  defp row_map(:resolution_backfill_plans, row) do
+    take(
+      row,
+      ~w(id tenant_id selection selection_version candidates source_versions policy_snapshots estimated_budgets exclusion_rules content_hash inserted_at)a
+    )
+  end
+
+  defp row_map(:resolution_backfill_approvals, row) do
+    take(row, ~w(id tenant_id plan_id plan_hash actor_kind actor_id approved_at inserted_at)a)
+  end
+
+  defp row_map(:resolution_backfill_applications, row) do
+    take(
+      row,
+      ~w(id tenant_id run_id plan_id raw_envelope_id historical_case_id resolution_case_id policy_hash idempotency_key inserted_at)a
+    )
+  end
+
+  defp row_map(:resolution_backfill_runs, row) do
+    take(
+      row,
+      ~w(id tenant_id run_id plan_id applied_plan_hash status counts dispositions duplicate_count residual_proof completed_at inserted_at)a
     )
   end
 
@@ -1884,12 +2089,12 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
   defp load_value("circuit_state", value) when is_binary(value), do: decode_json(value, %{})
 
   defp load_value(key, value)
-       when key in ~w(acl scope normalized facts background questions colors topic_tokens attrs payload evidence_refs changed_facts structural_facts background_facts evidence_packet claim_refs title deck summary freshness field_completeness topic_salience provenance canonical_public_url source_domain source_label publication source_posture contribution_reason source_weight provenance_refs conflict_refs uncertainty changed_field_keys added_claim_refs removed_claim_refs changed_claim_refs changed_source_coverage_refs change_summary material_unseen_deltas nonmaterial_exclusions story_card_version_ids omitted_story_reasons visibility_scope mutation_ids rollback_proof validation preserved_ids source_refs resolution_policy policy_snapshot budgets config cursor integrity_metadata locator transformation_chain resolver_provenance budgets_consumed response_evidence_refs source_position_range envelope_disposition_refs) and
+       when key in ~w(acl scope normalized facts background questions colors topic_tokens attrs payload evidence_refs changed_facts structural_facts background_facts evidence_packet claim_refs title deck summary freshness field_completeness topic_salience provenance canonical_public_url source_domain source_label publication source_posture contribution_reason source_weight provenance_refs conflict_refs uncertainty changed_field_keys added_claim_refs removed_claim_refs changed_claim_refs changed_source_coverage_refs change_summary material_unseen_deltas nonmaterial_exclusions story_card_version_ids omitted_story_reasons visibility_scope mutation_ids rollback_proof validation preserved_ids source_refs resolution_policy policy_snapshot budgets config cursor integrity_metadata locator transformation_chain resolver_provenance budgets_consumed response_evidence_refs source_position_range envelope_disposition_refs selection candidates source_versions policy_snapshots estimated_budgets exclusion_rules counts dispositions residual_proof) and
               is_binary(value),
        do: decode_json(value, %{})
 
   defp load_value(key, value)
-       when key in ~w(inserted_at updated_at started_at ended_at finished_at committed_at observed_at first_observed_at updated_at_story last_material_at seen_at first_observed_at last_observed_at query_time quarantined_at received_at retrieved_at next_retry_at completed_at opened_at closed_at last_received_at last_resolution_terminal_at last_admission_at) and
+       when key in ~w(inserted_at updated_at started_at ended_at finished_at committed_at observed_at first_observed_at updated_at_story last_material_at seen_at first_observed_at last_observed_at query_time quarantined_at received_at retrieved_at next_retry_at completed_at opened_at closed_at last_received_at last_resolution_terminal_at last_admission_at approved_at) and
               is_binary(value),
        do: Primeradiant.StorageHarness.ChangesetStore.iso!(value)
 
@@ -2070,6 +2275,63 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
       admission_material_ref TEXT,
       inserted_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS resolution_backfill_plans (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      selection TEXT NOT NULL,
+      selection_version TEXT NOT NULL,
+      candidates TEXT NOT NULL,
+      source_versions TEXT NOT NULL,
+      policy_snapshots TEXT NOT NULL,
+      estimated_budgets TEXT NOT NULL,
+      exclusion_rules TEXT NOT NULL,
+      content_hash TEXT NOT NULL,
+      inserted_at TEXT NOT NULL,
+      UNIQUE (tenant_id, content_hash)
+    );
+
+    CREATE TABLE IF NOT EXISTS resolution_backfill_approvals (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      plan_id TEXT NOT NULL REFERENCES resolution_backfill_plans(id),
+      plan_hash TEXT NOT NULL,
+      actor_kind TEXT NOT NULL,
+      actor_id TEXT NOT NULL,
+      approved_at TEXT NOT NULL,
+      inserted_at TEXT NOT NULL,
+      UNIQUE (tenant_id, plan_id, plan_hash)
+    );
+
+    CREATE TABLE IF NOT EXISTS resolution_backfill_applications (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      run_id TEXT NOT NULL,
+      plan_id TEXT NOT NULL REFERENCES resolution_backfill_plans(id),
+      raw_envelope_id TEXT NOT NULL REFERENCES raw_envelopes(id),
+      historical_case_id TEXT NOT NULL REFERENCES resolution_cases(id),
+      resolution_case_id TEXT NOT NULL,
+      policy_hash TEXT NOT NULL,
+      idempotency_key TEXT NOT NULL,
+      inserted_at TEXT NOT NULL,
+      UNIQUE (tenant_id, idempotency_key)
+    );
+
+    CREATE TABLE IF NOT EXISTS resolution_backfill_runs (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      run_id TEXT NOT NULL,
+      plan_id TEXT NOT NULL REFERENCES resolution_backfill_plans(id),
+      applied_plan_hash TEXT NOT NULL,
+      status TEXT NOT NULL,
+      counts TEXT NOT NULL,
+      dispositions TEXT NOT NULL,
+      duplicate_count INTEGER NOT NULL,
+      residual_proof TEXT NOT NULL,
+      completed_at TEXT,
+      inserted_at TEXT NOT NULL,
+      UNIQUE (tenant_id, run_id)
     );
 
     CREATE TABLE IF NOT EXISTS package_acknowledgements (

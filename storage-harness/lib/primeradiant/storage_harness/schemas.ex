@@ -1881,6 +1881,100 @@ defmodule Primeradiant.StorageHarness.ResolutionOutcome do
   end
 end
 
+defmodule Primeradiant.StorageHarness.ResolutionBackfillPlan do
+  use Primeradiant.StorageHarness.Schema
+
+  schema "resolution_backfill_plans" do
+    field(:tenant_id, :binary_id)
+    field(:selection, :map)
+    field(:selection_version, :string)
+    field(:candidates, {:array, :map}, default: [])
+    field(:source_versions, :map)
+    field(:policy_snapshots, :map)
+    field(:estimated_budgets, :map)
+    field(:exclusion_rules, {:array, :string}, default: [])
+    field(:content_hash, :string)
+    timestamps(updated_at: false, type: :utc_datetime_usec)
+  end
+
+  def changeset(struct \\ %__MODULE__{}, attrs) do
+    fields =
+      ~w(id tenant_id selection selection_version candidates source_versions policy_snapshots estimated_budgets exclusion_rules content_hash inserted_at)a
+
+    struct |> cast(attrs, fields) |> put_id() |> validate_required(fields -- [:id, :inserted_at])
+  end
+end
+
+defmodule Primeradiant.StorageHarness.ResolutionBackfillApproval do
+  use Primeradiant.StorageHarness.Schema
+
+  schema "resolution_backfill_approvals" do
+    field(:tenant_id, :binary_id)
+    field(:plan_id, :binary_id)
+    field(:plan_hash, :string)
+    field(:actor_kind, :string)
+    field(:actor_id, :string)
+    field(:approved_at, :utc_datetime_usec)
+    timestamps(updated_at: false, type: :utc_datetime_usec)
+  end
+
+  def changeset(struct \\ %__MODULE__{}, attrs) do
+    fields = ~w(id tenant_id plan_id plan_hash actor_kind actor_id approved_at inserted_at)a
+    struct |> cast(attrs, fields) |> put_id() |> validate_required(fields -- [:id, :inserted_at])
+  end
+end
+
+defmodule Primeradiant.StorageHarness.ResolutionBackfillApplication do
+  use Primeradiant.StorageHarness.Schema
+
+  schema "resolution_backfill_applications" do
+    field(:tenant_id, :binary_id)
+    field(:run_id, :string)
+    field(:plan_id, :binary_id)
+    field(:raw_envelope_id, :binary_id)
+    field(:historical_case_id, :binary_id)
+    field(:resolution_case_id, :binary_id)
+    field(:policy_hash, :string)
+    field(:idempotency_key, :string)
+    timestamps(updated_at: false, type: :utc_datetime_usec)
+  end
+
+  def changeset(struct \\ %__MODULE__{}, attrs) do
+    fields =
+      ~w(id tenant_id run_id plan_id raw_envelope_id historical_case_id resolution_case_id policy_hash idempotency_key inserted_at)a
+
+    struct |> cast(attrs, fields) |> put_id() |> validate_required(fields -- [:id, :inserted_at])
+  end
+end
+
+defmodule Primeradiant.StorageHarness.ResolutionBackfillRun do
+  use Primeradiant.StorageHarness.Schema
+
+  schema "resolution_backfill_runs" do
+    field(:tenant_id, :binary_id)
+    field(:run_id, :string)
+    field(:plan_id, :binary_id)
+    field(:applied_plan_hash, :string)
+    field(:status, :string)
+    field(:counts, :map)
+    field(:dispositions, {:array, :map}, default: [])
+    field(:duplicate_count, :integer, default: 0)
+    field(:residual_proof, :map)
+    field(:completed_at, :utc_datetime_usec)
+    timestamps(updated_at: false, type: :utc_datetime_usec)
+  end
+
+  def changeset(struct \\ %__MODULE__{}, attrs) do
+    fields =
+      ~w(id tenant_id run_id plan_id applied_plan_hash status counts dispositions duplicate_count residual_proof completed_at inserted_at)a
+
+    struct
+    |> cast(attrs, fields)
+    |> put_id()
+    |> validate_required(fields -- [:id, :inserted_at, :completed_at])
+  end
+end
+
 defmodule Primeradiant.StorageHarness.PackageAcknowledgement do
   use Primeradiant.StorageHarness.Schema
 
