@@ -2,7 +2,7 @@ defmodule Primeradiant.SourceRegistryTest do
   use ExUnit.Case, async: false
 
   alias Primeradiant.Ingestion.SourceRegistry
-  alias Primeradiant.StorageHarness.{ChangesetStore, DurableSoupDb}
+  alias Primeradiant.StorageHarness.DurableSoupDb
 
   @tenant "20000000-0000-0000-0000-000000001656"
   @source "fixture-source"
@@ -38,16 +38,14 @@ defmodule Primeradiant.SourceRegistryTest do
                resolution_policy: policy,
                policy_version: "policy-v1",
                budgets: valid_budgets(1_000),
-               config: %{"resolvers" => []},
+               config: config(),
                initial_cursor: 7
              })
 
     assert registration.mode == "disabled"
 
     assert registration.policy_hash ==
-             ChangesetStore.hash(
-               ~s({"source_class":"public_article","thresholds":{"publisher_domain":0.9,"publisher_label":0.8},"version":"policy-v1"})
-             )
+             SourceRegistry.policy_hash(%{"resolution_policy" => policy, "config" => config()})
 
     assert registration.cursor["contiguous_position"] == 7
 
@@ -73,7 +71,7 @@ defmodule Primeradiant.SourceRegistryTest do
                resolution_policy: updated_policy,
                policy_version: "policy-v2",
                budgets: valid_budgets(2_000),
-               config: %{"resolvers" => []}
+               config: config()
              })
 
     assert updated_registration.id == registration.id
@@ -265,7 +263,7 @@ defmodule Primeradiant.SourceRegistryTest do
                },
                policy_version: "policy-v1",
                budgets: valid_budgets(1_000),
-               config: %{"resolvers" => []},
+               config: config(),
                initial_cursor: 0
              })
 
@@ -298,6 +296,16 @@ defmodule Primeradiant.SourceRegistryTest do
       "adapter" => %{"time_ms" => 100},
       "normalizer" => %{"time_ms" => 100},
       "resolvers" => %{}
+    }
+  end
+
+  defp config do
+    %{
+      "resolvers" => [],
+      "admission_material" => %{
+        "source_type" => "news_article",
+        "acl" => %{"privacy" => "public", "participants" => []}
+      }
     }
   end
 end

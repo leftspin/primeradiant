@@ -922,7 +922,11 @@ defmodule Primeradiant.ResolutionPipelineTest do
                config: %{
                  "evidence_types" => ["public_url"],
                  "resolvers" => route,
-                 "inference" => inference_config
+                 "inference" => inference_config,
+                 "admission_material" => %{
+                   "source_type" => "news_article",
+                   "acl" => %{"privacy" => "public", "participants" => []}
+                 }
                },
                initial_cursor: 0
              })

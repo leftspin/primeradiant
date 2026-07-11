@@ -808,7 +808,10 @@ defmodule Primeradiant.Ingestion.Resolution.Case do
     policy_registration =
       cond do
         is_map(snapshot) and
-          SourceRegistry.policy_hash(value(snapshot, "resolution_policy")) ==
+          SourceRegistry.policy_hash(%{
+            "resolution_policy" => value(snapshot, "resolution_policy"),
+            "config" => value(snapshot, "config")
+          }) ==
             value(snapshot, "policy_hash") and
           value(snapshot, "policy_hash") == resolution_case.config_policy_hash and
             value(snapshot, "policy_version") == resolution_case.policy_version ->

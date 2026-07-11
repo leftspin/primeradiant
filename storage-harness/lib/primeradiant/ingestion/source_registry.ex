@@ -1,6 +1,8 @@
 defmodule Primeradiant.Ingestion.SourceRegistry do
   @moduledoc false
 
+  alias Primeradiant.Ingestion.Admission
+
   alias Primeradiant.StorageHarness.{
     ChangesetStore,
     DurableSoupDb,
@@ -33,7 +35,11 @@ defmodule Primeradiant.Ingestion.SourceRegistry do
           mode: Map.get(attrs, :mode, "disabled") |> to_string(),
           resolution_policy: policy,
           policy_version: Map.fetch!(attrs, :policy_version),
-          policy_hash: policy_hash(policy),
+          policy_hash:
+            policy_hash(%{
+              "resolution_policy" => policy,
+              "config" => Map.get(attrs, :config, %{})
+            }),
           budgets: Map.get(attrs, :budgets, %{}),
           config: Map.get(attrs, :config, %{}),
           cursor: registration_cursor(attrs, existing),
@@ -75,6 +81,89 @@ defmodule Primeradiant.Ingestion.SourceRegistry do
 
       registration ->
         receive_registered_envelope(db_path, registration, attrs)
+    end
+  end
+
+  def reconcile(db_path, scope, delivery_reader) do
+    with registration when not is_nil(registration) <- registration(db_path, scope) do
+      cursor = normalize_cursor(registration.cursor)
+      head = Map.fetch!(scope, :head)
+
+      open_positions =
+        db_path
+        |> DurableSoupDb.source_gap_records(registration.tenant_id, registration.source_key)
+        |> Enum.filter(&(&1.status == "open"))
+        |> Enum.map(&String.to_integer(&1.source_position))
+        |> Enum.sort()
+
+      events =
+        delivery_reader.events_after(cursor["contiguous_position"], head) ++
+          delivery_reader.events_at(open_positions)
+
+      permitted_positions =
+        MapSet.new(open_positions ++ positions_after(cursor["contiguous_position"], head))
+
+      existing_keys =
+        db_path
+        |> DurableSoupDb.raw_envelopes_for_source(registration.tenant_id, registration.source_key)
+        |> MapSet.new(&{&1.source_key, &1.source_event_external_id, &1.content_digest})
+
+      {malformed, canonical_events} = Enum.split_with(events, &(not valid_reader_event?(&1)))
+
+      receipts =
+        canonical_events
+        |> Enum.uniq_by(
+          &{event_value(&1, :source_key), event_value(&1, :source_event_external_id),
+           event_value(&1, :content_digest)}
+        )
+        |> Enum.filter(&(event_value(&1, :source_key) == registration.source_key))
+        |> Enum.filter(&MapSet.member?(permitted_positions, event_value(&1, :source_position)))
+        |> Enum.reject(fn event ->
+          MapSet.member?(existing_keys, {
+            event_value(event, :source_key),
+            event_value(event, :source_event_external_id),
+            event_value(event, :content_digest)
+          })
+        end)
+        |> Enum.map(fn event ->
+          attrs = event_attrs(event, registration.tenant_id)
+          receive_envelope(db_path, attrs)
+        end)
+
+      receipts =
+        Enum.map(malformed, &{:error, {:malformed_event, malformed_position(&1)}}) ++
+          receipts
+
+      retries = reconcile_due_retries(db_path, scope)
+      {:ok, %{receipts: receipts, retries: retries}}
+    else
+      nil -> {:error, :policy_not_registered}
+    end
+  end
+
+  def reconcile_due_retries(db_path, scope) do
+    now = Map.get(scope, :now, now())
+    registration = registration(db_path, scope)
+
+    if registration do
+      state = DurableSoupDb.load_tenant(db_path, registration.tenant_id)
+      envelope_ids = source_envelope_ids(state, registration.source_key)
+
+      state.resolution_cases
+      |> Enum.filter(fn resolution_case ->
+        resolution_case.raw_envelope_id in envelope_ids and
+          resolution_case.state == "retry_scheduled" and
+          not is_nil(resolution_case.next_retry_at) and
+          DateTime.compare(resolution_case.next_retry_at, now) != :gt
+      end)
+      |> Enum.map(fn resolution_case ->
+        Primeradiant.Ingestion.Resolution.Case.run(db_path, resolution_case.id,
+          tenant_id: registration.tenant_id,
+          at: now
+        )
+      end)
+    else
+      []
     end
   end
 
@@ -194,6 +283,7 @@ defmodule Primeradiant.Ingestion.SourceRegistry do
          true <- stage_budget?(budgets, "adapter"),
          true <- stage_budget?(budgets, "normalizer"),
          true <- is_map(config),
+         true <- valid_admission_material?(value(config, "admission_material")),
          routes when is_list(routes) <- value(config, "resolvers"),
          true <- Enum.all?(routes, &valid_route?(&1, budgets)),
          true <- valid_inference?(value(config, "inference"), budgets) do
@@ -382,7 +472,8 @@ defmodule Primeradiant.Ingestion.SourceRegistry do
         policy_snapshot: %{
           "resolution_policy" => registration.resolution_policy,
           "policy_version" => registration.policy_version,
-          "policy_hash" => registration.policy_hash
+          "policy_hash" => registration.policy_hash,
+          "config" => registration.config
         },
         trace_id: Map.get(attrs, :trace_id, Map.fetch!(attrs, :correlation_id))
       })
@@ -569,6 +660,81 @@ defmodule Primeradiant.Ingestion.SourceRegistry do
       state: resolution_case.state
     }
   end
+
+  defp event_attrs(event, tenant_id) do
+    %{
+      tenant_id: tenant_id,
+      source_key: event_value(event, :source_key),
+      source_event_external_id: event_value(event, :source_event_external_id),
+      source_position: event_value(event, :source_position),
+      content_digest: event_value(event, :content_digest),
+      received_at: event_value(event, :received_at),
+      raw_object_ref: event_value(event, :raw_object_ref),
+      retained_bytes: event_value(event, :retained_bytes),
+      visibility: event_value(event, :visibility),
+      correlation_id: event_value(event, :correlation_id),
+      integrity_metadata: event_value(event, :integrity_metadata) || %{}
+    }
+  end
+
+  defp event_value(event, key) when is_map(event),
+    do: Map.get(event, key) || Map.get(event, to_string(key))
+
+  defp malformed_position(event) when is_map(event), do: event_value(event, :source_position)
+  defp malformed_position(_event), do: nil
+
+  defp valid_reader_event?(event) when is_map(event) do
+    required =
+      ~w(source_key source_event_external_id source_position content_digest received_at visibility correlation_id)a
+
+    Enum.all?(required, &event_has_key?(event, &1)) and
+      is_binary(event_value(event, :source_key)) and
+      is_binary(event_value(event, :source_event_external_id)) and
+      is_integer(event_value(event, :source_position)) and
+      is_binary(event_value(event, :content_digest)) and
+      valid_received_at?(event_value(event, :received_at)) and
+      is_binary(event_value(event, :visibility)) and
+      is_binary(event_value(event, :correlation_id)) and
+      optional_binary?(event, :raw_object_ref) and
+      optional_binary?(event, :retained_bytes) and
+      (is_binary(event_value(event, :raw_object_ref)) or
+         is_binary(event_value(event, :retained_bytes))) and
+      optional_map?(event, :integrity_metadata)
+  end
+
+  defp valid_reader_event?(_event), do: false
+
+  defp event_has_key?(event, key),
+    do: Map.has_key?(event, key) or Map.has_key?(event, to_string(key))
+
+  defp valid_received_at?(%DateTime{}), do: true
+
+  defp valid_received_at?(value) when is_binary(value) do
+    match?({:ok, _datetime, _offset}, DateTime.from_iso8601(value))
+  end
+
+  defp valid_received_at?(_value), do: false
+
+  defp optional_binary?(event, key),
+    do:
+      not event_has_key?(event, key) or is_nil(event_value(event, key)) or
+        is_binary(event_value(event, key))
+
+  defp optional_map?(event, key),
+    do:
+      not event_has_key?(event, key) or is_nil(event_value(event, key)) or
+        is_map(event_value(event, key))
+
+  defp valid_admission_material?(material) when is_map(material) do
+    source_type = value(material, "source_type")
+    acl = value(material, "acl")
+    Admission.valid_source_type?(source_type) and Admission.valid_acl?(acl)
+  end
+
+  defp valid_admission_material?(_material), do: false
+
+  defp positions_after(cursor, head) when head > cursor, do: Enum.to_list((cursor + 1)..head)
+  defp positions_after(_cursor, _head), do: []
 
   defp source_envelope_ids(state, source_key) do
     state.raw_envelopes

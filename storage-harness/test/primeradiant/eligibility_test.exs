@@ -502,7 +502,13 @@ defmodule Primeradiant.EligibilityTest do
                resolution_policy: policy,
                policy_version: "sr01-v1",
                budgets: budgets(),
-               config: %{"resolvers" => []},
+               config: %{
+                 "resolvers" => [],
+                 "admission_material" => %{
+                   "source_type" => "news_article",
+                   "acl" => %{"privacy" => "public", "participants" => []}
+                 }
+               },
                initial_cursor: 0
              })
   end
