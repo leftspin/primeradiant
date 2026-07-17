@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+url=""
+request=""
+for arg in "$@"; do
+  case "$arg" in
+    http://*) url="$arg" ;;
+    @*) request="${arg#@}" ;;
+  esac
+done
+
+case "$url" in
+  */apply-template)
+    remote_path="/apply-template"
+    ;;
+  */tokenize)
+    remote_path="/tokenize"
+    ;;
+  */v1/chat/completions)
+    cp "$request" "$(dirname "$0")/chat-request.json"
+    printf '%s\n' '{"id":"chatcmpl-t1745-proof","model":"Qwen3.6-35B-A3B-UD-Q4_K_M.gguf","choices":[{"finish_reason":"stop","message":{"content":"{\"ok\":true}"}}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}'
+    exit 0
+    ;;
+  *)
+    exit 99
+    ;;
+esac
+
+ssh tars "ssh -o IdentitiesOnly=yes -i /Users/mike/.ssh/id_ed25519_clu clu@eurisko curl -sS --max-time 120 http://gibson:8080${remote_path} -H Content-Type:application/json --data-binary @-" < "$request"

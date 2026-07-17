@@ -1,0 +1,17 @@
+REVISION REQUIRED
+
+Blocking findings:
+
+- T1745-SR-003 — Unbounded zero-ref material remains. Revision 3 removes the direct source_ref, but retains the unchanged model-visible packet_id. The current packet_id contains correlation_id, which embeds the complete source_ref; source_ref includes the uncapped external_id. Therefore the fully reduced zero-ref packet can still exceed either limit before catalog packing, contradicting items 17–18. Amend the model projection to use an explicitly bounded/digested packet identifier while leaving the durable packet and correlation unchanged. Acceptance must use an original external_id/source_ref individually large enough to exceed the byte and token ceilings, then prove the reduced zero-ref prompt fits both limits and contains no full-value derivative.
+
+Nits:
+
+- T1745-N06 — Failed-diagnostic usage naming remains ambiguous. Item 19 defines exact provider_usage nesting only for success. Item 11 still says “usage fields or null.” Specify whether every failure diagnostic contains provider_usage: {prompt_tokens, completion_tokens, total_tokens} or provider_usage: null, alongside preflight_prompt_tokens.
+- T1745-N08 — Make failed-state acceptance explicit. In addition to unacknowledged-package assertions, focused failure tests should assert that no AgentRun row exists, directly covering item 11’s durable-state invariant.
+
+The provenance, durable per-package acknowledgement, unchanged 86,400-second freshness semantics, natural retry requirement, and Prime Radiant supply-versus-Reporter presentation boundary are otherwise sound. The watcher advances its cursor only after the durable consume acknowledgement.
+
+Implementation may not begin until T1745-SR-003 is resolved.
+
+Reviewer: Codex GPT-5.6 SOL, high reasoning
+Reviewer session: 019f6dc3-3aac-7b63-9843-109eb624b0b7

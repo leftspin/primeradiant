@@ -1,0 +1,15 @@
+Reviewer: Codex GPT-5.6 SOL, high reasoning, read-only
+Session: 019f6e17-3648-7e90-b0db-dbc29796b1f7
+Verdict: CHANGES REQUIRED
+
+1. High — The exact live-Gibson measurement remains helper-built, not production-path proof. prove.exs enters LiveStoryAgentLoop.run/4 only to capture configuration, then manually reconstructs a fixture-ordered packet and calls invoke_live_agent/3. The full-path test uses a synthetic two-token tokenizer. Prior R2 finding 2 remains unresolved.
+
+2. Medium — The zero-AgentRun insertion trace is not positive-checked against a known ChangesetStore.insert!(AgentRun, ...) call. trace_delivered flushes messages but does not prove the match pattern observes AgentRun insertion. Prior R2 finding 4 remains unresolved.
+
+3. Medium — The mandatory adversarial rich-catalog/long-title proof is absent. rich_story_refs/1 uses short titles, small structural facts, and one evidence ref; the zero-ref test enlarges only external_id/source_ref. Tests must prove first-240 Unicode-grapheme truncation and that large excluded rich fields/lists/hint material cannot affect model bounds.
+
+Resolved from R2: all 663 unique fixture identities are included with no missing or extra refs; omitted count is zero; model refs have exactly five keys; user prompt is 164520 bytes. The closed Map.take allowlist resolves unexpected durable-field leakage.
+
+Other checks passed: exact apply-template then tokenize preflight; durable identity/provenance preservation; Reporter boundary; unchanged readiness/freshness thresholds, watcher behavior, and acknowledgement gating; no unrelated product changes.
+
+Reviewer could not run Mix tests because read-only sandbox denied Mix.PubSub local TCP (:eperm). Elixir syntax parsing, JSON validation, and git diff --check passed.

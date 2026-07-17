@@ -1,0 +1,30 @@
+{
+  "captured_at": "2026-07-16",
+  "chat": "canned_after_preflight",
+  "config_version": "story-identity.v1.t1269.live-loop",
+  "eligible_story_count": 663,
+  "included_story_count": 663,
+  "model_ref_keys": [
+    [
+      "last_material_at",
+      "state",
+      "story_key",
+      "title",
+      "version"
+    ]
+  ],
+  "model_story_order_sha256": "52f38764a3a19ffa64dab39cdb9942d6bc1f2d80d4f93f6e4ec5601813b7ff6d",
+  "omitted_story_count": 0,
+  "packet_path": "LiveStoryAgentLoop.run/4 -> ACL eligibility -> quarantine filter -> overlap/material/key rank -> packet -> invoke_live_agent/3",
+  "preflight_prompt_tokens": 55945,
+  "prompt_byte_limit": 180000,
+  "prompt_bytes": 164520,
+  "prompt_token_limit": 130432,
+  "prompt_version_hash": "986ec7992f5eb62e8856f2053d02ca144e1c1c39c465b92ff34655604288d2df",
+  "durable_story_order_sha256": "52f38764a3a19ffa64dab39cdb9942d6bc1f2d80d4f93f6e4ec5601813b7ff6d",
+  "source_message_id": "b9edbc9f-1fe8-437a-bd1f-2f8b2530bddf",
+  "source_row_id": 15164,
+  "template_and_tokenizer": "live_gibson_on_eurisko",
+  "tenant_id": "00000000-0000-0000-0000-00000000t328",
+  "truncation_reason": null
+}

@@ -4230,6 +4230,20 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     write_stub_ssh!(bin_dir, stub_state)
     File.write!(Path.join(stub_state, "fail-on"), "2")
 
+    terminal_diagnostic =
+      Jason.encode!(%{
+        error_class: "live_gibson_terminal_failure",
+        stage: "inner_json_decode",
+        provider_usage: %{
+          prompt_tokens: 130_884,
+          completion_tokens: 147,
+          total_tokens: 131_031
+        },
+        preflight_prompt_tokens: 130_884
+      })
+
+    File.write!(Path.join(stub_state, "fail-message"), terminal_diagnostic)
+
     watcher_script = Path.expand("scripts/r1/live_subspace_daemon_watcher_once.sh")
 
     base_args = [
@@ -4275,7 +4289,7 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert failed_report["cursor_checkpointing"] == "durable_remote_ack_per_package"
     assert failed_report["unconsumed_range_retained"] == true
     assert get_in(failed_report, ["error", "exit_status"]) == 17
-    assert get_in(failed_report, ["error", "message"]) =~ "simulated remote consume failure"
+    assert get_in(failed_report, ["error", "message"]) =~ terminal_diagnostic
 
     File.rm!(Path.join(stub_state, "fail-on"))
 
@@ -4916,7 +4930,7 @@ defmodule Primeradiant.DaemonNewsReplayTest do
       printf '%s\\n' "$n" > "$count_file"
       printf '%s\\n' "$cmd" >> "$STATE_DIR/consume-commands.log"
       if [[ -f "$STATE_DIR/fail-on" && "$n" -eq "$(cat "$STATE_DIR/fail-on")" ]]; then
-        echo "simulated remote consume failure" >&2
+        cat "$STATE_DIR/fail-message" >&2 2>/dev/null || echo "simulated remote consume failure" >&2
         exit 17
       fi
       if [[ -f "$STATE_DIR/no-ack-on" && "$n" -eq "$(cat "$STATE_DIR/no-ack-on")" ]]; then

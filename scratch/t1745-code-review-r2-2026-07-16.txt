@@ -1,0 +1,44 @@
+T1745 Code Review R2
+
+Reviewer: Codex GPT-5.6 SOL, high reasoning
+Session: 019f6e01-2388-78a0-9658-72a873a01a13
+Mode: read-only sandbox
+Verdict: CHANGES REQUIRED
+
+High — Revision 4 requires all 663 current eligible stories to fit. The unit test
+instead proves 607 included / 56 omitted, and the real Gibson proof proves 605
+included / 58 omitted. R1744-03 and the requirement that the retained row lose no
+viable current identity are unmet. Given the exact six-field compact-ref shape and
+180,000-byte ceiling, this may require spec adjudication rather than silent further
+reduction.
+
+High — The production row 15164 proof does not exercise actual ACL/ranking/packet
+construction. It loads an alphabetically ordered fixture, manually constructs a
+packet, and calls invoke_live_agent/3 directly, bypassing ranked_visible_story_refs/3.
+The real template/tokenizer result is useful but is not exact row-entry production-path
+proof.
+
+Medium — The model-visible projection is not the exact closed projection required by
+items 15–18. It starts with the whole durable packet and drops known fields, allowing
+future/additional admission fields to survive into the prompt. The spec defines an
+exact allowlist.
+
+Medium — The zero-AgentRun test is non-observing because it checks the original
+immutable state after an exception. The implementation currently invokes the adapter
+before constructing an AgentRun, but item 24 requires focused proof that insertion was
+not attempted.
+
+Prior-round disposition:
+- Non-bound preflight propagation and successful-preflight reuse: resolved.
+- Durable packet identity/hash: resolved.
+- Production acceptance proof: unresolved.
+- Meaning-update role-eligible bounds: resolved.
+- Missing-model response_id: resolved.
+
+Other checks passed: Reporter presentation ownership and freshness/readiness semantics
+were unchanged; watcher/ack implementation was unchanged; daemon-core interpretation
+was not introduced; source/evidence remains durable outside the model projection.
+
+Reviewer test evidence: real_ingestion_test.exs 6/6; git diff --check passed. Other
+test execution was blocked by the review sandbox's TCP/temp-write restrictions.
+Orchestrator test evidence before review: proof-harness 34/34; storage-harness 246/246.

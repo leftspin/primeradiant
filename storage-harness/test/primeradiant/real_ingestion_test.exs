@@ -124,11 +124,23 @@ defmodule Primeradiant.RealIngestionTest do
 
   test "T1326 polluted story hint remains context and does not override agent story identity" do
     {:ok, state, report} = RealIngestion.ingest_items(polluted_hint_items())
+    capture_key = {__MODULE__, make_ref()}
+
+    adapter = fn config, packet, ctx ->
+      if config.role in [:story_identity, :meaning_update] do
+        Process.put(
+          capture_key,
+          Process.get(capture_key, []) ++ [{config.role, packet}]
+        )
+      end
+
+      config
+      |> polluted_hint_story_agent(packet, ctx)
+      |> Map.put(:model_packet, %{role: config.role, raw_database_access: false})
+    end
 
     {state, loop_report} =
-      LiveStoryAgentLoop.run(state, report.admissions, "flynn",
-        adapter: &polluted_hint_story_agent/3
-      )
+      LiveStoryAgentLoop.run(state, report.admissions, "flynn", adapter: adapter)
 
     assert loop_report.story_meaning_proof
 
@@ -145,8 +157,7 @@ defmodule Primeradiant.RealIngestionTest do
     second_op =
       Enum.find(state.proposal_ops, &(&1.id == second_chain.proposal_op_id))
 
-    assert get_in(second_op.payload, ["soup_candidate_hint", :suggested_story_key]) ==
-             "trump-israel-newsweek"
+    assert second_op.payload["soup_candidate_hint"] == nil
 
     second_edge =
       Enum.find(state.edges, &(&1.proposal_op_id == second_chain.proposal_op_id))
@@ -163,6 +174,53 @@ defmodule Primeradiant.RealIngestionTest do
 
     assert get_in(third_op.payload, ["soup_candidate_hint", :suggested_story_key]) ==
              "trump-israel-newsweek"
+
+    [
+      {:story_identity, first_identity_packet},
+      {:meaning_update, first_meaning_packet},
+      {:story_identity, second_identity_packet},
+      {:meaning_update, second_meaning_packet},
+      {:story_identity, third_identity_packet},
+      {:meaning_update, third_meaning_packet}
+    ] = Process.get(capture_key)
+
+    assert first_identity_packet.visible_story_refs == []
+    assert first_meaning_packet.visible_story_refs == []
+
+    second_identity_refs = second_identity_packet.visible_story_refs
+    second_meaning_refs = second_meaning_packet.visible_story_refs
+    third_identity_refs = third_identity_packet.visible_story_refs
+    third_meaning_refs = third_meaning_packet.visible_story_refs
+
+    assert Enum.map(second_identity_refs, & &1.story_key) == ["trump-israel-newsweek"]
+    assert second_meaning_refs == second_identity_refs
+
+    assert Enum.map(third_identity_refs, & &1.story_key) == [
+             "trump-israel-newsweek",
+             "forgotlings-ps5-launch"
+           ]
+
+    assert third_meaning_refs == third_identity_refs
+
+    assert Enum.all?(third_identity_refs, &Map.has_key?(&1, :structural_facts))
+    assert Enum.all?(third_identity_refs, &Map.has_key?(&1, :evidence_input_refs))
+
+    first_identity_run = hd(state.agent_runs)
+
+    durable_packet_hash =
+      :sha256
+      |> :crypto.hash(:erlang.term_to_binary(first_identity_packet))
+      |> Base.encode16(case: :lower)
+
+    reduced_packet_hash =
+      :sha256
+      |> :crypto.hash(
+        :erlang.term_to_binary(%{role: :story_identity, raw_database_access: false})
+      )
+      |> Base.encode16(case: :lower)
+
+    assert first_identity_run.scope["packet_hash"] == durable_packet_hash
+    refute first_identity_run.scope["packet_hash"] == reduced_packet_hash
   end
 
   test "T1223 direct ingestion enforces tenant boundary" do
@@ -249,7 +307,7 @@ defmodule Primeradiant.RealIngestionTest do
         | observed_at: "2026-05-17T10:05:00Z",
           title: "Forgotlings for PS5 launches next month",
           body_text:
-            "Forgotlings PS5 game launches next month #{shared} developer trailer console preorder platform release"
+            "Forgotlings PS5 game launches next month developer trailer console preorder platform release"
       },
       %{
         base_item("forgotlings-ps5-update")

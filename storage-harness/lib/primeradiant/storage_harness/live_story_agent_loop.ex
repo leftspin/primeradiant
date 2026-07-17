@@ -202,7 +202,21 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
   end
 
   def invoke_live_agent(config, packet, _ctx) do
-    live = LiveGibson.invoke(config.role, config, packet)
+    model_packet =
+      if config.role in [:story_identity, :meaning_update] do
+        pack_bounded_model_packet(config, packet)
+      else
+        {packet, nil}
+      end
+
+    {model_packet, preflight} = model_packet
+
+    live =
+      if preflight do
+        LiveGibson.invoke_preflighted(config.role, config, model_packet, preflight)
+      else
+        LiveGibson.invoke(config.role, config, model_packet)
+      end
 
     %{
       output: live.output,
@@ -212,7 +226,15 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
       decision_source: Atom.to_string(live.decision_source),
       output_hash: live.agent_output_hash,
       invocation_transport_id: live.response_id,
-      duration_ms: live.duration_ms
+      duration_ms: live.duration_ms,
+      model_packet: Map.get(live, :model_packet, model_packet),
+      provider_usage: Map.get(live, :provider_usage),
+      preflight_prompt_tokens: Map.get(live, :preflight_prompt_tokens),
+      prompt_bytes: Map.get(live, :prompt_bytes),
+      response_id: Map.get(live, :response_id),
+      finish_reason: Map.get(live, :finish_reason),
+      content_bytes: Map.get(live, :content_bytes),
+      content_sha256: Map.get(live, :content_sha256)
     }
   end
 
@@ -468,8 +490,8 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
   end
 
   defp invoke_agent(state, config, packet, actor_id, adapter, correlation_id) do
-    packet_hash = hash(packet)
     output = adapter.(config, packet, %{actor_id: actor_id, correlation_id: correlation_id})
+    packet_hash = hash(packet)
     output_hash = output[:output_hash] || hash(output.output)
 
     run =
@@ -489,7 +511,14 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
           "producer_kind" => output[:producer_kind] || "unrecorded",
           "decision_source" => output[:decision_source] || "unrecorded",
           "invocation_transport_id" => output[:invocation_transport_id],
-          "evidence_refs" => packet.evidence_refs
+          "evidence_refs" => packet.evidence_refs,
+          "provider_usage" => output[:provider_usage],
+          "preflight_prompt_tokens" => output[:preflight_prompt_tokens],
+          "prompt_bytes" => output[:prompt_bytes],
+          "response_id" => output[:response_id],
+          "finish_reason" => output[:finish_reason],
+          "content_bytes" => output[:content_bytes],
+          "content_sha256" => output[:content_sha256]
         },
         status: "succeeded",
         trace_id: "trace:#{correlation_id}:#{config.role}",
@@ -2117,7 +2146,7 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
         content_span_refs: admission.content_span_refs,
         source_provenance: admission.source_provenance,
         snippet: String.slice(input.body_text || "", 0, 600),
-        visible_story_refs: visible_story_refs_for_role(state, actor_id, role),
+        visible_story_refs: visible_story_refs_for_role(state, input, actor_id, role, extra),
         traversal_depth: 1,
         raw_database_access: false
       },
@@ -2125,10 +2154,10 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
     )
   end
 
-  defp visible_story_refs_for_role(_state, _actor_id, :story_synthesis), do: []
+  defp visible_story_refs_for_role(_state, _input, _actor_id, :story_synthesis, _extra), do: []
 
-  defp visible_story_refs_for_role(state, actor_id, _role),
-    do: visible_story_refs(state, actor_id)
+  defp visible_story_refs_for_role(state, input, actor_id, _role, _extra),
+    do: ranked_visible_story_refs(state, input, actor_id)
 
   defp soup_candidate_hint(state, input, actor_id) do
     input_tokens = content_tokens([input.title, input.body_text])
@@ -2165,10 +2194,23 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
     end
   end
 
-  defp visible_story_refs(state, actor_id) do
+  defp ranked_visible_story_refs(state, input, actor_id) do
+    input_tokens = content_tokens([input.title, input.body_text])
+
     state.stories
     |> Enum.reject(&graph_admission_quarantined?(state, &1))
     |> Enum.map(fn story ->
+      story_inputs = visible_story_inputs(state, story, actor_id)
+      story_tokens = content_tokens(Enum.flat_map(story_inputs, &[&1.title, &1.body_text]))
+      overlap_count = MapSet.intersection(input_tokens, story_tokens) |> MapSet.size()
+
+      {story, story_inputs, overlap_count}
+    end)
+    |> Enum.reject(fn {_story, story_inputs, _overlap_count} -> story_inputs == [] end)
+    |> Enum.sort_by(fn {story, _story_inputs, overlap_count} ->
+      {-overlap_count, story_material_sort_key(story.last_material_at), story.story_key}
+    end)
+    |> Enum.map(fn {story, story_inputs, _overlap_count} ->
       %{
         story_key: story.story_key,
         title: story.title,
@@ -2177,10 +2219,234 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
         structural_facts: story.structural_facts || %{},
         updated_at_story: story.updated_at_story && DateTime.to_iso8601(story.updated_at_story),
         last_material_at: story.last_material_at && DateTime.to_iso8601(story.last_material_at),
-        evidence_input_refs:
-          Enum.map(visible_story_inputs(state, story, actor_id), &Admission.input_ref/1)
+        evidence_input_refs: Enum.map(story_inputs, &Admission.input_ref/1)
       }
     end)
+  end
+
+  defp compact_story_ref(story_ref) do
+    %{
+      story_key: story_ref.story_key,
+      title: first_graphemes(scalar_title(story_ref.title) || "", 240),
+      version: story_ref.version,
+      state: story_ref.state,
+      last_material_at: story_ref.last_material_at
+    }
+  end
+
+  defp story_material_sort_key(nil), do: {1, 0}
+
+  defp story_material_sort_key(%DateTime{} = value),
+    do: {0, -DateTime.to_unix(value, :microsecond)}
+
+  defp bounded_model_packet(packet) do
+    packet
+    |> Map.take([
+      :packet_contract,
+      :role,
+      :output_visibility,
+      :input_id,
+      :snippet,
+      :soup_candidate_hint,
+      :visible_story_refs,
+      :traversal_depth,
+      :raw_database_access,
+      :story_identity
+    ])
+    |> Map.put(:packet_id_sha256, canonical_json_sha256(packet.packet_id))
+    |> Map.update(:soup_candidate_hint, nil, &bounded_soup_candidate_hint/1)
+    |> Map.update!(:visible_story_refs, &bounded_visible_story_refs(packet, &1))
+    |> Map.put(:bounded_source, %{
+      source_ref_prefix: first_graphemes(packet.source_ref || "", 512),
+      source_ref_sha256: canonical_json_sha256(packet.source_ref),
+      external_id_prefix: first_graphemes(packet.external_id || "", 512),
+      external_id_sha256: canonical_json_sha256(packet.external_id),
+      source_provenance_sha256: canonical_json_sha256(packet.source_provenance),
+      content_span_ref_count: length(packet.content_span_refs || []),
+      content_span_refs_sha256: canonical_json_sha256(packet.content_span_refs || []),
+      evidence_ref_count: length(packet.evidence_refs || []),
+      evidence_refs_sha256: canonical_json_sha256(packet.evidence_refs || [])
+    })
+  end
+
+  defp pack_bounded_model_packet(config, durable_packet) do
+    reduced_packet = bounded_model_packet(durable_packet)
+    ranked_refs = reduced_packet.visible_story_refs
+    eligible_count = length(ranked_refs)
+    all_packet = put_packet_bounds(reduced_packet, eligible_count, length(ranked_refs))
+
+    case LiveGibson.preflight(config.role, config, all_packet) do
+      {:ok, preflight} ->
+        {all_packet, preflight}
+
+      {:error, %{error_class: "prompt_bound_exceeded"}} ->
+        pack_story_ref_prefix(config, reduced_packet, ranked_refs, eligible_count)
+
+      {:error, diagnostic} ->
+        raise_preflight_terminal(diagnostic)
+    end
+  end
+
+  defp pack_story_ref_prefix(config, packet, ranked_refs, eligible_count) do
+    zero_packet = packet_with_story_ref_prefix(packet, ranked_refs, eligible_count, 0)
+
+    case LiveGibson.preflight(config.role, config, zero_packet) do
+      {:ok, preflight} ->
+        largest_fitting_story_ref_prefix(
+          config,
+          packet,
+          ranked_refs,
+          eligible_count,
+          0,
+          max(length(ranked_refs) - 1, 0),
+          preflight
+        )
+
+      {:error, diagnostic} ->
+        raise_preflight_terminal(diagnostic)
+    end
+  end
+
+  defp largest_fitting_story_ref_prefix(
+         _config,
+         packet,
+         ranked_refs,
+         eligible_count,
+         low,
+         high,
+         preflight
+       )
+       when low >= high,
+       do: {packet_with_story_ref_prefix(packet, ranked_refs, eligible_count, low), preflight}
+
+  defp largest_fitting_story_ref_prefix(
+         config,
+         packet,
+         ranked_refs,
+         eligible_count,
+         low,
+         high,
+         best_preflight
+       ) do
+    candidate_count = div(low + high + 1, 2)
+
+    candidate =
+      packet_with_story_ref_prefix(packet, ranked_refs, eligible_count, candidate_count)
+
+    case LiveGibson.preflight(config.role, config, candidate) do
+      {:ok, preflight} ->
+        largest_fitting_story_ref_prefix(
+          config,
+          packet,
+          ranked_refs,
+          eligible_count,
+          candidate_count,
+          high,
+          preflight
+        )
+
+      {:error, %{error_class: "prompt_bound_exceeded"}} ->
+        largest_fitting_story_ref_prefix(
+          config,
+          packet,
+          ranked_refs,
+          eligible_count,
+          low,
+          candidate_count - 1,
+          best_preflight
+        )
+
+      {:error, diagnostic} ->
+        raise_preflight_terminal(diagnostic)
+    end
+  end
+
+  defp raise_preflight_terminal(diagnostic), do: raise(Jason.encode!(diagnostic))
+
+  defp packet_with_story_ref_prefix(packet, ranked_refs, eligible_count, included_count) do
+    packet
+    |> Map.put(:visible_story_refs, Enum.take(ranked_refs, included_count))
+    |> put_packet_bounds(eligible_count, included_count)
+  end
+
+  defp put_packet_bounds(packet, eligible_count, included_count) do
+    omitted_count = eligible_count - included_count
+
+    bounds = %{
+      eligible_acl_visible_story_count: eligible_count,
+      included_story_count: included_count,
+      omitted_story_count: omitted_count
+    }
+
+    bounds =
+      if omitted_count > 0 do
+        Map.put(bounds, :truncation_reason, "live_story_agent_prompt_context_bound")
+      else
+        bounds
+      end
+
+    Map.put(packet, :packet_bounds, bounds)
+  end
+
+  defp bounded_soup_candidate_hint(nil), do: nil
+
+  defp bounded_soup_candidate_hint(hint) do
+    Map.take(hint, [
+      :suggested_story_key,
+      :suggested_classification,
+      :overlap_count,
+      :input_token_count,
+      :rationale
+    ])
+  end
+
+  defp bounded_visible_story_refs(%{role: :story_identity}, refs),
+    do: Enum.map(refs, &compact_story_ref/1)
+
+  defp bounded_visible_story_refs(
+         %{role: :meaning_update, story_identity: %{classification: "new_story"}},
+         _refs
+       ),
+       do: []
+
+  defp bounded_visible_story_refs(
+         %{role: :meaning_update, story_identity: %{story_key: story_key}},
+         refs
+       ) do
+    refs
+    |> Enum.filter(&(&1.story_key == story_key))
+    |> Enum.take(1)
+    |> Enum.map(&compact_story_ref/1)
+  end
+
+  defp bounded_visible_story_refs(_packet, _refs), do: []
+
+  defp canonical_json_sha256(value) do
+    :crypto.hash(:sha256, canonical_json(value))
+    |> Base.encode16(case: :lower)
+  end
+
+  defp canonical_json(value), do: value |> canonical_json_value() |> Jason.encode!()
+
+  defp canonical_json_value(%{} = value) do
+    value
+    |> Enum.map(fn {key, nested} -> {to_string(key), canonical_json_value(nested)} end)
+    |> Enum.sort_by(&elem(&1, 0))
+    |> Jason.OrderedObject.new()
+  end
+
+  defp canonical_json_value(value) when is_list(value),
+    do: Enum.map(value, &canonical_json_value/1)
+
+  defp canonical_json_value(value) when value in [true, false, nil], do: value
+  defp canonical_json_value(value) when is_atom(value), do: Atom.to_string(value)
+  defp canonical_json_value(value), do: value
+
+  defp first_graphemes(value, count) do
+    value
+    |> String.graphemes()
+    |> Enum.take(count)
+    |> Enum.join()
   end
 
   defp visible_story_inputs(state, story, actor_id) do

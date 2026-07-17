@@ -1,0 +1,31 @@
+T1745 Code Review R1
+
+Reviewer: Codex GPT-5.6 SOL, high reasoning
+Session: 019f6de5-1dde-7c61-aae0-1d3d6e8c7572
+Mode: read-only, approval never
+Verdict: CHANGES REQUIRED
+
+Required findings:
+
+1. High — preflight failures other than prompt-bound failures were swallowed by the
+   packing retry. Propagate non-bound failures as terminal failures and reuse a
+   successful preflight for the selected packet instead of repeating template and
+   tokenizer calls.
+
+2. High — durable packet identity was mixed with the reduced model projection hash.
+   Wherever packet_hash is paired with durable packet_id, retain the durable packet
+   hash (SHA-256 of the durable packet); do not add an unspecced model-projection hash.
+
+3. High — acceptance proof was incomplete. It used generated 663-story input and a
+   fake tokenizer rather than captured production references and the real Gibson
+   template/tokenizer, and it did not cover every failure type through AgentRun,
+   acknowledgement, and cursor outcomes. Polluted-hint and below-threshold cases must
+   still reach the model projection.
+
+4. Medium — meaning-update packet bounds must describe role-eligible material: zero
+   references for new stories or one selected story for existing stories, rather than
+   reporting all tenant material as omitted.
+
+5. Medium — the missing-model diagnostic must retain an available provider response_id.
+
+Focused review proof: 84 tests passed.

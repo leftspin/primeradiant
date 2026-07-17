@@ -1,0 +1,21 @@
+Reviewer: Codex GPT-5.6 SOL
+Reasoning mode: high
+Session: 019f6dcd-cfad-7370-ac40-f1e86abe8d32
+Permission mode: read-only
+Fallback reason: Claude Fable YOLO/bypass-permissions produced no usable review and was stopped after five minutes.
+
+APPROVED
+
+Blocking findings: None.
+
+Nits: None.
+
+Revision 4:
+
+- Closes T1745-SR-003 by removing model-visible `packet_id` and its embedded `correlation_id`/`source_ref`, retaining only fixed-size hashes and bounded source prefixes.
+- Adds exact zero-ref adversarial proof against full `external_id`, `source_ref`, durable `packet_id`, and `correlation_id` leakage.
+- Defines failure `provider_usage` precisely and keeps it distinct from `preflight_prompt_tokens`.
+- Requires every failure case to prove zero inserted `AgentRun` rows, no package acknowledgement, and unchanged watcher cursor.
+- Preserves durable acknowledgement/freshness semantics and keeps Reporter presentation/readiness policy outside this Prime Radiant repair.
+
+The requirements are complete and feasible against the current source seams. Implementation may begin.
