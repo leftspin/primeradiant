@@ -683,6 +683,41 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert Enum.all?(chain.evidence_refs, &(&1 in evidence_labels))
   end
 
+  test "event envelope durably admits a source when optional story synthesis hits its token limit" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-daemon-news-story-synthesis-token-limit-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    soup_db_path = Path.join(tmp, "primeradiant-event-soup.sqlite3")
+    raw_path = Path.join(tmp, "archive.jsonl")
+
+    [row] = [envelope("Token limit story", "The bounded source was durably admitted.")]
+    [{offset, length}] = write_archive!(raw_path, [row])
+    event = committed_source_item_event("event-token-limit-news-1", raw_path, offset, length, row)
+
+    {:ok, state, report} =
+      DaemonNewsEvent.consume_event(event,
+        soup_db_path: soup_db_path,
+        tenant_id: @tenant,
+        actor_id: "flynn",
+        story_agent_loop?: true,
+        story_agent_opts: [adapter: &non_stop_story_synthesis_agent/3]
+      )
+
+    assert [%{external_id: "event-token-limit-news-1"}] = state.inputs
+    assert DurableSoupDb.table_count(soup_db_path, "inputs", @tenant) == 1
+    assert report.primeradiant_writes.durable
+    assert report.live_story_agent_loop.story_card_versions == 1
+
+    [card] = state.story_card_versions
+    assert card.status == "refused"
+  end
+
   test "story agent event persistence appends delta without clearing existing tenant rows" do
     tmp =
       Path.join(
@@ -5030,6 +5065,13 @@ defmodule Primeradiant.DaemonNewsReplayTest do
 
   defp stub_story_agent(%{role: :story_synthesis}, packet, _ctx),
     do: stub_story_synthesis(packet)
+
+  defp non_stop_story_synthesis_agent(%{role: :story_synthesis}, _packet, _ctx) do
+    raise Primeradiant.Agentic.LiveGibson.NonStopFinishError, finish_reason: "length"
+  end
+
+  defp non_stop_story_synthesis_agent(config, packet, ctx),
+    do: stub_story_agent(config, packet, ctx)
 
   defp stub_backfill_story_agent(%{role: :story_synthesis}, packet, _ctx) do
     packet

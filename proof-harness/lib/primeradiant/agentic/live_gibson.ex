@@ -1,6 +1,13 @@
 defmodule Primeradiant.Agentic.LiveGibson do
   @moduledoc false
 
+  defmodule NonStopFinishError do
+    @moduledoc false
+    defexception [:finish_reason]
+
+    def message(%{finish_reason: finish_reason}), do: "completion did not stop: #{finish_reason}"
+  end
+
   @endpoint "http://gibson:8080/v1/chat/completions"
   @model "Qwen3.6-35B-A3B-UD-Q4_K_M.gguf"
 
@@ -51,7 +58,14 @@ defmodule Primeradiant.Agentic.LiveGibson do
     decoded = Jason.decode!(body)
     model = required_string(decoded, "model")
     response_id = required_string(decoded, "id")
-    content = get_in(decoded, ["choices", Access.at(0), "message", "content"])
+    choice = get_in(decoded, ["choices", Access.at(0)]) || %{}
+    finish_reason = required_string(choice, "finish_reason")
+
+    if finish_reason != "stop" do
+      raise NonStopFinishError, finish_reason: finish_reason
+    end
+
+    content = get_in(choice, ["message", "content"])
     output = content |> json_object!() |> normalize_keys()
 
     unless String.contains?(String.downcase(model), "qwen") do
