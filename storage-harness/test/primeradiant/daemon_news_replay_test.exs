@@ -4345,6 +4345,7 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert get_in(failed_report, ["error", "exit_status"]) == 17
     assert get_in(failed_report, ["error", "message"]) =~ "simulated remote consume failure"
     assert File.exists?(failed_report["package_dir"])
+    assert File.exists?(Path.join([state_root, "packages", "ack-failure-test"]))
 
     File.rm!(Path.join(stub_state, "fail-on"))
 
@@ -4358,6 +4359,7 @@ defmodule Primeradiant.DaemonNewsReplayTest do
 
     assert retry_status == 0, retry_output
     assert File.read!(cursor_file) == "2026-06-03 05:02:00|3\n"
+    refute File.exists?(Path.join([state_root, "packages", "ack-failure-test"]))
 
     retry_report_path = retry_output |> String.split("\n", trim: true) |> List.last()
     retry_report = retry_report_path |> File.read!() |> Jason.decode!()
