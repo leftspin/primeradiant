@@ -3773,6 +3773,10 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert source =~ "--consume-packages false"
     assert source =~ "--checkpoint-cursor false"
     assert source =~ "--eurisko-soup-db PATH"
+    assert source =~ "--local-consume true|false"
+    assert source =~ ~s(LOCAL_CONSUME="false")
+    assert source =~ ~s(if [[ "$LOCAL_CONSUME" == "true" ]]; then)
+    assert source =~ ~s(if [[ "$LOCAL_CONSUME" != "true" ]]; then)
     assert source =~ "--consume-timeout-seconds N"
     assert source =~ "timeout -k 30 $CONSUME_TIMEOUT_SECONDS scripts/r1/consume_event_package.sh"
     assert source =~ "timeout -k 30 $CONSUME_TIMEOUT_SECONDS mkdir -p"
@@ -3782,6 +3786,8 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert source =~ "-o BatchMode=yes"
     assert source =~ "-o ServerAliveInterval=15"
     assert source =~ ~s(LOCK_DIR="$STATE_ROOT/live-watcher.lock")
+    assert source =~ ~s(rm -rf "$package_dir")
+    assert source =~ ~s("rm -rf '$remote_package'")
 
     assert source =~
              "EURISKO_SOUP_DB=\"/home/clu/.local/state/primeradiant/soup-api/soup.sqlite3\""
@@ -4228,6 +4234,8 @@ defmodule Primeradiant.DaemonNewsReplayTest do
 
     assert Enum.all?(consumed, &(get_in(&1, ["ack", "status"]) == "consumed"))
     assert Enum.all?(consumed, &(get_in(&1, ["ack", "event_id"]) == &1["event_id"]))
+    assert Enum.all?(consumed, &(not File.exists?(&1["package_dir"])))
+    assert File.read!(Path.join(stub_state, "cleanup-commands.log")) |> String.split("\n", trim: true) |> length() == 3
   end
 
   test "live watcher retains unconsumed range on consume failure and retries safely" do
@@ -4311,6 +4319,7 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert failed_report["unconsumed_range_retained"] == true
     assert get_in(failed_report, ["error", "exit_status"]) == 17
     assert get_in(failed_report, ["error", "message"]) =~ "simulated remote consume failure"
+    assert File.exists?(failed_report["package_dir"])
 
     File.rm!(Path.join(stub_state, "fail-on"))
 
@@ -4533,14 +4542,8 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     [consumed] = report["consumed"]
     assert Path.basename(consumed["package_dir"]) == "0001-1"
     assert String.starts_with?(consumed["package_dir"], state_root)
-
-    event =
-      consumed["package_dir"]
-      |> Path.join("event.json")
-      |> File.read!()
-      |> Jason.decode!()
-
-    assert get_in(event, ["source", "item_id"]) == hostile_id
+    assert consumed["event_id"] == "hostile-id-test-catchup-0001-1"
+    refute File.exists?(consumed["package_dir"])
   end
 
   test "live watcher records typed ack failure and holds cursor when remote ack is lost" do
@@ -4962,6 +4965,10 @@ defmodule Primeradiant.DaemonNewsReplayTest do
       echo "remote consume output noise before ack"
       printf '{"schema":"primeradiant.consume_ack.v1","status":"consumed","event_id":"%s"}\\n' "$event_id"
       echo "remote output noise after ack"
+      exit 0
+    fi
+    if [[ "$cmd" == *"rm -rf"* ]]; then
+      printf '%s\\n' "$cmd" >> "$STATE_DIR/cleanup-commands.log"
       exit 0
     fi
     exit 0

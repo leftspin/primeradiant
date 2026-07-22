@@ -4,11 +4,11 @@ set -euo pipefail
 usage() {
   cat <<'USAGE'
 Usage:
-  live_subspace_daemon_watcher_once.sh --source-db PATH --tenant TENANT --state-root DIR --eurisko-target USER@HOST --eurisko-repo DIR [--actor ACTOR] [--story-agents true|false] [--ssh-key PATH] [--eurisko-mix PATH] [--eurisko-erlang-bin DIR] [--eurisko-sqlite-bin DIR] [--limit N] [--timeout-seconds N] [--poll-interval-seconds N] [--debounce-seconds N] [--consume-timeout-seconds N] [--run-id ID] [--eurisko-soup-db PATH]
+  live_subspace_daemon_watcher_once.sh --source-db PATH --tenant TENANT --state-root DIR --eurisko-repo DIR [--local-consume true|false] [--eurisko-target USER@HOST] [--actor ACTOR] [--story-agents true|false] [--ssh-key PATH] [--eurisko-mix PATH] [--eurisko-erlang-bin DIR] [--eurisko-sqlite-bin DIR] [--limit N] [--timeout-seconds N] [--poll-interval-seconds N] [--debounce-seconds N] [--consume-timeout-seconds N] [--run-id ID] [--eurisko-soup-db PATH]
 
 Runs one live Subspace daemon SQLite DB/WAL wakeup pass on the source host,
-ships bounded Primeradiant event packages to EURISKO, and consumes them there
-into Primeradiant-owned soup/output. The source DB is read with sqlite3
+ships bounded Primeradiant event packages to EURISKO by default, or consumes
+them locally when source and consumer run on EURISKO. The source DB is read with sqlite3
 -readonly and is not copied or mutated. The watcher cursor is checkpointed
 only after each package returns a durable remote consume-ack; remote
 consumption is bounded by a remote process-group timeout so failures leave no
@@ -34,6 +34,7 @@ DEBOUNCE_SECONDS="2"
 CONSUME_TIMEOUT_SECONDS="900"
 RUN_ID=""
 EURISKO_SOUP_DB=""
+LOCAL_CONSUME="false"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -55,12 +56,23 @@ while [[ $# -gt 0 ]]; do
     --consume-timeout-seconds) CONSUME_TIMEOUT_SECONDS="$2"; shift 2 ;;
     --run-id) RUN_ID="$2"; shift 2 ;;
     --eurisko-soup-db) EURISKO_SOUP_DB="$2"; shift 2 ;;
+    --local-consume) LOCAL_CONSUME="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown argument: $1" >&2; usage >&2; exit 2 ;;
   esac
 done
 
-if [[ -z "$SOURCE_DB" || -z "$TENANT" || -z "$STATE_ROOT" || -z "$EURISKO_TARGET" || -z "$EURISKO_REPO" ]]; then
+if [[ -z "$SOURCE_DB" || -z "$TENANT" || -z "$STATE_ROOT" || -z "$EURISKO_REPO" ]]; then
+  usage >&2
+  exit 2
+fi
+
+if [[ "$LOCAL_CONSUME" != "true" && "$LOCAL_CONSUME" != "false" ]]; then
+  echo "local-consume must be true or false" >&2
+  exit 2
+fi
+
+if [[ "$LOCAL_CONSUME" != "true" && -z "$EURISKO_TARGET" ]]; then
   usage >&2
   exit 2
 fi
@@ -70,7 +82,7 @@ if [[ ! -r "$SOURCE_DB" ]]; then
   exit 1
 fi
 
-if [[ ! -r "$SSH_KEY" ]]; then
+if [[ "$LOCAL_CONSUME" != "true" && ! -r "$SSH_KEY" ]]; then
   echo "SSH key is not readable: $SSH_KEY" >&2
   exit 1
 fi
@@ -318,14 +330,18 @@ if [[ "$CATCHUP_COUNT" -eq 0 ]]; then
     done
 fi
 
-set +e
-PREPARE_OUTPUT="$(ssh "${SSH_OPTS[@]}" -n -i "$SSH_KEY" "$EURISKO_TARGET" "timeout -k 30 $CONSUME_TIMEOUT_SECONDS mkdir -p '$EURISKO_HANDOFF_ROOT' '$EURISKO_RUN_ROOT'" 2>&1)"
-PREPARE_STATUS=$?
-set -e
-if [[ "$PREPARE_STATUS" -ne 0 ]]; then
-  package_failure_report "remote_prepare_failed" "remote_prepare" "ssh mkdir" \
-    "$PREPARE_STATUS" "$PREPARE_OUTPUT" "" "" "" ""
-  exit "$PREPARE_STATUS"
+if [[ "$LOCAL_CONSUME" == "true" ]]; then
+  mkdir -p "$EURISKO_RUN_ROOT"
+else
+  set +e
+  PREPARE_OUTPUT="$(ssh "${SSH_OPTS[@]}" -n -i "$SSH_KEY" "$EURISKO_TARGET" "timeout -k 30 $CONSUME_TIMEOUT_SECONDS mkdir -p '$EURISKO_HANDOFF_ROOT' '$EURISKO_RUN_ROOT'" 2>&1)"
+  PREPARE_STATUS=$?
+  set -e
+  if [[ "$PREPARE_STATUS" -ne 0 ]]; then
+    package_failure_report "remote_prepare_failed" "remote_prepare" "ssh mkdir" \
+      "$PREPARE_STATUS" "$PREPARE_OUTPUT" "" "" "" ""
+    exit "$PREPARE_STATUS"
+  fi
 fi
 
 PACKAGE_LIST="$STATE_ROOT/$RUN_ID-packages.jsonl"
@@ -346,6 +362,10 @@ while IFS= read -r package_entry; do
   package_name="$(basename "$package_dir")"
   remote_package="$EURISKO_HANDOFF_ROOT/$package_name"
 
+  if [[ "$LOCAL_CONSUME" == "true" ]]; then
+    remote_package="$package_dir"
+  fi
+
   if [[ -z "$package_cursor" || "$package_cursor" == "null" ]]; then
     package_failure_report "package_cursor_missing" "package_cursor" "manifest packages[].cursor" \
       1 "package entry has no cursor; cannot checkpoint after ack" \
@@ -362,22 +382,24 @@ while IFS= read -r package_entry; do
     exit 1
   fi
 
-  SHIP_STDERR="$STATE_ROOT/$RUN_ID-ship-stderr.txt"
-  set +e
-  SHIP_OUTPUT="$(tar -C "$package_dir" -cf - . 2>"$SHIP_STDERR" |
-    ssh "${SSH_OPTS[@]}" -i "$SSH_KEY" "$EURISKO_TARGET" "timeout -k 30 $CONSUME_TIMEOUT_SECONDS mkdir -p '$remote_package' && timeout -k 30 $CONSUME_TIMEOUT_SECONDS tar -C '$remote_package' -xf -" 2>&1)"
-  SHIP_STATUS=$?
-  set -e
-  if [[ -s "$SHIP_STDERR" ]]; then
-    SHIP_OUTPUT="$SHIP_OUTPUT
+  if [[ "$LOCAL_CONSUME" != "true" ]]; then
+    SHIP_STDERR="$STATE_ROOT/$RUN_ID-ship-stderr.txt"
+    set +e
+    SHIP_OUTPUT="$(tar -C "$package_dir" -cf - . 2>"$SHIP_STDERR" |
+      ssh "${SSH_OPTS[@]}" -i "$SSH_KEY" "$EURISKO_TARGET" "timeout -k 30 $CONSUME_TIMEOUT_SECONDS mkdir -p '$remote_package' && timeout -k 30 $CONSUME_TIMEOUT_SECONDS tar -C '$remote_package' -xf -" 2>&1)"
+    SHIP_STATUS=$?
+    set -e
+    if [[ -s "$SHIP_STDERR" ]]; then
+      SHIP_OUTPUT="$SHIP_OUTPUT
 local tar stderr: $(cat "$SHIP_STDERR")"
-  fi
-  rm -f "$SHIP_STDERR"
-  if [[ "$SHIP_STATUS" -ne 0 ]]; then
-    package_failure_report "package_ship_failed" "package_ship" "tar | ssh tar" \
-      "$SHIP_STATUS" "$SHIP_OUTPUT" \
-      "$package_dir" "$remote_package" "$package_event_id" "$package_cursor"
-    exit "$SHIP_STATUS"
+    fi
+    rm -f "$SHIP_STDERR"
+    if [[ "$SHIP_STATUS" -ne 0 ]]; then
+      package_failure_report "package_ship_failed" "package_ship" "tar | ssh tar" \
+        "$SHIP_STATUS" "$SHIP_OUTPUT" \
+        "$package_dir" "$remote_package" "$package_event_id" "$package_cursor"
+      exit "$SHIP_STATUS"
+    fi
   fi
 
   STORY_AGENTS_ARG=""
@@ -388,8 +410,13 @@ local tar stderr: $(cat "$SHIP_STDERR")"
   CONSUME_CMD="cd '$EURISKO_REPO/storage-harness' && PATH='$(dirname "$EURISKO_MIX")':'$EURISKO_ERLANG_BIN':'$EURISKO_SQLITE_BIN':\$PATH timeout -k 30 $CONSUME_TIMEOUT_SECONDS scripts/r1/consume_event_package.sh --package-dir '$remote_package' --run-root '$EURISKO_RUN_ROOT' --tenant '$TENANT' --actor '$ACTOR'$STORY_AGENTS_ARG --soup-db '$EURISKO_SOUP_DB' && cat '$EURISKO_RUN_ROOT/$package_event_id/consume-ack.json'"
 
   set +e
-  CONSUME_OUTPUT="$(ssh "${SSH_OPTS[@]}" -n -i "$SSH_KEY" "$EURISKO_TARGET" "$CONSUME_CMD" 2>&1)"
-  CONSUME_STATUS=$?
+  if [[ "$LOCAL_CONSUME" == "true" ]]; then
+    CONSUME_OUTPUT="$(cd "$EURISKO_REPO/storage-harness" && PATH="$(dirname "$EURISKO_MIX"):$EURISKO_ERLANG_BIN:$EURISKO_SQLITE_BIN:$PATH" timeout -k 30 "$CONSUME_TIMEOUT_SECONDS" scripts/r1/consume_event_package.sh --package-dir "$package_dir" --run-root "$EURISKO_RUN_ROOT" --tenant "$TENANT" --actor "$ACTOR"$STORY_AGENTS_ARG --soup-db "$EURISKO_SOUP_DB" && cat "$EURISKO_RUN_ROOT/$package_event_id/consume-ack.json" 2>&1)"
+    CONSUME_STATUS=$?
+  else
+    CONSUME_OUTPUT="$(ssh "${SSH_OPTS[@]}" -n -i "$SSH_KEY" "$EURISKO_TARGET" "$CONSUME_CMD" 2>&1)"
+    CONSUME_STATUS=$?
+  fi
   set -e
   if [[ "$CONSUME_STATUS" -ne 0 ]]; then
     package_failure_report "package_consume_failed" "package_consume" "ssh timeout consume_event_package.sh" \
@@ -411,6 +438,11 @@ local tar stderr: $(cat "$SHIP_STDERR")"
   printf "%s\n" "$package_cursor" > "$CURSOR_FILE.tmp.$$"
   mv "$CURSOR_FILE.tmp.$$" "$CURSOR_FILE"
   LAST_ACKED_CURSOR="$package_cursor"
+
+  rm -rf "$package_dir"
+  if [[ "$LOCAL_CONSUME" != "true" ]]; then
+    ssh "${SSH_OPTS[@]}" -n -i "$SSH_KEY" "$EURISKO_TARGET" "rm -rf '$remote_package'"
+  fi
 
   jq -n \
     --arg package_dir "$package_dir" \
