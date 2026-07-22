@@ -3805,8 +3805,8 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert service =~
              "ExecStart=/home/clu/src/primeradiant/storage-harness/scripts/r1/live_subspace_daemon_watcher_once.sh"
 
-    assert service =~
-             "--source-db /Volumes/Microverse/openclaw/state/.openclaw/subspace-daemon/data/daemon.sqlite3"
+    assert service =~ "--source-db /home/clu/.openclaw/subspace-daemon/data/daemon.sqlite3"
+    refute service =~ "User=clu"
 
     assert service =~ "--tenant 00000000-0000-0000-0000-00000000t328"
     assert service =~ "--state-root /home/clu/.local/state/primeradiant/t328-live-watcher"
