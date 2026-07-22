@@ -4469,6 +4469,10 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     File.mkdir_p!(lock_dir)
     File.write!(Path.join(lock_dir, "pid"), System.pid() <> "\n")
 
+    holder_package_dir = Path.join([state_root, "packages", "holder-run", "packages", "0001-1"])
+    File.mkdir_p!(holder_package_dir)
+    File.write!(Path.join(holder_package_dir, "event.json"), "holder package")
+
     watcher_script = Path.expand("scripts/r1/live_subspace_daemon_watcher_once.sh")
 
     {output, status} =
@@ -4498,6 +4502,7 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert status == 4
     assert output =~ "already running"
     assert File.exists?(lock_dir)
+    assert File.regular?(Path.join(holder_package_dir, "event.json"))
     refute File.exists?(Path.join(state_root, "cursor.txt"))
   end
 

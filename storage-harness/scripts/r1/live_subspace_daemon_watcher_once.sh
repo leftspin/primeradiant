@@ -116,10 +116,6 @@ if [[ -z "$EURISKO_SOUP_DB" ]]; then
   EURISKO_SOUP_DB="/home/clu/.local/state/primeradiant/soup-api/soup.sqlite3"
 fi
 
-if [[ -d "$STATE_ROOT/packages" ]]; then
-  find -P "$STATE_ROOT/packages" -mindepth 1 -maxdepth 1 -type d -exec rm -rf {} +
-fi
-
 mkdir -p "$STATE_ROOT" "$PACKAGE_ROOT" "$LOCAL_RUN_ROOT"
 
 LOCK_DIR="$STATE_ROOT/live-watcher.lock"
@@ -157,6 +153,10 @@ cleanup_lock() {
   fi
 }
 trap cleanup_lock EXIT
+
+if [[ -d "$STATE_ROOT/packages" ]]; then
+  find -P "$STATE_ROOT/packages" -mindepth 1 -maxdepth 1 -type d -exec rm -rf {} +
+fi
 
 MANIFESTS_JSONL="$STATE_ROOT/$RUN_ID-manifests.jsonl"
 : > "$MANIFESTS_JSONL"
