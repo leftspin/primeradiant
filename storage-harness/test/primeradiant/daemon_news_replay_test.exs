@@ -3796,6 +3796,30 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert emitter_source =~ ~s(sqlite3 -readonly -cmd ".timeout 10000" -json "$SOURCE_DB")
   end
 
+  test "EURISKO watcher service uses the local bounded-consume configuration" do
+    service =
+      Path.expand("deploy/eurisko/primeradiant-subspace-watcher.service")
+      |> File.read!()
+
+    assert service =~ "WorkingDirectory=/home/clu/src/primeradiant/storage-harness"
+    assert service =~
+             "ExecStart=/home/clu/src/primeradiant/storage-harness/scripts/r1/live_subspace_daemon_watcher_once.sh"
+
+    assert service =~
+             "--source-db /Volumes/Microverse/openclaw/state/.openclaw/subspace-daemon/data/daemon.sqlite3"
+
+    assert service =~ "--tenant 00000000-0000-0000-0000-00000000t328"
+    assert service =~ "--state-root /home/clu/.local/state/primeradiant/t328-live-watcher"
+    assert service =~ "--eurisko-repo /home/clu/src/primeradiant"
+    assert service =~ "--local-consume true"
+    assert service =~ "--limit 20"
+    assert service =~ "--timeout-seconds 600"
+    assert service =~ "--poll-interval-seconds 2"
+    assert service =~ "--debounce-seconds 2"
+    assert service =~ "Restart=always"
+    assert service =~ "RestartSec=3"
+  end
+
   test "event admission hydration stays bounded at production reader-delta cardinality" do
     tmp =
       Path.join(
