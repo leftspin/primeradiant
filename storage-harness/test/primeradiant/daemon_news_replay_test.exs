@@ -718,6 +718,34 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert card.status == "refused"
   end
 
+  test "event envelope durably admits a source when optional story identity has an invalid response shape" do
+    tmp = Path.join(System.tmp_dir!(), "primeradiant-daemon-news-identity-response-shape-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    soup_db_path = Path.join(tmp, "primeradiant-event-soup.sqlite3")
+    raw_path = Path.join(tmp, "archive.jsonl")
+    [row] = [envelope("Response shape story", "The source admission remains durable.")]
+    [{offset, length}] = write_archive!(raw_path, [row])
+    event = committed_source_item_event("event-identity-response-shape-news-1", raw_path, offset, length, row)
+
+    {:ok, state, report} =
+      DaemonNewsEvent.consume_event(event,
+        soup_db_path: soup_db_path,
+        tenant_id: @tenant,
+        actor_id: "flynn",
+        story_agent_loop?: true,
+        story_agent_opts: [adapter: &response_shape_story_identity_agent/3]
+      )
+
+    assert [%{external_id: "event-identity-response-shape-news-1"}] = state.inputs
+    assert DurableSoupDb.table_count(soup_db_path, "inputs", @tenant) == 1
+    assert state.agent_runs == []
+    assert state.stories == []
+    assert report.live_story_agent_loop.status == :unavailable
+    assert report.live_story_agent_loop.reason == "live_gibson_response_shape"
+  end
+
   test "story agent event persistence appends delta without clearing existing tenant rows" do
     tmp =
       Path.join(
@@ -5110,6 +5138,13 @@ defmodule Primeradiant.DaemonNewsReplayTest do
   end
 
   defp response_shape_story_synthesis_agent(config, packet, ctx),
+    do: stub_story_agent(config, packet, ctx)
+
+  defp response_shape_story_identity_agent(%{role: :story_identity}, _packet, _ctx) do
+    raise Primeradiant.Agentic.LiveGibson.ResponseShapeError, field: "model"
+  end
+
+  defp response_shape_story_identity_agent(config, packet, ctx),
     do: stub_story_agent(config, packet, ctx)
 
   defp stub_backfill_story_agent(%{role: :story_synthesis}, packet, _ctx) do
