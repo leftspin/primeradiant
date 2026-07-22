@@ -719,7 +719,12 @@ defmodule Primeradiant.DaemonNewsReplayTest do
   end
 
   test "event envelope durably admits a source when optional story identity has an invalid response shape" do
-    tmp = Path.join(System.tmp_dir!(), "primeradiant-daemon-news-identity-response-shape-#{System.unique_integer([:positive])}")
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-daemon-news-identity-response-shape-#{System.unique_integer([:positive])}"
+      )
+
     File.mkdir_p!(tmp)
     on_exit(fn -> File.rm_rf!(tmp) end)
 
@@ -727,7 +732,15 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     raw_path = Path.join(tmp, "archive.jsonl")
     [row] = [envelope("Response shape story", "The source admission remains durable.")]
     [{offset, length}] = write_archive!(raw_path, [row])
-    event = committed_source_item_event("event-identity-response-shape-news-1", raw_path, offset, length, row)
+
+    event =
+      committed_source_item_event(
+        "event-identity-response-shape-news-1",
+        raw_path,
+        offset,
+        length,
+        row
+      )
 
     {:ok, state, report} =
       DaemonNewsEvent.consume_event(event,
@@ -3830,6 +3843,7 @@ defmodule Primeradiant.DaemonNewsReplayTest do
       |> File.read!()
 
     assert service =~ "WorkingDirectory=/home/clu/src/primeradiant/storage-harness"
+
     assert service =~
              "ExecStart=/home/clu/src/primeradiant/storage-harness/scripts/r1/live_subspace_daemon_watcher_once.sh"
 
@@ -4287,7 +4301,11 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert Enum.all?(consumed, &(get_in(&1, ["ack", "status"]) == "consumed"))
     assert Enum.all?(consumed, &(get_in(&1, ["ack", "event_id"]) == &1["event_id"]))
     assert Enum.all?(consumed, &(not File.exists?(&1["package_dir"])))
-    assert File.read!(Path.join(stub_state, "cleanup-commands.log")) |> String.split("\n", trim: true) |> length() == 2
+
+    assert File.read!(Path.join(stub_state, "cleanup-commands.log"))
+           |> String.split("\n", trim: true)
+           |> length() == 2
+
     assert File.read!(Path.join(stub_state, "consume-count")) |> String.trim() == "2"
   end
 
