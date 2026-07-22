@@ -205,70 +205,57 @@ package_failure_report() {
 }
 
 CATCHUP_COUNT=0
-CATCHUP_PASS=0
-while :; do
-  CATCHUP_PASS=$((CATCHUP_PASS + 1))
-  CATCHUP_ROOT="$PACKAGE_ROOT/catchup-passes/$(printf '%04d' "$CATCHUP_PASS")"
-  EMIT_ARGS=(
-    --source-db "$SOURCE_DB"
-    --tenant "$TENANT"
-    --package-root "$CATCHUP_ROOT"
-    --limit "$LIMIT"
-    --run-id "$RUN_ID-catchup-$(printf '%04d' "$CATCHUP_PASS")"
-  )
-  if [[ -n "$CURRENT_CURSOR" ]]; then
-    EMIT_ARGS+=(--after-cursor "$CURRENT_CURSOR")
-  fi
+CATCHUP_ROOT="$PACKAGE_ROOT/catchup-passes/0001"
+EMIT_ARGS=(
+  --source-db "$SOURCE_DB"
+  --tenant "$TENANT"
+  --package-root "$CATCHUP_ROOT"
+  --limit "$LIMIT"
+  --run-id "$RUN_ID-catchup-0001"
+)
+if [[ -n "$CURRENT_CURSOR" ]]; then
+  EMIT_ARGS+=(--after-cursor "$CURRENT_CURSOR")
+fi
 
-  set +e
-  CATCHUP_OUTPUT="$("$EMITTER" "${EMIT_ARGS[@]}" 2>&1)"
-  CATCHUP_STATUS=$?
-  set -e
-  CATCHUP_MANIFEST="$(printf "%s" "$CATCHUP_OUTPUT" | tail -n 1)"
-  if [[ "$CATCHUP_STATUS" -ne 0 ]]; then
-    CATCHUP_FAILURE_MANIFEST="$CATCHUP_ROOT/manifest.json"
-    FAILED_REPORT="$STATE_ROOT/$RUN_ID-failed-report.json"
-    jq -n \
-      --arg run_id "$RUN_ID" \
-      --arg source_db "$SOURCE_DB" \
-      --arg after_cursor "$CURRENT_CURSOR" \
-      --arg failure_manifest "$CATCHUP_FAILURE_MANIFEST" \
-      --arg emitter_output "$CATCHUP_OUTPUT" \
-      --argjson exit_status "$CATCHUP_STATUS" \
-      '{
-        run_id: $run_id,
-        source_db_path: $source_db,
-        source_host: "tars",
-        consume_host: "eurisko",
-        source_mode: "live_subspace_daemon_watcher_once",
-        status: "source_db_cursor_read_failed",
-        after_cursor: $after_cursor,
-        failed_stage: "cursor_catchup",
-        failure_manifest_path: $failure_manifest,
-        error: {
-          command: "emit_subspace_daemon_cursor_event_packages.sh",
-          exit_status: $exit_status,
-          message: $emitter_output
-        }
-      }' > "$FAILED_REPORT"
-    printf "live watcher cursor catchup failed; report: %s\n" "$FAILED_REPORT" >&2
-    exit "$CATCHUP_STATUS"
-  fi
-  jq -n --arg kind "cursor_catchup" --arg manifest_path "$CATCHUP_MANIFEST" \
-    '{kind: $kind, manifest_path: $manifest_path}' >> "$MANIFESTS_JSONL"
+set +e
+CATCHUP_OUTPUT="$("$EMITTER" "${EMIT_ARGS[@]}" 2>&1)"
+CATCHUP_STATUS=$?
+set -e
+CATCHUP_MANIFEST="$(printf "%s" "$CATCHUP_OUTPUT" | tail -n 1)"
+if [[ "$CATCHUP_STATUS" -ne 0 ]]; then
+  CATCHUP_FAILURE_MANIFEST="$CATCHUP_ROOT/manifest.json"
+  FAILED_REPORT="$STATE_ROOT/$RUN_ID-failed-report.json"
+  jq -n \
+    --arg run_id "$RUN_ID" \
+    --arg source_db "$SOURCE_DB" \
+    --arg after_cursor "$CURRENT_CURSOR" \
+    --arg failure_manifest "$CATCHUP_FAILURE_MANIFEST" \
+    --arg emitter_output "$CATCHUP_OUTPUT" \
+    --argjson exit_status "$CATCHUP_STATUS" \
+    '{
+      run_id: $run_id,
+      source_db_path: $source_db,
+      source_host: "tars",
+      consume_host: "eurisko",
+      source_mode: "live_subspace_daemon_watcher_once",
+      status: "source_db_cursor_read_failed",
+      after_cursor: $after_cursor,
+      failed_stage: "cursor_catchup",
+      failure_manifest_path: $failure_manifest,
+      error: {
+        command: "emit_subspace_daemon_cursor_event_packages.sh",
+        exit_status: $exit_status,
+        message: $emitter_output
+      }
+    }' > "$FAILED_REPORT"
+  printf "live watcher cursor catchup failed; report: %s\n" "$FAILED_REPORT" >&2
+  exit "$CATCHUP_STATUS"
+fi
+jq -n --arg kind "cursor_catchup" --arg manifest_path "$CATCHUP_MANIFEST" \
+  '{kind: $kind, manifest_path: $manifest_path}' >> "$MANIFESTS_JSONL"
 
-  EMITTED_COUNT="$(jq -r '.emitted_count' "$CATCHUP_MANIFEST")"
-  NEXT_CURSOR="$(jq -r '.next_cursor' "$CATCHUP_MANIFEST")"
-  CATCHUP_COUNT=$((CATCHUP_COUNT + EMITTED_COUNT))
-  if [[ -n "$NEXT_CURSOR" && "$NEXT_CURSOR" != "null" ]]; then
-    # Advance only the in-memory emission cursor; the durable cursor file is
-    # checkpointed per package after remote consume-ack.
-    CURRENT_CURSOR="$NEXT_CURSOR"
-  fi
-  if [[ "$EMITTED_COUNT" -lt "$LIMIT" ]]; then
-    break
-  fi
-done
+EMITTED_COUNT="$(jq -r '.emitted_count' "$CATCHUP_MANIFEST")"
+CATCHUP_COUNT="$EMITTED_COUNT"
 
 WATCH_REPORT=""
 if [[ "$CATCHUP_COUNT" -eq 0 ]]; then

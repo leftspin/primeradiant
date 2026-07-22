@@ -4147,7 +4147,7 @@ defmodule Primeradiant.DaemonNewsReplayTest do
              })
   end
 
-  test "live watcher checkpoints cursor only after per-package durable remote ack" do
+  test "live watcher bounds catchup to limit and checkpoints only consumed packages" do
     tmp =
       Path.join(
         System.tmp_dir!(),
@@ -4206,7 +4206,7 @@ defmodule Primeradiant.DaemonNewsReplayTest do
           "--run-id",
           "ack-success-test",
           "--limit",
-          "10"
+          "2"
         ],
         stderr_to_stdout: true,
         env: [{"PATH", bin_dir <> ":" <> System.get_env("PATH")}]
@@ -4219,23 +4219,24 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     report = report_path |> File.read!() |> Jason.decode!()
 
     assert report["cursor_checkpointing"] == "durable_remote_ack_per_package"
-    assert report["checkpointed_cursor"] == "2026-06-03 05:02:00|3"
+    assert report["cursor_catchup_before_wait_count"] == 2
+    assert report["checkpointed_cursor"] == "2026-06-03 05:01:00|2"
     assert report["consume_timeout_seconds"] == 900
-    assert File.read!(Path.join(state_root, "cursor.txt")) == "2026-06-03 05:02:00|3\n"
+    assert File.read!(Path.join(state_root, "cursor.txt")) == "2026-06-03 05:01:00|2\n"
 
     consumed = report["consumed"]
-    assert length(consumed) == 3
+    assert length(consumed) == 2
 
     assert Enum.map(consumed, & &1["cursor"]) == [
              "2026-06-03 05:00:00|1",
-             "2026-06-03 05:01:00|2",
-             "2026-06-03 05:02:00|3"
+             "2026-06-03 05:01:00|2"
            ]
 
     assert Enum.all?(consumed, &(get_in(&1, ["ack", "status"]) == "consumed"))
     assert Enum.all?(consumed, &(get_in(&1, ["ack", "event_id"]) == &1["event_id"]))
     assert Enum.all?(consumed, &(not File.exists?(&1["package_dir"])))
-    assert File.read!(Path.join(stub_state, "cleanup-commands.log")) |> String.split("\n", trim: true) |> length() == 3
+    assert File.read!(Path.join(stub_state, "cleanup-commands.log")) |> String.split("\n", trim: true) |> length() == 2
+    assert File.read!(Path.join(stub_state, "consume-count")) |> String.trim() == "2"
   end
 
   test "live watcher retains unconsumed range on consume failure and retries safely" do
