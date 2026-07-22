@@ -8,6 +8,13 @@ defmodule Primeradiant.Agentic.LiveGibson do
     def message(%{finish_reason: finish_reason}), do: "completion did not stop: #{finish_reason}"
   end
 
+  defmodule ResponseShapeError do
+    @moduledoc false
+    defexception [:field]
+
+    def message(%{field: field}), do: "live Gibson response omitted #{field}"
+  end
+
   @endpoint "http://gibson:8080/v1/chat/completions"
   @model "Qwen3.6-35B-A3B-UD-Q4_K_M.gguf"
 
@@ -107,7 +114,7 @@ defmodule Primeradiant.Agentic.LiveGibson do
   defp required_string(map, key) do
     case map[key] do
       value when is_binary(value) and value != "" -> value
-      _ -> raise "live Gibson response omitted #{key}"
+      _ -> raise ResponseShapeError, field: key
     end
   end
 

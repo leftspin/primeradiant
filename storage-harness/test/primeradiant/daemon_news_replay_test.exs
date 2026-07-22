@@ -683,7 +683,7 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert Enum.all?(chain.evidence_refs, &(&1 in evidence_labels))
   end
 
-  test "event envelope durably admits a source when optional story synthesis hits its token limit" do
+  test "event envelope durably admits a source when optional story synthesis has an invalid response shape" do
     tmp =
       Path.join(
         System.tmp_dir!(),
@@ -706,7 +706,7 @@ defmodule Primeradiant.DaemonNewsReplayTest do
         tenant_id: @tenant,
         actor_id: "flynn",
         story_agent_loop?: true,
-        story_agent_opts: [adapter: &non_stop_story_synthesis_agent/3]
+        story_agent_opts: [adapter: &response_shape_story_synthesis_agent/3]
       )
 
     assert [%{external_id: "event-token-limit-news-1"}] = state.inputs
@@ -5098,11 +5098,11 @@ defmodule Primeradiant.DaemonNewsReplayTest do
   defp stub_story_agent(%{role: :story_synthesis}, packet, _ctx),
     do: stub_story_synthesis(packet)
 
-  defp non_stop_story_synthesis_agent(%{role: :story_synthesis}, _packet, _ctx) do
-    raise Primeradiant.Agentic.LiveGibson.NonStopFinishError, finish_reason: "length"
+  defp response_shape_story_synthesis_agent(%{role: :story_synthesis}, _packet, _ctx) do
+    raise Primeradiant.Agentic.LiveGibson.ResponseShapeError, field: "model"
   end
 
-  defp non_stop_story_synthesis_agent(config, packet, ctx),
+  defp response_shape_story_synthesis_agent(config, packet, ctx),
     do: stub_story_agent(config, packet, ctx)
 
   defp stub_backfill_story_agent(%{role: :story_synthesis}, packet, _ctx) do

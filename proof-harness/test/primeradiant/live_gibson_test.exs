@@ -160,4 +160,27 @@ defmodule Primeradiant.Agentic.LiveGibsonTest do
       LiveGibson.invoke(:story_synthesis, config, %{body: "bounded packet"})
     end
   end
+
+  test "raises a typed error when the completion omits a required response field" do
+    tmp = Path.join(System.tmp_dir!(), "primeradiant-live-gibson-response-shape-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    curl = Path.join(tmp, "curl")
+    File.write!(curl, """
+    #!/usr/bin/env bash
+    printf '%s\\n' '{"id":"chatcmpl-test","choices":[{"finish_reason":"stop","message":{"content":"{\\"ok\\":true}"}}]}'
+    """)
+    File.chmod!(curl, 0o755)
+
+    old_path = System.get_env("PATH") || ""
+    System.put_env("PATH", tmp <> ":" <> old_path)
+    on_exit(fn -> System.put_env("PATH", old_path) end)
+
+    config = %{role: :story_synthesis, system_prompt: "Return JSON.", task_prompt: "Synthesize.", output_schema: %{"ok" => "boolean"}, max_tokens: 32}
+
+    assert_raise LiveGibson.ResponseShapeError, fn ->
+      LiveGibson.invoke(:story_synthesis, config, %{body: "bounded packet"})
+    end
+  end
 end

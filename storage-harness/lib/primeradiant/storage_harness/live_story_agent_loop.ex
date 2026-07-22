@@ -781,6 +781,9 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
             "non-stop-finish"
           )
 
+        _error in [LiveGibson.ResponseShapeError] ->
+          malformed_story_synthesis_refusal(config, packet, ctx)
+
         _error in [Jason.DecodeError] ->
           malformed_story_synthesis_refusal(config, packet, ctx)
       end
