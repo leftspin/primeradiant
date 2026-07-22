@@ -5650,7 +5650,7 @@ defmodule Primeradiant.DaemonNewsReplayTest do
 
   defp refusing_story_synthesis_agent_with_config_assertion(config, packet, ctx) do
     assert config.role == :story_synthesis
-    assert config.max_tokens == 8192
+    assert config.max_tokens == 640
 
     assert get_in(config.output_schema, [:topic_salience, :salience_explanation, :state]) ==
              "complete"

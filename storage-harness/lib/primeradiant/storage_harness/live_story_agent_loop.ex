@@ -2894,7 +2894,7 @@ defmodule Primeradiant.StorageHarness.LiveStoryAgentLoop do
         }
       }
     )
-    |> Map.put(:max_tokens, 8192)
+    |> Map.put(:max_tokens, 640)
   end
 
   defp config(role, version, task_prompt, output_schema) do
