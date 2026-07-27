@@ -110,10 +110,10 @@ git fetch origin main
 test "$T1430_REVIEWED_SHA" = "$(git rev-parse HEAD)"
 test "$T1430_REVIEWED_SHA" = "$(git rev-parse origin/main)"
 test -z "$(git status --porcelain=v1 --untracked-files=all)"
-git cat-file -e "$T1430_REVIEWED_SHA:storage-harness/scripts/r1/live_subspace_daemon_watcher_once.sh"
-git cat-file -e "$T1430_REVIEWED_SHA:storage-harness/deploy/tars/t328-live-watcher-node-launcher.mjs"
-git cat-file -e "$T1430_REVIEWED_SHA:storage-harness/deploy/tars/t328-live-watcher-loop.sh"
-git cat-file -e "$T1430_REVIEWED_SHA:storage-harness/deploy/tars/ai.primeradiant.t328-daemon-db-watcher.plist"
+git cat-file -e "${T1430_REVIEWED_SHA}:storage-harness/scripts/r1/live_subspace_daemon_watcher_once.sh"
+git cat-file -e "${T1430_REVIEWED_SHA}:storage-harness/deploy/tars/t328-live-watcher-node-launcher.mjs"
+git cat-file -e "${T1430_REVIEWED_SHA}:storage-harness/deploy/tars/t328-live-watcher-loop.sh"
+git cat-file -e "${T1430_REVIEWED_SHA}:storage-harness/deploy/tars/ai.primeradiant.t328-daemon-db-watcher.plist"
 ```
 
 Required transfer gates:
