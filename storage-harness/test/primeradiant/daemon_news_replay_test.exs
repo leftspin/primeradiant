@@ -3837,29 +3837,114 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert emitter_source =~ ~s(sqlite3 -readonly -cmd ".timeout 10000" -json "$SOURCE_DB")
   end
 
-  test "EURISKO watcher service uses the local bounded-consume configuration" do
-    service =
-      Path.expand("deploy/eurisko/primeradiant-subspace-watcher.service")
+  test "production watcher deployment reads TARS and pushes bounded packages to EURISKO" do
+    deploy_root = Path.expand("deploy/tars")
+    plist = File.read!(Path.join(deploy_root, "ai.primeradiant.t328-daemon-db-watcher.plist"))
+    launcher = File.read!(Path.join(deploy_root, "t328-live-watcher-node-launcher.mjs"))
+    loop = File.read!(Path.join(deploy_root, "t328-live-watcher-loop.sh"))
+
+    assert plist =~ "<string>/opt/homebrew/bin/node</string>"
+    assert plist =~ "<string>ai.primeradiant.t328-daemon-db-watcher</string>"
+
+    assert plist =~
+             "<string>/Users/mike/.local/libexec/primeradiant/t328-live-watcher-node-launcher.mjs</string>"
+
+    assert launcher =~
+             ~s(const dbPath = "/Volumes/Microverse/openclaw/state/.openclaw/subspace-daemon/data/daemon.sqlite3")
+
+    assert launcher =~ "run(\"/bin/bash\", [loopPath])"
+    assert loop =~ "STATE_ROOT=/Users/mike/.local/state/primeradiant/t328-live-watcher"
+    assert loop =~ "--eurisko-target clu@eurisko"
+    assert loop =~ "--eurisko-repo /home/clu/src/primeradiant"
+    assert loop =~ "--limit 20"
+    assert loop =~ "--timeout-seconds 600"
+    refute loop =~ "--local-consume true"
+    refute File.exists?(Path.expand("deploy/eurisko/primeradiant-subspace-watcher.service"))
+  end
+
+  test "TARS Node supervisor terminates the complete watcher process group" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-watcher-process-group-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    child_pid_path = Path.join(tmp, "child.pid")
+    loop_path = Path.join(tmp, "watcher-loop.sh")
+    launcher_path = Path.join(tmp, "watcher-launcher.mjs")
+
+    File.write!(loop_path, """
+    #!/usr/bin/env bash
+    set -euo pipefail
+    child_pid_path="#{child_pid_path}"
+    sleep 300 &
+    child=$!
+    printf '%s\\n' "$child" > "$child_pid_path"
+    trap 'wait "$child" 2>/dev/null || true; exit 0' TERM INT
+    wait "$child"
+    """)
+
+    launcher_source =
+      Path.expand("deploy/tars/t328-live-watcher-node-launcher.mjs")
       |> File.read!()
+      |> String.replace(
+        "/Users/mike/.local/libexec/primeradiant/t328-live-watcher-loop.sh",
+        loop_path
+      )
+      |> String.replace("/Users/mike/.openclaw/workspace", tmp)
 
-    assert service =~ "WorkingDirectory=/home/clu/src/primeradiant/storage-harness"
+    File.write!(launcher_path, launcher_source)
+    File.chmod!(loop_path, 0o755)
 
-    assert service =~
-             "ExecStart=/home/clu/src/primeradiant/storage-harness/scripts/r1/live_subspace_daemon_watcher_once.sh"
+    node = System.find_executable("node") || flunk("node executable is required")
 
-    assert service =~ "--source-db /home/clu/.openclaw/subspace-daemon/data/daemon.sqlite3"
-    refute service =~ "User=clu"
+    port =
+      Port.open(
+        {:spawn_executable, node},
+        [:binary, :exit_status, :stderr_to_stdout, args: [launcher_path]]
+      )
 
-    assert service =~ "--tenant 00000000-0000-0000-0000-00000000t328"
-    assert service =~ "--state-root /home/clu/.local/state/primeradiant/t328-live-watcher"
-    assert service =~ "--eurisko-repo /home/clu/src/primeradiant"
-    assert service =~ "--local-consume true"
-    assert service =~ "--limit 20"
-    assert service =~ "--timeout-seconds 600"
-    assert service =~ "--poll-interval-seconds 2"
-    assert service =~ "--debounce-seconds 2"
-    assert service =~ "Restart=always"
-    assert service =~ "RestartSec=3"
+    launcher_pid = Port.info(port, :os_pid) |> elem(1)
+
+    wait_until = fn wait_until, predicate, attempts ->
+      cond do
+        predicate.() ->
+          :ok
+
+        attempts == 0 ->
+          flunk("timed out waiting for watcher process state")
+
+        true ->
+          Process.sleep(50)
+          wait_until.(wait_until, predicate, attempts - 1)
+      end
+    end
+
+    wait_until.(wait_until, fn -> File.exists?(child_pid_path) end, 100)
+    child_pid = child_pid_path |> File.read!() |> String.trim()
+
+    assert {_output, 0} = System.cmd("kill", ["-0", child_pid], stderr_to_stdout: true)
+    assert {_output, 0} = System.cmd("kill", ["-TERM", Integer.to_string(launcher_pid)])
+
+    receive do
+      {^port, {:exit_status, status}} -> assert status in [0, 130, 143]
+    after
+      7_000 -> flunk("Node supervisor did not exit after SIGTERM")
+    end
+
+    wait_until.(
+      wait_until,
+      fn ->
+        case System.cmd("kill", ["-0", child_pid], stderr_to_stdout: true) do
+          {_output, 0} -> false
+          {_output, _status} -> true
+        end
+      end,
+      100
+    )
   end
 
   test "event admission hydration stays bounded at production reader-delta cardinality" do
@@ -4621,6 +4706,34 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert Path.basename(consumed["package_dir"]) == "0001-1"
     assert String.starts_with?(consumed["package_dir"], state_root)
     assert consumed["event_id"] == "hostile-id-test-catchup-0001-1"
+
+    [package_record] =
+      Path.join(state_root, "hostile-id-test-packages.jsonl")
+      |> File.read!()
+      |> String.split("\n", trim: true)
+      |> Enum.map(&Jason.decode!/1)
+
+    assert package_record["daemon_event_id"] == 1
+    assert package_record["message_id"] == hostile_id
+    assert package_record["event_id"] == consumed["event_id"]
+    assert package_record["cursor"] == consumed["cursor"]
+    assert package_record["package_index"] == 1
+    assert package_record["manifest_run_id"] == "hostile-id-test-catchup-0001"
+    assert package_record["after_cursor"] == ""
+    assert package_record["manifest_next_cursor"] == "2026-06-03 05:00:00|1"
+    assert is_binary(package_record["manifest_path"])
+
+    [durable_manifest] =
+      Path.join(state_root, "hostile-id-test-manifest-records.jsonl")
+      |> File.read!()
+      |> String.split("\n", trim: true)
+      |> Enum.map(&Jason.decode!/1)
+
+    assert durable_manifest["after_cursor"] == ""
+    assert durable_manifest["next_cursor"] == "2026-06-03 05:00:00|1"
+    assert durable_manifest["manifest_kind"] == "cursor_catchup"
+    assert durable_manifest["original_manifest_path"] == package_record["manifest_path"]
+    assert hd(durable_manifest["packages"])["message_id"] == hostile_id
     refute File.exists?(consumed["package_dir"])
   end
 
@@ -4695,6 +4808,79 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert failed_report["package_cursor"] == "2026-06-03 05:00:00|1"
     assert failed_report["last_acked_cursor"] == ""
     assert failed_report["unconsumed_range_retained"] == true
+  end
+
+  test "live watcher rejects a schema decoy and holds cursor" do
+    tmp =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-live-watch-wrong-ack-schema-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp)
+    on_exit(fn -> File.rm_rf!(tmp) end)
+
+    source_db = Path.join(tmp, "daemon.sqlite3")
+    state_root = Path.join(tmp, "state")
+    stub_state = Path.join(tmp, "stub-state")
+    bin_dir = Path.join(tmp, "bin")
+    ssh_key = Path.join(tmp, "ssh-key")
+
+    File.mkdir_p!(state_root)
+    File.write!(ssh_key, "stub-key")
+
+    create_subspace_daemon_db!(
+      source_db,
+      [
+        {"wrong-schema-news-1", "2026-06-03 05:00:00",
+         envelope(
+           "Wrong schema",
+           "Wrong schema service is open venue is north speaker is desk."
+         )}
+      ]
+    )
+
+    write_stub_ssh!(bin_dir, stub_state)
+    File.write!(Path.join(stub_state, "wrong-schema-on"), "1")
+
+    {output, status} =
+      System.cmd(
+        Path.expand("scripts/r1/live_subspace_daemon_watcher_once.sh"),
+        [
+          "--source-db",
+          source_db,
+          "--tenant",
+          @tenant,
+          "--state-root",
+          state_root,
+          "--eurisko-target",
+          "clu@eurisko-test",
+          "--eurisko-repo",
+          "/home/clu/src/primeradiant",
+          "--ssh-key",
+          ssh_key,
+          "--run-id",
+          "wrong-schema-test",
+          "--limit",
+          "10"
+        ],
+        stderr_to_stdout: true,
+        env: [{"PATH", bin_dir <> ":" <> System.get_env("PATH")}]
+      )
+
+    assert status == 1
+    assert output =~ "live watcher package consumption failed"
+    refute File.exists?(Path.join(state_root, "cursor.txt"))
+
+    failed_report =
+      Path.join(state_root, "wrong-schema-test-failed-report.json")
+      |> File.read!()
+      |> Jason.decode!()
+
+    assert failed_report["status"] == "package_ack_invalid"
+    assert failed_report["last_acked_cursor"] == ""
+    assert failed_report["error"]["message"] =~ ~s("schema":"wrong.consume_ack.v1")
+    assert failed_report["error"]["message"] =~ "primeradiant.consume_ack.v1"
   end
 
   test "SQLite wakeup with checkpoint-cursor false leaves durable cursor to consumer ack" do
@@ -5041,6 +5227,10 @@ defmodule Primeradiant.DaemonNewsReplayTest do
       fi
       event_id="$(printf '%s' "$cmd" | sed -n "s|.*/\\([^/']*\\)/consume-ack.json.*|\\1|p")"
       echo "remote consume output noise before ack"
+      if [[ -f "$STATE_DIR/wrong-schema-on" && "$n" -eq "$(cat "$STATE_DIR/wrong-schema-on")" ]]; then
+        printf '{"schema":"wrong.consume_ack.v1","status":"consumed","event_id":"%s","note":"primeradiant.consume_ack.v1"}\\n' "$event_id"
+        exit 0
+      fi
       printf '{"schema":"primeradiant.consume_ack.v1","status":"consumed","event_id":"%s"}\\n' "$event_id"
       echo "remote output noise after ack"
       exit 0
