@@ -253,6 +253,8 @@ Pass/fail evidence must include:
 Run these fail-closed assertions from eezo after row 20391 is acknowledged:
 
 ```sh
+set -euo pipefail
+
 row_json="$(ssh tars 'DB=/Volumes/Microverse/openclaw/state/.openclaw/subspace-daemon/data/daemon.sqlite3
 /usr/bin/sqlite3 -readonly -json "$DB" "select id,accepted_at,inbound_event,author_name,message_id from daemon_event where id=20391;"')"
 printf '%s' "$row_json" | jq -e '
@@ -270,11 +272,11 @@ set -eu
 root=/Users/mike/.local/state/primeradiant/t328-live-watcher
 start="2026-07-22 01:21:48|20350"
 target="2026-07-25 21:00:50|20391"
-all_consumed="$(jq -sc "." "$root"/*-consumed.jsonl)"
 chain_state="$(jq -sc \
   --arg start "$start" \
   --arg target "$target" \
-  --argjson consumed "$all_consumed" '
+  --slurpfile consumed <(jq -sc "." "$root"/*-consumed.jsonl) '
+  ($consumed[0]) as $consumed |
   def strictly_acked($package):
     any($consumed[];
       .event_id == $package.event_id and
@@ -359,11 +361,12 @@ packages="$(jq -sc --argjson event_ids "$event_ids" '
       }
   ]
 ' "$root"/*-packages.jsonl)"
-consumed="$(jq -cn --argjson all "$all_consumed" --argjson event_ids "$event_ids" \
-  "[
-    \$all[]
-    | select(.event_id as \$id | \$event_ids | index(\$id))
-  ]")"
+consumed="$(jq -sc --argjson event_ids "$event_ids" '
+  [
+    .[]
+    | select(.event_id as $id | $event_ids | index($id))
+  ]
+' "$root"/*-consumed.jsonl)"
 jq -cn \
   --arg start "$start" \
   --arg target "$target" \
@@ -433,10 +436,16 @@ printf '%s' "$package_json" | jq -e '
   .cursor == "2026-07-25 21:00:50|20391"'
 event_id="$(printf '%s' "$package_json" | jq -r .event_id)"
 
-ack_json="$(ssh -o IdentitiesOnly=yes -i ~/.ssh/id_ed25519_clu clu@eurisko \
-  "ack=\\$(find /home/clu/primeradiant-runs -type f -path '*/$event_id/consume-ack.json' -print -quit)
-   test -n \"\\$ack\"
-   cat \"\\$ack\"")"
+ack_json="$(ssh -o IdentitiesOnly=yes -i ~/.ssh/id_ed25519_clu \
+  clu@eurisko /bin/bash -s -- "$event_id" <<'REMOTE_ACK'
+set -euo pipefail
+event_id="$1"
+ack="$(find /home/clu/primeradiant-runs -type f \
+  -path "*/$event_id/consume-ack.json" -print -quit)"
+test -n "$ack"
+cat "$ack"
+REMOTE_ACK
+)"
 printf '%s' "$ack_json" | jq -e --arg event_id "$event_id" '
   .schema == "primeradiant.consume_ack.v1" and
   .status == "consumed" and
@@ -447,136 +456,6 @@ ack_report_path="$(printf '%s' "$ack_json" | jq -er '
   select(startswith("/home/clu/primeradiant-runs/") and endswith("/changed-stories-report.json"))')"
 ssh -o IdentitiesOnly=yes -i ~/.ssh/id_ed25519_clu clu@eurisko \
   "test -f '$ack_report_path'"
-
-# The strict ack above may be from an idempotent retry after the originating
-# attempt durably wrote soup/story but lost ack delivery. Resolve story meaning
-# independently by the exact source item, then join it to durable soup below.
-chain_candidates="$(ssh -o IdentitiesOnly=yes -i ~/.ssh/id_ed25519_clu \
-  clu@eurisko /bin/bash -s <<'REMOTE_STORY_CANDIDATES'
-find /home/clu/primeradiant-runs -type f -name changed-stories-report.json \
-  -exec jq -c \
-    --arg message_id "f2665df3-c004-4881-9b82-7ff159be065d" '
-      select(
-        .source.source_item_id == $message_id and
-        .story_meaning_proof == true and
-        .live_story_agent_loop.story_meaning_proof == true)
-      | .live_story_agent_loop.correlation_chains[]
-      | select(.source_ref == ("news_article:" + $message_id))
-    ' {} + |
-  jq -sc 'unique_by(.correlation_id)'
-REMOTE_STORY_CANDIDATES
-)"
-
-story_proof="$(ssh -o IdentitiesOnly=yes -i ~/.ssh/id_ed25519_clu clu@eurisko \
-  "set -eu
-   set -a
-   . /home/clu/.local/state/primeradiant/soup-api/env
-   set +a
-   {
-     sqlite3 -readonly -json \"\$PRIMERADIANT_SOUP_API_SOUP_DB\" \
-       'select id,status,scope from agent_runs;'
-     sqlite3 -readonly -json \"\$PRIMERADIANT_SOUP_API_SOUP_DB\" \
-       'select id,story_id,story_version,producing_agent_run_id,packet_hash,output_hash,status from story_card_versions;'
-     sqlite3 -readonly -json \"\$PRIMERADIANT_SOUP_API_SOUP_DB\" \
-       'select id,story_id,input_id,classification,story_version,proposal_id,graph_commit_id from story_events;'
-     sqlite3 -readonly -json \"\$PRIMERADIANT_SOUP_API_SOUP_DB\" \
-       'select id,subject_type,subject_id,input_id,evidence_label,evidence_hash from evidence_refs;'
-     sqlite3 -readonly -json \"\$PRIMERADIANT_SOUP_API_SOUP_DB\" \
-       'select id,external_id from inputs;'
-   } | jq -cs \
-     '{agent_runs: .[0], card_versions: .[1], story_events: .[2], evidence_refs: .[3], inputs: .[4]}'")"
-chain_json="$(jq -cn \
-  --arg message_id "f2665df3-c004-4881-9b82-7ff159be065d" \
-  --argjson candidates "$chain_candidates" \
-  --argjson proof "$story_proof" '
-  [
-    $candidates[] as $chain
-    | select(
-        ($chain.classification |
-          IN("split", "attach", "conflict", "duplicate", "no_op", "color", "stale")) and
-        ($chain.agent_run_ids | length > 0) and
-        ($chain.packet_ids | length > 0) and
-        ($chain.evidence_refs | length > 0) and
-        ($chain.story_event_id | type == "string") and
-        ($chain.story_card_version_id | type == "string"))
-    | select(any($proof.story_events[];
-        . as $event |
-        $event.id == $chain.story_event_id and
-        any($proof.inputs[];
-          .id == $event.input_id and .external_id == $message_id)))
-    | select(all($chain.agent_run_ids[];
-        . as $run_id | any($proof.agent_runs[]; .id == $run_id)))
-    | select(any($proof.card_versions[];
-        .id == $chain.story_card_version_id))
-    | $chain
-  ]
-  | unique_by(.correlation_id)
-  | select(length == 1)
-  | .[0]')"
-printf '%s' "$chain_json" | jq -e \
-  --argjson proof "$story_proof" '
-  . as $chain |
-  ($proof.story_events | map(select(.id == $chain.story_event_id))) as $events |
-  ($proof.card_versions | map(select(.id == $chain.story_card_version_id))) as $cards |
-  ($events | length) == 1 and
-  ($cards | length) == 1 and
-  ($events[0] as $event |
-    any($proof.inputs[];
-      .id == $event.input_id and
-      .external_id == "f2665df3-c004-4881-9b82-7ff159be065d") and
-    $event.story_id == $chain.story_id and
-    $event.proposal_id == $chain.proposal_id and
-    $event.graph_commit_id == $chain.graph_commit_id and
-    $event.classification == $chain.classification and
-    ($event.story_version | type == "number") and
-    all($chain.evidence_refs[];
-      . as $evidence_label |
-      any($proof.evidence_refs[];
-        .subject_type == "story_event" and
-        .subject_id == $chain.story_event_id and
-        .input_id == $event.input_id and
-        .evidence_label == $evidence_label and
-        (.evidence_hash | test("^[0-9a-f]{64}$"))))) and
-  ($chain.agent_run_ids | unique | length) == ($chain.agent_run_ids | length) and
-  all($chain.agent_run_ids[];
-    . as $run_id |
-    any($proof.agent_runs[];
-      .id == $run_id and
-      .status == "succeeded" and
-      ((.scope | fromjson) as $scope |
-        ($chain.packet_ids | index($scope.packet_id)) != null and
-        ($scope.packet_hash | test("^[0-9a-f]{64}$")) and
-        ($scope.output_hash | test("^[0-9a-f]{64}$")) and
-        ($scope.evidence_refs | length > 0) and
-        all($scope.evidence_refs[]; . as $ref | ($chain.evidence_refs | index($ref)) != null)))) and
-  ($cards[0] as $card |
-    ($proof.agent_runs |
-      map(select(.id == $card.producing_agent_run_id))) as $producers |
-    ($producers | length) == 1 and
-    ($producers[0].scope | fromjson) as $producer_scope |
-    ($card.producing_agent_run_id as $id | $chain.agent_run_ids | index($id)) != null and
-    ($producer_scope.packet_id as $id | $chain.packet_ids | index($id)) != null and
-    $card.story_id == $chain.story_id and
-    ($card.story_version | type == "number") and
-    $card.packet_hash == $producer_scope.packet_hash and
-    $card.output_hash == $producer_scope.output_hash and
-    ($card.packet_hash | test("^[0-9a-f]{64}$")) and
-    ($card.output_hash | test("^[0-9a-f]{64}$")) and
-    ($card.status | IN("complete", "incomplete", "refused", "unavailable"))) and
-  (
-    (($chain.refusal_reason | type) == "string" and ($chain.refusal_reason | length) > 0) or
-    ($chain.classification | IN("split", "attach", "conflict")) or
-    ($chain.classification | IN("duplicate", "no_op", "color", "stale"))
-  )'
-
-disposition="$(printf '%s' "$chain_json" | jq -r '
-  if ((.refusal_reason | type) == "string" and (.refusal_reason | length) > 0)
-  then "refusal:" + .refusal_reason
-  elif (.classification | IN("split", "attach", "conflict"))
-  then "material_story:" + .classification
-  else "packet_grounded_agent_story_unchanged:" + .classification
-  end')"
-printf 'row 20391 disposition: %s\n' "$disposition"
 
 ssh tars 'cursor="$(cat /Users/mike/.local/state/primeradiant/t328-live-watcher/cursor.txt)"
 jq -en --arg cursor "$cursor" '\''
@@ -590,21 +469,76 @@ set -a
 set +a
 sqlite3 -readonly -json "$PRIMERADIANT_SOUP_API_SOUP_DB" \
   "select external_id,observed_at,inserted_at from inputs where external_id='\''f2665df3-c004-4881-9b82-7ff159be065d'\'';" |
-  jq -e '\''length >= 1 and .[0].external_id == "f2665df3-c004-4881-9b82-7ff159be065d"'\''
-curl -fsS -H "Authorization: Bearer $PRIMERADIANT_SOUP_API_TOKEN" \
-  "http://127.0.0.1:4084/api/v1/soup/ready?consumer=reporter&projection=news-morning" |
-  jq -e '\''
-    (.freshness.latest_source_at | type == "string") and
-    ((.freshness.latest_story_event_at == null) or (.freshness.latest_story_event_at | type == "string")) and
-    (.freshness.max_age_seconds | type == "number") and
-    (.freshness.is_stale | type == "boolean") and
-    (.synthesis_health.status | type == "string")'\'''
+  jq -e '\''length == 1 and .[0].external_id == "f2665df3-c004-4881-9b82-7ff159be065d"'\'''
+
+# The strict ack above may be from an idempotent retry after the originating
+# attempt durably wrote source material but lost ack delivery. Read only that
+# ack's bounded report and the exact durable source identity. Row 20391 did not
+# produce a story decision: the packet-grounded agent was unavailable, which is
+# distinct from a legitimate unchanged-story classification.
+ack_report_json="$(ssh -o IdentitiesOnly=yes -i ~/.ssh/id_ed25519_clu \
+  clu@eurisko "cat '$ack_report_path'")"
+printf '%s' "$ack_report_json" | jq -e '
+  .source.source_item_id == "f2665df3-c004-4881-9b82-7ff159be065d" and
+  .story_meaning_proof == false and
+  .substrate_proof_only == true and
+  .live_story_agent_loop.status == "unavailable" and
+  .live_story_agent_loop.reason == "live_gibson_response_shape" and
+  .ingestion.inputs == 1 and
+  .ingestion.graph_commits == 0 and
+  .ingestion.proposals == 0 and
+  .ingestion.stories == 0'
+
+story_proof="$(ssh -o IdentitiesOnly=yes -i ~/.ssh/id_ed25519_clu clu@eurisko \
+  "set -eu
+   set -a
+   . /home/clu/.local/state/primeradiant/soup-api/env
+   set +a
+   sqlite3 -readonly \"\$PRIMERADIANT_SOUP_API_SOUP_DB\" '
+     select json_object(
+       \"input_count\", (
+         select count(*) from inputs
+          where external_id=\"f2665df3-c004-4881-9b82-7ff159be065d\"
+       ),
+       \"story_event_count\", (
+         select count(*) from story_events se join inputs i on i.id=se.input_id
+          where i.external_id=\"f2665df3-c004-4881-9b82-7ff159be065d\"
+       ),
+       \"agent_run_count\", (
+         select count(*) from agent_runs
+          where json_extract(scope,\"$.correlation_id\") glob
+                \"correlation:news_article:f2665df3-c004-4881-9b82-7ff159be065d:*\"
+       ),
+       \"card_count\", (
+         select count(*) from story_card_versions scv
+           join agent_runs ar on ar.id=scv.producing_agent_run_id
+          where json_extract(ar.scope,\"$.correlation_id\") glob
+                \"correlation:news_article:f2665df3-c004-4881-9b82-7ff159be065d:*\"
+       ),
+       \"proposal_count\", (
+         select count(*) from proposals p
+           join story_events se on se.proposal_id=p.id
+           join inputs i on i.id=se.input_id
+          where i.external_id=\"f2665df3-c004-4881-9b82-7ff159be065d\"
+       )
+     );'")"
+printf '%s' "$story_proof" | jq -e '
+  .input_count == 1 and
+  .story_event_count == 0 and
+  .agent_run_count == 0 and
+  .card_count == 0 and
+  .proposal_count == 0'
+
+printf '%s\n' \
+  'BLOCKER: row 20391 source admission and ordered acknowledgement succeeded, but story synthesis stopped at live_gibson_response_shape.' >&2
+exit 1
 ```
 
-Finally run the supported real-tenant R1744-04 ready/feed/delta/gap/ack proof
-without altering its Reporter-owned 86,400-second configuration. Record that
-configuration evidence and Reporter's evaluation separately from the neutral
-Prime Radiant fields above.
+Only after row 20391 has an actual packet-grounded story outcome, run the
+supported real-tenant R1744-04 ready/feed/delta/gap/ack proof without altering
+its Reporter-owned 86,400-second configuration. Record that configuration
+evidence and Reporter's evaluation separately from the neutral Prime Radiant
+fields above.
 
 If row 20391 cannot be processed, stop with the exact package/ack failure and
 the cursor at the last durably acknowledged predecessor. Do not skip row 20391
