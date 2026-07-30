@@ -80,53 +80,31 @@ defmodule Primeradiant.StorageHarness.DaemonNewsEvent do
 
       {state, report} =
         if ctx.story_agent_loop? and admissions != [] do
-          story_agent_result =
-            try do
-              {:ok,
-               LiveStoryAgentLoop.run(
-                 state,
-                 admissions,
-                 ctx.actor_id,
-                 ctx.story_agent_opts
-               )}
-            rescue
-              _error in [Primeradiant.Agentic.LiveGibson.ResponseShapeError] ->
-                :response_shape_error
-            end
+          {state, story_agent_report} =
+            LiveStoryAgentLoop.run(
+              state,
+              admissions,
+              ctx.actor_id,
+              ctx.story_agent_opts
+            )
 
-          case story_agent_result do
-            {:ok, {state, story_agent_report}} ->
-              {:ok, state, delta_output} =
-                KnowledgeWork.record_verified_delta(state, ctx.actor_id, advance_seen?: false)
+          {:ok, state, delta_output} =
+            KnowledgeWork.record_verified_delta(state, ctx.actor_id, advance_seen?: false)
 
-              {state, story_agent_report(state, summary, ingestion_report, story_agent_report)}
-              |> then(fn {state, report_fun} ->
-                {state,
-                 fn soup_db_path, tenant_id ->
-                   report_fun.(soup_db_path, tenant_id)
-                   |> Map.put(:seen_state_delta_output, %{
-                     output_id: delta_output.output_id,
-                     verified: delta_output.verified,
-                     bullets: length(delta_output.bullets),
-                     touched_story_keys: delta_output.touched_story_keys,
-                     evidence_refs: delta_output.evidence_refs
-                   })
-                 end}
-              end)
-
-            :response_shape_error ->
-              {state,
-               fn soup_db_path, tenant_id ->
-                 source_admission_report(state, summary, ingestion_report).(
-                   soup_db_path,
-                   tenant_id
-                 )
-                 |> Map.put(:live_story_agent_loop, %{
-                   status: :unavailable,
-                   reason: "live_gibson_response_shape"
-                 })
-               end}
-          end
+          {state, story_agent_report(state, summary, ingestion_report, story_agent_report)}
+          |> then(fn {state, report_fun} ->
+            {state,
+             fn soup_db_path, tenant_id ->
+               report_fun.(soup_db_path, tenant_id)
+               |> Map.put(:seen_state_delta_output, %{
+                 output_id: delta_output.output_id,
+                 verified: delta_output.verified,
+                 bullets: length(delta_output.bullets),
+                 touched_story_keys: delta_output.touched_story_keys,
+                 evidence_refs: delta_output.evidence_refs
+               })
+             end}
+          end)
         else
           {state, source_admission_report(state, summary, ingestion_report)}
         end

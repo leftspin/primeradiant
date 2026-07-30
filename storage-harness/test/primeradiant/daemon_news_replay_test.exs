@@ -683,82 +683,6 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert Enum.all?(chain.evidence_refs, &(&1 in evidence_labels))
   end
 
-  test "event envelope durably admits a source when optional story synthesis has an invalid response shape" do
-    tmp =
-      Path.join(
-        System.tmp_dir!(),
-        "primeradiant-daemon-news-story-synthesis-token-limit-#{System.unique_integer([:positive])}"
-      )
-
-    File.mkdir_p!(tmp)
-    on_exit(fn -> File.rm_rf!(tmp) end)
-
-    soup_db_path = Path.join(tmp, "primeradiant-event-soup.sqlite3")
-    raw_path = Path.join(tmp, "archive.jsonl")
-
-    [row] = [envelope("Token limit story", "The bounded source was durably admitted.")]
-    [{offset, length}] = write_archive!(raw_path, [row])
-    event = committed_source_item_event("event-token-limit-news-1", raw_path, offset, length, row)
-
-    {:ok, state, report} =
-      DaemonNewsEvent.consume_event(event,
-        soup_db_path: soup_db_path,
-        tenant_id: @tenant,
-        actor_id: "flynn",
-        story_agent_loop?: true,
-        story_agent_opts: [adapter: &response_shape_story_synthesis_agent/3]
-      )
-
-    assert [%{external_id: "event-token-limit-news-1"}] = state.inputs
-    assert DurableSoupDb.table_count(soup_db_path, "inputs", @tenant) == 1
-    assert report.primeradiant_writes.durable
-    assert report.live_story_agent_loop.story_card_versions == 1
-
-    [card] = state.story_card_versions
-    assert card.status == "refused"
-  end
-
-  test "event envelope durably admits a source when optional story identity has an invalid response shape" do
-    tmp =
-      Path.join(
-        System.tmp_dir!(),
-        "primeradiant-daemon-news-identity-response-shape-#{System.unique_integer([:positive])}"
-      )
-
-    File.mkdir_p!(tmp)
-    on_exit(fn -> File.rm_rf!(tmp) end)
-
-    soup_db_path = Path.join(tmp, "primeradiant-event-soup.sqlite3")
-    raw_path = Path.join(tmp, "archive.jsonl")
-    [row] = [envelope("Response shape story", "The source admission remains durable.")]
-    [{offset, length}] = write_archive!(raw_path, [row])
-
-    event =
-      committed_source_item_event(
-        "event-identity-response-shape-news-1",
-        raw_path,
-        offset,
-        length,
-        row
-      )
-
-    {:ok, state, report} =
-      DaemonNewsEvent.consume_event(event,
-        soup_db_path: soup_db_path,
-        tenant_id: @tenant,
-        actor_id: "flynn",
-        story_agent_loop?: true,
-        story_agent_opts: [adapter: &response_shape_story_identity_agent/3]
-      )
-
-    assert [%{external_id: "event-identity-response-shape-news-1"}] = state.inputs
-    assert DurableSoupDb.table_count(soup_db_path, "inputs", @tenant) == 1
-    assert state.agent_runs == []
-    assert state.stories == []
-    assert report.live_story_agent_loop.status == :unavailable
-    assert report.live_story_agent_loop.reason == "live_gibson_response_shape"
-  end
-
   test "story agent event persistence appends delta without clearing existing tenant rows" do
     tmp =
       Path.join(
@@ -4429,6 +4353,20 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     write_stub_ssh!(bin_dir, stub_state)
     File.write!(Path.join(stub_state, "fail-on"), "2")
 
+    terminal_diagnostic =
+      Jason.encode!(%{
+        error_class: "live_gibson_terminal_failure",
+        stage: "inner_json_decode",
+        provider_usage: %{
+          prompt_tokens: 130_884,
+          completion_tokens: 147,
+          total_tokens: 131_031
+        },
+        preflight_prompt_tokens: 130_884
+      })
+
+    File.write!(Path.join(stub_state, "fail-message"), terminal_diagnostic)
+
     watcher_script = Path.expand("scripts/r1/live_subspace_daemon_watcher_once.sh")
 
     base_args = [
@@ -4474,7 +4412,7 @@ defmodule Primeradiant.DaemonNewsReplayTest do
     assert failed_report["cursor_checkpointing"] == "durable_remote_ack_per_package"
     assert failed_report["unconsumed_range_retained"] == true
     assert get_in(failed_report, ["error", "exit_status"]) == 17
-    assert get_in(failed_report, ["error", "message"]) =~ "simulated remote consume failure"
+    assert get_in(failed_report, ["error", "message"]) =~ terminal_diagnostic
     assert File.exists?(failed_report["package_dir"])
     assert File.exists?(Path.join([state_root, "packages", "ack-failure-test"]))
 
@@ -5218,7 +5156,7 @@ defmodule Primeradiant.DaemonNewsReplayTest do
       printf '%s\\n' "$n" > "$count_file"
       printf '%s\\n' "$cmd" >> "$STATE_DIR/consume-commands.log"
       if [[ -f "$STATE_DIR/fail-on" && "$n" -eq "$(cat "$STATE_DIR/fail-on")" ]]; then
-        echo "simulated remote consume failure" >&2
+        cat "$STATE_DIR/fail-message" >&2 2>/dev/null || echo "simulated remote consume failure" >&2
         exit 17
       fi
       if [[ -f "$STATE_DIR/no-ack-on" && "$n" -eq "$(cat "$STATE_DIR/no-ack-on")" ]]; then
@@ -5340,20 +5278,6 @@ defmodule Primeradiant.DaemonNewsReplayTest do
 
   defp stub_story_agent(%{role: :story_synthesis}, packet, _ctx),
     do: stub_story_synthesis(packet)
-
-  defp response_shape_story_synthesis_agent(%{role: :story_synthesis}, _packet, _ctx) do
-    raise Primeradiant.Agentic.LiveGibson.ResponseShapeError, field: "model"
-  end
-
-  defp response_shape_story_synthesis_agent(config, packet, ctx),
-    do: stub_story_agent(config, packet, ctx)
-
-  defp response_shape_story_identity_agent(%{role: :story_identity}, _packet, _ctx) do
-    raise Primeradiant.Agentic.LiveGibson.ResponseShapeError, field: "model"
-  end
-
-  defp response_shape_story_identity_agent(config, packet, ctx),
-    do: stub_story_agent(config, packet, ctx)
 
   defp stub_backfill_story_agent(%{role: :story_synthesis}, packet, _ctx) do
     packet
