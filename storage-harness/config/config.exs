@@ -1,7 +1,9 @@
 import Config
 
 config :primeradiant_storage_harness,
-  ecto_repos: [Primeradiant.StorageHarness.Repo]
+  ecto_repos: [Primeradiant.StorageHarness.Repo],
+  runtime_mode: :off,
+  runtime_endpoint: false
 
 config :primeradiant_storage_harness, Primeradiant.StorageHarness.Repo,
   adapter: Ecto.Adapters.Postgres,

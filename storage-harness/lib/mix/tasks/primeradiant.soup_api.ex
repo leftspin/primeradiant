@@ -3,7 +3,7 @@ defmodule Mix.Tasks.Primeradiant.SoupApi do
 
   use Mix.Task
 
-  alias Primeradiant.Soup.Router
+  alias Primeradiant.Runtime
 
   @shortdoc "Run the internal Prime Radiant soup HTTP JSON API"
 
@@ -21,8 +21,6 @@ defmodule Mix.Tasks.Primeradiant.SoupApi do
         ]
       )
 
-    Mix.Task.run("app.start")
-
     soup_db = Keyword.fetch!(opts, :soup_db)
     tenant = Keyword.fetch!(opts, :tenant)
     token = Keyword.fetch!(opts, :token)
@@ -30,17 +28,25 @@ defmodule Mix.Tasks.Primeradiant.SoupApi do
     port = Keyword.get(opts, :port, 4084)
     ip = opts |> Keyword.get(:ip, "127.0.0.1") |> parse_ip!()
 
-    {:ok, _pid} =
-      Plug.Cowboy.http(
-        Router,
-        [state: {:durable_soup_db, soup_db, tenant}, token: token, ack_log_path: ack_log],
+    Application.put_env(
+      :primeradiant_storage_harness,
+      :runtime_endpoint,
+      router_options: [
+        state: {:durable_soup_db, soup_db, tenant},
+        token: token,
+        ack_log_path: ack_log
+      ],
+      transport_options: [
         ref: :"primeradiant_soup_api_#{port}",
         ip: ip,
         port: port
-      )
+      ]
+    )
+
+    Mix.Task.run("app.start")
 
     Mix.shell().info("Prime Radiant soup API listening on #{port}")
-    Process.sleep(:infinity)
+    Runtime.Application.await_shutdown()
   end
 
   defp parse_ip!(ip) do
