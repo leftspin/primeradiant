@@ -130,6 +130,12 @@ scripts/r1/live_subspace_daemon_watcher_once.sh \
 Per-run soup DBs remain useful as bounded proof artifacts, but they are not the
 Reporter product surface.
 
-Any launchd, systemd, cron, autostart, or permanent service registration remains
-a separate deploy step unless a supported product deploy path explicitly owns
-that runtime shape.
+The T1430 production deploy path is the source-controlled TARS LaunchAgent in
+`deploy/tars/`: its Node-backed watcher reads Microverse on TARS and pushes
+bounded packages to EURISKO. The matching recovery and proof procedure is
+`../specs/primeradiant-t1430-fresh-news-admission-approval-runbook.md`. Do not
+replace it with a EURISKO-local daemon DB watcher.
+
+Any other launchd, systemd, cron, autostart, or permanent service registration
+remains a separate deploy step unless a supported product deploy path explicitly
+owns that runtime shape.

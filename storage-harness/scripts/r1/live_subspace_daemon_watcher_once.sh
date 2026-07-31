@@ -160,6 +160,8 @@ fi
 
 MANIFESTS_JSONL="$STATE_ROOT/$RUN_ID-manifests.jsonl"
 : > "$MANIFESTS_JSONL"
+DURABLE_MANIFESTS_JSONL="$STATE_ROOT/$RUN_ID-manifest-records.jsonl"
+: > "$DURABLE_MANIFESTS_JSONL"
 
 CURRENT_CURSOR=""
 if [[ -s "$CURSOR_FILE" ]]; then
@@ -257,6 +259,9 @@ if [[ "$CATCHUP_STATUS" -ne 0 ]]; then
 fi
 jq -n --arg kind "cursor_catchup" --arg manifest_path "$CATCHUP_MANIFEST" \
   '{kind: $kind, manifest_path: $manifest_path}' >> "$MANIFESTS_JSONL"
+jq -c --arg kind "cursor_catchup" --arg manifest_path "$CATCHUP_MANIFEST" \
+  '. + {manifest_kind: $kind, original_manifest_path: $manifest_path}' \
+  "$CATCHUP_MANIFEST" >> "$DURABLE_MANIFESTS_JSONL"
 
 EMITTED_COUNT="$(jq -r '.emitted_count' "$CATCHUP_MANIFEST")"
 CATCHUP_COUNT="$EMITTED_COUNT"
@@ -318,6 +323,9 @@ if [[ "$CATCHUP_COUNT" -eq 0 ]]; then
       [[ -z "$manifest_path" || "$manifest_path" == "null" ]] && continue
       jq -n --arg kind "wakeup" --arg manifest_path "$manifest_path" \
         '{kind: $kind, manifest_path: $manifest_path}' >> "$MANIFESTS_JSONL"
+      jq -c --arg kind "wakeup" --arg manifest_path "$manifest_path" \
+        '. + {manifest_kind: $kind, original_manifest_path: $manifest_path}' \
+        "$manifest_path" >> "$DURABLE_MANIFESTS_JSONL"
     done
 fi
 
@@ -339,7 +347,25 @@ PACKAGE_LIST="$STATE_ROOT/$RUN_ID-packages.jsonl"
 jq -r '.manifest_path' "$MANIFESTS_JSONL" |
   while IFS= read -r manifest; do
     [[ -z "$manifest" || "$manifest" == "null" ]] && continue
-    jq -c '.packages[] | {package_dir, cursor, event_id}' "$manifest"
+    jq -c --arg manifest_path "$manifest" '
+      . as $manifest
+      | $manifest.packages
+      | to_entries[]
+      | . as $entry
+      | $entry.value
+      | {
+          package_dir,
+          cursor,
+          event_id,
+          message_id,
+          daemon_event_id,
+          package_index: ($entry.key + 1),
+          manifest_run_id: $manifest.run_id,
+          manifest_path: $manifest_path,
+          after_cursor: $manifest.after_cursor,
+          manifest_next_cursor: $manifest.next_cursor
+        }
+    ' "$manifest"
   done > "$PACKAGE_LIST"
 
 CONSUMED_JSONL="$STATE_ROOT/$RUN_ID-consumed.jsonl"
@@ -419,7 +445,11 @@ local tar stderr: $(cat "$SHIP_STDERR")"
   ack_line="$(printf "%s" "$CONSUME_OUTPUT" | grep -F '"primeradiant.consume_ack.v1"' | tail -n 1 || true)"
 
   if ! jq -e --arg event_id "$package_event_id" \
-    'select(.status == "consumed" and .event_id == $event_id)' >/dev/null 2>&1 <<<"$ack_line"; then
+    'select(
+      .schema == "primeradiant.consume_ack.v1" and
+      .status == "consumed" and
+      .event_id == $event_id
+    )' >/dev/null 2>&1 <<<"$ack_line"; then
     package_failure_report "package_ack_invalid" "package_ack" "consume-ack.json" \
       1 "remote consume ack missing or mismatched: $ack_line" \
       "$package_dir" "$remote_package" "$package_event_id" "$package_cursor"

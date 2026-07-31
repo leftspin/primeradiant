@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>KeepAlive</key>
+	<true/>
+	<key>Label</key>
+	<string>ai.primeradiant.t328-daemon-db-watcher</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/opt/homebrew/bin/node</string>
+		<string>/Users/mike/.local/libexec/primeradiant/t328-live-watcher-node-launcher.mjs</string>
+	</array>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>PATH</key>
+		<string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+	</dict>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>StandardErrorPath</key>
+	<string>/Users/mike/.local/state/primeradiant/t328-live-watcher/logs/launchd.stderr.log</string>
+	<key>StandardOutPath</key>
+	<string>/Users/mike/.local/state/primeradiant/t328-live-watcher/logs/launchd.stdout.log</string>
+	<key>WorkingDirectory</key>
+	<string>/Users/mike/.openclaw/workspace</string>
+</dict>
+</plist>
