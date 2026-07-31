@@ -201,6 +201,10 @@ defmodule Primeradiant.SoupApiTest do
     params = %{"consumer" => "reporter", "projection" => "story_cards"}
     facts = DurableSoupDb.load_soup_ready_facts(db_path, state.tenant_id)
 
+    refute Map.has_key?(facts, :failure_streak)
+    assert facts.failure_streak_count == 3
+    assert facts.failure_reasons == ["story_synthesis_invalid_model_output"]
+
     assert Map.drop(Soup.ready_from_facts(facts, params), [:generated_at]) ==
              Map.drop(Soup.ready(state, params), [:generated_at])
 
@@ -929,6 +933,28 @@ defmodule Primeradiant.SoupApiTest do
     assert body["freshness"]["latest_source_at"]
     assert body["freshness"]["latest_story_event_at"]
     assert is_binary(body["substrate_cursor"])
+  end
+
+  test "durable ready API preserves neutral readiness for an existing schema-missing DB" do
+    db_path =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-soup-ready-schema-missing-#{System.system_time(:nanosecond)}-#{System.unique_integer([:positive])}.sqlite3"
+      )
+
+    File.touch!(db_path)
+
+    body =
+      :get
+      |> conn("/api/v1/soup/ready?consumer=reporter&projection=news-morning")
+      |> put_req_header("authorization", "Bearer internal-token")
+      |> Router.call(Keyword.put(@opts, :state, {:durable_soup_db, db_path, "empty-tenant"}))
+      |> json()
+
+    assert body["status"] == "blocked"
+    assert body["freshness"]["latest_source_at"] == nil
+    assert body["synthesis_health"]["checked_story_count"] == 0
+    assert Enum.any?(body["blockers"], &(&1["code"] == "no_admitted_story_material"))
   end
 
   test "durable feed API bounds source hydration for limited Reporter feed", %{state: _state} do

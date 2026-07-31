@@ -8,7 +8,7 @@ defmodule Primeradiant.Soup do
 
   def ready(%State{} = state, params \\ %{}) do
     state
-    |> readiness_facts()
+    |> ready_facts()
     |> ready_from_facts(params)
   end
 
@@ -179,15 +179,21 @@ defmodule Primeradiant.Soup do
     synthesis_health(
       facts.visible_story_count,
       facts.complete_current_synopsis_count,
-      facts.failure_streak
+      facts.failure_streak_count,
+      facts.failure_reasons
     )
   end
 
-  defp synthesis_health(story_count, complete_current_count, failure_streak) do
+  defp synthesis_health(
+         story_count,
+         complete_current_count,
+         failure_streak_count,
+         failure_reasons
+       ) do
     failures =
       []
       |> maybe_add_zero_complete_synopsis_failure(story_count, complete_current_count)
-      |> maybe_add_synthesis_failure_streak(failure_streak)
+      |> maybe_add_synthesis_failure_streak(failure_streak_count, failure_reasons)
 
     %{
       status: if(failures == [], do: "healthy", else: "failed"),
@@ -197,7 +203,7 @@ defmodule Primeradiant.Soup do
         required: true,
         status: if(complete_current_count > 0, do: "present", else: "missing")
       },
-      refused_or_invalid_streak_count: length(failure_streak),
+      refused_or_invalid_streak_count: failure_streak_count,
       refused_or_invalid_streak_threshold: 3,
       failures: failures
     }
@@ -220,16 +226,18 @@ defmodule Primeradiant.Soup do
     ]
   end
 
-  defp maybe_add_synthesis_failure_streak(failures, streak) when length(streak) < 3, do: failures
+  defp maybe_add_synthesis_failure_streak(failures, failure_streak_count, _failure_reasons)
+       when failure_streak_count < 3,
+       do: failures
 
-  defp maybe_add_synthesis_failure_streak(failures, streak) do
+  defp maybe_add_synthesis_failure_streak(failures, failure_streak_count, failure_reasons) do
     [
       %{
         code: "story_synthesis_refused_or_invalid_streak",
         message:
           "Prime Radiant story synthesis has repeatedly refused or quarantined invalid current synopsis output",
-        streak_count: length(streak),
-        latest_reasons: streak |> Enum.map(& &1.reason) |> Enum.uniq()
+        streak_count: failure_streak_count,
+        latest_reasons: failure_reasons
       }
       | failures
     ]
@@ -261,7 +269,7 @@ defmodule Primeradiant.Soup do
     end)
   end
 
-  defp readiness_facts(state) do
+  def ready_facts(%State{} = state) do
     visible = visible_stories(state)
     active_cards = active_repair_rows(state, state.story_card_versions)
 
@@ -272,6 +280,8 @@ defmodule Primeradiant.Soup do
         {story_id, Enum.max_by(cards, & &1.card_version)}
       end)
 
+    failure_streak = current_synthesis_failure_streak(state)
+
     %{
       tenant_id: state.tenant_id,
       story_count: length(state.stories),
@@ -280,7 +290,8 @@ defmodule Primeradiant.Soup do
         Enum.count(visible, fn story ->
           complete_story_card?(Map.get(current_cards_by_story, story.id))
         end),
-      failure_streak: current_synthesis_failure_streak(state),
+      failure_streak_count: length(failure_streak),
+      failure_reasons: failure_streak |> Enum.map(& &1.reason) |> Enum.uniq(),
       latest_source_at:
         state.inputs |> Enum.map(& &1.observed_at) |> Enum.max(DateTime, fn -> nil end),
       latest_story_event_at:
