@@ -39,8 +39,16 @@ defmodule Primeradiant.Soup.Router do
   defp ready(conn) do
     conn
     |> authorize()
-    |> respond(fn state, _assigns -> Soup.ready(state, conn.params) end, :ready)
+    |> respond(fn state, _assigns -> ready_response(state, conn.params) end, :ready)
   end
+
+  defp ready_response({:durable_soup_db, soup_db, tenant}, params) do
+    soup_db
+    |> DurableSoupDb.load_soup_ready_facts(tenant)
+    |> Soup.ready_from_facts(params)
+  end
+
+  defp ready_response(%State{} = state, params), do: Soup.ready(state, params)
 
   defp feed(conn) do
     conn
@@ -76,9 +84,7 @@ defmodule Primeradiant.Soup.Router do
 
   defp load_state(%State{} = state, _projection), do: state
 
-  defp load_state({:durable_soup_db, soup_db, tenant}, :ready) do
-    DurableSoupDb.load_soup_ready_projection(soup_db, tenant)
-  end
+  defp load_state({:durable_soup_db, _soup_db, _tenant} = source, :ready), do: source
 
   defp load_state({:durable_soup_db, soup_db, tenant}, {:feed, params}) do
     DurableSoupDb.load_soup_feed_projection(soup_db, tenant, params)

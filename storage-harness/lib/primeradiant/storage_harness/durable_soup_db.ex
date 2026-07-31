@@ -573,6 +573,117 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
     end
   end
 
+  def load_soup_ready_facts(db_path, tenant_id) do
+    if File.regular?(db_path) do
+      quoted_tenant = sql_quote(tenant_id)
+
+      [facts] =
+        query_table_json(
+          db_path,
+          """
+          WITH visible_stories AS (
+            SELECT id
+            FROM stories
+            WHERE tenant_id = #{quoted_tenant}
+              AND COALESCE(json_extract(attrs, '$.t1421_quarantine.active_product_truth'), 1) != 0
+          ),
+          ranked_cards AS (
+            SELECT
+              story_id,
+              status,
+              row_number() OVER (PARTITION BY story_id ORDER BY card_version DESC) AS row_number
+            FROM story_card_versions
+            WHERE tenant_id = #{quoted_tenant}
+          )
+          SELECT
+            (SELECT MAX(observed_at) FROM inputs WHERE tenant_id = #{quoted_tenant}) AS latest_source_at,
+            (SELECT MAX(observed_at) FROM story_events WHERE tenant_id = #{quoted_tenant}) AS latest_story_event_at,
+            (SELECT COUNT(*) FROM stories WHERE tenant_id = #{quoted_tenant}) AS story_count,
+            (SELECT COUNT(*) FROM visible_stories) AS visible_story_count,
+            (
+              SELECT COUNT(*)
+              FROM visible_stories
+              JOIN ranked_cards ON ranked_cards.story_id = visible_stories.id
+              WHERE ranked_cards.row_number = 1 AND ranked_cards.status = 'complete'
+            ) AS complete_current_synopsis_count,
+            (SELECT COUNT(*) FROM story_card_change_sets WHERE tenant_id = #{quoted_tenant}) AS change_count;
+          """
+        )
+
+      failure_streak = load_soup_ready_failure_streak(db_path, quoted_tenant)
+
+      %{
+        tenant_id: tenant_id,
+        latest_source_at: ready_time(facts["latest_source_at"]),
+        latest_story_event_at: ready_time(facts["latest_story_event_at"]),
+        story_count: facts["story_count"],
+        visible_story_count: facts["visible_story_count"],
+        complete_current_synopsis_count: facts["complete_current_synopsis_count"],
+        change_count: facts["change_count"],
+        failure_streak: failure_streak
+      }
+    else
+      %{
+        tenant_id: tenant_id,
+        latest_source_at: nil,
+        latest_story_event_at: nil,
+        story_count: 0,
+        visible_story_count: 0,
+        complete_current_synopsis_count: 0,
+        change_count: 0,
+        failure_streak: []
+      }
+    end
+  end
+
+  defp load_soup_ready_failure_streak(db_path, quoted_tenant) do
+    query_table_json(
+      db_path,
+      """
+      WITH hourly_cards AS (
+        SELECT
+          id,
+          inserted_at,
+          card_version,
+          row_number() OVER (ORDER BY inserted_at DESC, card_version DESC) AS row_number,
+          COALESCE(
+            json_extract(provenance, '$.reason'),
+            json_extract(deck, '$.reason'),
+            json_extract(summary, '$.reason'),
+            json_extract(field_completeness, '$.overall'),
+            status
+          ) AS reason,
+          CASE
+            WHEN status = 'refused' THEN 1
+            WHEN COALESCE(
+              json_extract(provenance, '$.reason'),
+              json_extract(deck, '$.reason'),
+              json_extract(summary, '$.reason'),
+              json_extract(field_completeness, '$.overall'),
+              status
+            ) IN ('story_synthesis_invalid_model_output', 'story_synthesis_malformed_model_output') THEN 1
+            ELSE 0
+          END AS failed
+        FROM story_card_versions
+        WHERE tenant_id = #{quoted_tenant}
+          AND refresh_reason = 'story_card_hourly_synthesis'
+      ),
+      first_hourly_success AS (
+        SELECT MIN(row_number) AS row_number FROM hourly_cards WHERE failed = 0
+      )
+      SELECT id, reason
+      FROM hourly_cards, first_hourly_success
+      WHERE hourly_cards.failed = 1
+        AND (first_hourly_success.row_number IS NULL OR hourly_cards.row_number < first_hourly_success.row_number)
+      ORDER BY hourly_cards.inserted_at ASC, hourly_cards.card_version ASC;
+      """
+    )
+    |> Enum.map(fn row -> %{story_card_version_id: row["id"], reason: row["reason"]} end)
+  end
+
+  defp ready_time(nil), do: nil
+  defp ready_time(value), do: Primeradiant.StorageHarness.ChangesetStore.iso!(value)
+
   def tenant_revision(db_path, tenant_id) do
     if File.regular?(db_path) do
       db_path

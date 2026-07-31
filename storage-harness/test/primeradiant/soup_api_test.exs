@@ -186,6 +186,24 @@ defmodule Primeradiant.SoupApiTest do
 
     state = %{state | story_card_versions: state.story_card_versions ++ refused_cards}
 
+    db_path =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-soup-ready-failure-parity-#{System.system_time(:nanosecond)}-#{System.unique_integer([:positive])}.sqlite3"
+      )
+
+    DurableSoupDb.persist!(db_path, state, %{
+      source_kind: "soup_api_test",
+      source_db_path: "real_ingestion",
+      source_row_count: length(state.inputs)
+    })
+
+    params = %{"consumer" => "reporter", "projection" => "story_cards"}
+    facts = DurableSoupDb.load_soup_ready_facts(db_path, state.tenant_id)
+
+    assert Map.drop(Soup.ready_from_facts(facts, params), [:generated_at]) ==
+             Map.drop(Soup.ready(state, params), [:generated_at])
+
     body =
       :get
       |> conn("/api/v1/soup/ready?consumer=reporter&projection=story_cards")
@@ -884,6 +902,7 @@ defmodule Primeradiant.SoupApiTest do
     })
 
     projection_state = DurableSoupDb.load_soup_ready_projection(db_path, state.tenant_id)
+    readiness_facts = DurableSoupDb.load_soup_ready_facts(db_path, state.tenant_id)
     full_state = DurableSoupDb.load_soup_projection(db_path, state.tenant_id)
 
     assert projection_state.story_reader_deltas == []
@@ -892,6 +911,11 @@ defmodule Primeradiant.SoupApiTest do
     assert projection_state.stories != []
     assert projection_state.story_events != []
     assert projection_state.story_card_change_sets != []
+
+    params = %{"consumer" => "reporter", "projection" => "news-morning"}
+
+    assert Map.drop(Soup.ready_from_facts(readiness_facts, params), [:generated_at]) ==
+             Map.drop(Soup.ready(projection_state, params), [:generated_at])
 
     body =
       :get

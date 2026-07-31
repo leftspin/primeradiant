@@ -7,10 +7,16 @@ defmodule Primeradiant.Soup do
   alias Primeradiant.StorageHarness.State
 
   def ready(%State{} = state, params \\ %{}) do
+    state
+    |> readiness_facts()
+    |> ready_from_facts(params)
+  end
+
+  def ready_from_facts(facts, params \\ %{}) when is_map(facts) do
     generated_at = now()
-    blockers = blockers(state, params)
-    freshness = freshness(state, generated_at)
-    synthesis_health = synthesis_health(state)
+    blockers = readiness_blockers(facts.story_count, params)
+    freshness = freshness(facts, generated_at)
+    synthesis_health = synthesis_health(facts)
     health_blockers = synthesis_health_blockers(synthesis_health)
     all_blockers = if blockers == [], do: health_blockers, else: blockers
     status = if all_blockers == [], do: freshness_status(freshness), else: "blocked"
@@ -19,8 +25,8 @@ defmodule Primeradiant.Soup do
       contract_version: @contract_version,
       status: status,
       generated_at: generated_at,
-      substrate_cursor: cursor_for(state),
-      substrate_epoch: epoch(state),
+      substrate_cursor: cursor_for_count(facts.tenant_id, facts.change_count),
+      substrate_epoch: epoch_for_tenant(facts.tenant_id),
       freshness: freshness,
       synthesis_health: synthesis_health,
       blockers: all_blockers
@@ -107,11 +113,25 @@ defmodule Primeradiant.Soup do
   end
 
   def epoch(%State{} = state) do
-    :crypto.hash(:sha256, "#{state.tenant_id}:soup:v1")
+    epoch_for_tenant(state.tenant_id)
+  end
+
+  defp epoch_for_tenant(tenant_id) do
+    :crypto.hash(:sha256, "#{tenant_id}:soup:v1")
+    |> Base.url_encode64(padding: false)
+  end
+
+  defp cursor_for_count(tenant_id, event_count) do
+    %{"v" => 1, "epoch" => epoch_for_tenant(tenant_id), "event_index" => event_count}
+    |> Jason.encode!()
     |> Base.url_encode64(padding: false)
   end
 
   defp blockers(state, params) do
+    readiness_blockers(length(state.stories), params)
+  end
+
+  defp readiness_blockers(story_count, params) do
     cond do
       (params["consumer"] || params[:consumer]) != "reporter" ->
         [%{code: "unsupported_consumer", message: "consumer must be reporter"}]
@@ -124,7 +144,7 @@ defmodule Primeradiant.Soup do
           }
         ]
 
-      state.stories == [] ->
+      story_count == 0 ->
         [
           %{
             code: "no_admitted_story_material",
@@ -137,13 +157,10 @@ defmodule Primeradiant.Soup do
     end
   end
 
-  defp freshness(state, generated_at) do
-    latest_source =
-      state.inputs |> Enum.map(& &1.observed_at) |> Enum.max(DateTime, fn -> nil end)
-
-    latest_event =
-      state.story_events |> Enum.map(& &1.observed_at) |> Enum.max(DateTime, fn -> nil end)
-
+  defp freshness(
+         %{latest_source_at: latest_source, latest_story_event_at: latest_event},
+         generated_at
+       ) do
     latest = latest_event || latest_source
     age = if latest, do: DateTime.diff(parse_time!(generated_at), latest), else: nil
 
@@ -158,20 +175,23 @@ defmodule Primeradiant.Soup do
   defp freshness_status(%{is_stale: true}), do: "degraded"
   defp freshness_status(_), do: "ready"
 
-  defp synthesis_health(state) do
-    stories = visible_stories(state)
-    current_cards = Enum.map(stories, &current_story_card_version(state, &1.id))
-    complete_current_count = Enum.count(current_cards, &complete_story_card?/1)
-    failure_streak = current_synthesis_failure_streak(state)
+  defp synthesis_health(facts) do
+    synthesis_health(
+      facts.visible_story_count,
+      facts.complete_current_synopsis_count,
+      facts.failure_streak
+    )
+  end
 
+  defp synthesis_health(story_count, complete_current_count, failure_streak) do
     failures =
       []
-      |> maybe_add_zero_complete_synopsis_failure(stories, complete_current_count)
+      |> maybe_add_zero_complete_synopsis_failure(story_count, complete_current_count)
       |> maybe_add_synthesis_failure_streak(failure_streak)
 
     %{
       status: if(failures == [], do: "healthy", else: "failed"),
-      checked_story_count: length(stories),
+      checked_story_count: story_count,
       complete_current_synopsis_count: complete_current_count,
       current_synopsis_artifact: %{
         required: true,
@@ -183,18 +203,18 @@ defmodule Primeradiant.Soup do
     }
   end
 
-  defp maybe_add_zero_complete_synopsis_failure(failures, [], _count), do: failures
+  defp maybe_add_zero_complete_synopsis_failure(failures, 0, _count), do: failures
 
-  defp maybe_add_zero_complete_synopsis_failure(failures, _stories, count) when count > 0,
+  defp maybe_add_zero_complete_synopsis_failure(failures, _story_count, count) when count > 0,
     do: failures
 
-  defp maybe_add_zero_complete_synopsis_failure(failures, stories, 0) do
+  defp maybe_add_zero_complete_synopsis_failure(failures, story_count, 0) do
     [
       %{
         code: "zero_complete_current_synopsis_artifacts",
         message:
           "Prime Radiant has admitted current story material but no complete current grounded synopsis artifacts",
-        story_count: length(stories)
+        story_count: story_count
       }
       | failures
     ]
@@ -239,6 +259,34 @@ defmodule Primeradiant.Soup do
         {:halt, streak}
       end
     end)
+  end
+
+  defp readiness_facts(state) do
+    visible = visible_stories(state)
+    active_cards = active_repair_rows(state, state.story_card_versions)
+
+    current_cards_by_story =
+      active_cards
+      |> Enum.group_by(& &1.story_id)
+      |> Map.new(fn {story_id, cards} ->
+        {story_id, Enum.max_by(cards, & &1.card_version)}
+      end)
+
+    %{
+      tenant_id: state.tenant_id,
+      story_count: length(state.stories),
+      visible_story_count: length(visible),
+      complete_current_synopsis_count:
+        Enum.count(visible, fn story ->
+          complete_story_card?(Map.get(current_cards_by_story, story.id))
+        end),
+      failure_streak: current_synthesis_failure_streak(state),
+      latest_source_at:
+        state.inputs |> Enum.map(& &1.observed_at) |> Enum.max(DateTime, fn -> nil end),
+      latest_story_event_at:
+        state.story_events |> Enum.map(& &1.observed_at) |> Enum.max(DateTime, fn -> nil end),
+      change_count: length(ordered_card_changes(state))
+    }
   end
 
   defp synthesis_failure_card?(%{status: "refused"}), do: true
