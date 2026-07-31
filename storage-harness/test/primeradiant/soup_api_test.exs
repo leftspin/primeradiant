@@ -957,6 +957,38 @@ defmodule Primeradiant.SoupApiTest do
     assert Enum.any?(body["blockers"], &(&1["code"] == "no_admitted_story_material"))
   end
 
+  test "durable ready API preserves neutral readiness for an empty column-partial schema" do
+    db_path =
+      Path.join(
+        System.tmp_dir!(),
+        "primeradiant-soup-ready-column-partial-#{System.system_time(:nanosecond)}-#{System.unique_integer([:positive])}.sqlite3"
+      )
+
+    {_, 0} =
+      System.cmd("sqlite3", [
+        db_path,
+        """
+        CREATE TABLE inputs (tenant_id TEXT);
+        CREATE TABLE stories (tenant_id TEXT);
+        CREATE TABLE story_events (tenant_id TEXT);
+        CREATE TABLE story_card_versions (tenant_id TEXT);
+        CREATE TABLE story_card_change_sets (tenant_id TEXT);
+        """
+      ])
+
+    body =
+      :get
+      |> conn("/api/v1/soup/ready?consumer=reporter&projection=news-morning")
+      |> put_req_header("authorization", "Bearer internal-token")
+      |> Router.call(Keyword.put(@opts, :state, {:durable_soup_db, db_path, "empty-tenant"}))
+      |> json()
+
+    assert body["status"] == "blocked"
+    assert body["freshness"]["latest_source_at"] == nil
+    assert body["synthesis_health"]["checked_story_count"] == 0
+    assert Enum.any?(body["blockers"], &(&1["code"] == "no_admitted_story_material"))
+  end
+
   test "durable feed API bounds source hydration for limited Reporter feed", %{state: _state} do
     state =
       source_ready_state([

@@ -575,10 +575,18 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
 
   def load_soup_ready_facts(db_path, tenant_id) do
     if File.regular?(db_path) do
-      required_tables =
-        ~w(inputs stories story_events story_card_versions story_card_change_sets)
+      required_columns = %{
+        "inputs" => ~w(tenant_id observed_at),
+        "stories" => ~w(tenant_id id attrs),
+        "story_events" => ~w(tenant_id observed_at),
+        "story_card_versions" =>
+          ~w(tenant_id story_id status card_version inserted_at refresh_reason provenance deck summary field_completeness),
+        "story_card_change_sets" => ~w(tenant_id)
+      }
 
-      if Enum.all?(required_tables, &table_exists?(db_path, &1)) do
+      if Enum.all?(required_columns, fn {table, columns} ->
+           table_has_columns?(db_path, table, columns)
+         end) do
         load_existing_soup_ready_facts(db_path, tenant_id)
       else
         db_path
@@ -654,6 +662,16 @@ defmodule Primeradiant.StorageHarness.DurableSoupDb do
       failure_streak_count: 0,
       failure_reasons: []
     }
+  end
+
+  defp table_has_columns?(db_path, table, required_columns) do
+    present_columns =
+      db_path
+      |> query_table_json("PRAGMA table_info(#{table});")
+      |> Enum.map(& &1["name"])
+      |> MapSet.new()
+
+    Enum.all?(required_columns, &MapSet.member?(present_columns, &1))
   end
 
   defp load_soup_ready_failure_facts(db_path, quoted_tenant) do
